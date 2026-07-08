@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  basic-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python syntax checks
+        run: |
+          python -m py_compile run_api.py
+          python -m py_compile app/dashboard/app.py
+          python -m py_compile app/dashboard/websocket.py
+
+      - name: Shell syntax checks
+        run: |
+          bash -n verify_dashboard_api.sh
+          bash -n check_production_health.sh
+
+      - name: Prevent rejected run_api.py workarounds
+        run: |
+          ! grep -nE "subprocess|lsof|netstat|psutil|port.*listen|Address already in use|production_startup\(" run_api.py
