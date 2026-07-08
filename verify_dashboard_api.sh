@@ -10,9 +10,11 @@ set -uo pipefail
 # - protected endpoints must succeed when authenticated with BOT_API_KEY
 # - every external command is wrapped with `timeout`
 
-BASE_URL="${BOT_API_BASE_URL:-http://127.0.0.1:8899}"
+BASE_URL="${BOT_API_BASE_URL:-}"
 COMMAND_TIMEOUT_SECONDS="${COMMAND_TIMEOUT_SECONDS:-10}"
 BOT_API_KEY="${BOT_API_KEY:-}"
+BOT_API_HOST="${BOT_API_HOST:-}"
+BOT_API_PORT="${BOT_API_PORT:-}"
 
 load_dotenv() {
   local line key value
@@ -44,14 +46,10 @@ load_dotenv() {
         fi
         ;;
       BOT_API_HOST)
-        if [[ -z "${BOT_API_BASE_URL:-}" && "$value" != "0.0.0.0" ]]; then
-          BASE_URL="http://${value}:${BOT_API_PORT:-8899}"
-        fi
+        [[ -z "${BOT_API_HOST}" ]] && BOT_API_HOST="$value"
         ;;
       BOT_API_PORT)
-        if [[ -z "${BOT_API_BASE_URL:-}" ]]; then
-          BASE_URL="${BASE_URL%:*}:$value"
-        fi
+        [[ -z "${BOT_API_PORT}" ]] && BOT_API_PORT="$value"
         ;;
     esac
   done < ".env"
@@ -134,6 +132,14 @@ main() {
   REPORT=""
 
   load_dotenv
+
+  if [[ -z "${BASE_URL}" ]]; then
+    if [[ -z "${BOT_API_HOST}" || -z "${BOT_API_PORT}" ]]; then
+      printf 'FAIL - BOT_API_HOST and BOT_API_PORT must be set in .env or environment.\n'
+      return 1
+    fi
+    BASE_URL="http://${BOT_API_HOST}:${BOT_API_PORT}"
+  fi
 
   public_endpoints=("/" "/health")
   protected_endpoints=(

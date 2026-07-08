@@ -48,6 +48,13 @@ def load_dotenv_file(path: str | Path = ".env") -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def required_env(name: str) -> str:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        raise RuntimeError(f"{name} must be set in .env or environment")
+    return value.strip()
+
+
 def ensure_runtime_directories() -> None:
     for directory in RUNTIME_DIRECTORIES:
         directory.mkdir(parents=True, exist_ok=True)
@@ -55,9 +62,10 @@ def ensure_runtime_directories() -> None:
 
 def validate_environment() -> None:
     ensure_runtime_directories()
-    api_host = os.getenv("BOT_API_HOST", "127.0.0.1")
-    api_key = os.getenv("BOT_API_KEY", "")
-    if api_host not in {"127.0.0.1", "localhost"} and not api_key:
+    api_host = required_env("BOT_API_HOST")
+    api_key = required_env("BOT_API_KEY")
+    required_env("BOT_API_PORT")
+    if api_host != "localhost" and not api_key:
         logger.warning("BOT_API_KEY is empty while BOT_API_HOST is not localhost")
     if not Path("configs").exists():
         logger.warning("configs directory is missing")
@@ -77,7 +85,7 @@ def startup_info() -> StartupInfo:
         python_version=platform.python_version(),
         bot_version=os.getenv("BOT_VERSION", BOT_VERSION),
         exchange=credentials.exchange_id,
-        dashboard_port=int(os.getenv("BOT_API_PORT", "8899")),
+        dashboard_port=int(required_env("BOT_API_PORT")),
         mode=runtime_mode(),
         sqlite_path=str(DEFAULT_HISTORY_DB),
     )
