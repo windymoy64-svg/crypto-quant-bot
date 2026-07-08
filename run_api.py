@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
+import subprocess
 
 import uvicorn
 
@@ -15,6 +18,40 @@ def _required_env(name: str) -> str:
     return value.strip()
 
 
+def _command_output(command: list[str]) -> str:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+
+
+def _port_token_pattern(port: int) -> re.Pattern[str]:
+    return re.compile(rf"(?<![0-9]):{port}(?![0-9])")
+
+
+def _is_api_port_listening(port: int) -> bool:
+    pattern = _port_token_pattern(port)
+
+    if shutil.which("ss"):
+        output = _command_output(["ss", "-ltnp"])
+        if any("LISTEN" in line and pattern.search(line) for line in output.splitlines()):
+            return True
+
+    if shutil.which("lsof"):
+        output = _command_output(["lsof", "-i", f":{port}"])
+        if any(("LISTEN" in line or "TCP" in line) and pattern.search(line) for line in output.splitlines()):
+            return True
+
+    return False
+
+
 def main() -> None:
     """Launch the production dashboard.
 
@@ -26,8 +63,9 @@ def main() -> None:
 
     load_dotenv_file()
     setup_production_logging()
-    host = _required_env("BOT_API_HOST")
-    port = int(_required_env("BOT_API_PORT"))
+    host = os.getenv("BOT_API_HOST", "127.0.0.1")
+    port = int(os.getenv("BOT_API_PORT", "8899"))
+
     uvicorn.run(
         "app.dashboard.app:app",
         host=host,
