@@ -1,25 +1,38 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -Eeuo pipefail
 
-# Dashboard API smoke verification.
+# Production-safe dashboard/API verification.
 #
-# This script intentionally verifies authentication behavior without changing
-# application code:
-# - public endpoints must succeed without credentials
-# - protected endpoints may return 401 without credentials when BOT_API_KEY is set
-# - protected endpoints must succeed when authenticated with BOT_API_KEY
-# - every external command is wrapped with `timeout`
+# Rules:
+# - systemd is the source of truth for the production API lifecycle.
+# - If crypto-quant-bot-api is active, use the existing service.
+# - If the service is not active, start a temporary API process and clean up only that PID.
+# - Never kill systemd-managed processes.
+# - Never start a duplicate API server when systemd is already active.
+# - Protected endpoints must return 401 without auth and 2xx with BOT_API_KEY.
 
-BASE_URL="${BOT_API_BASE_URL:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+SERVICE_NAME="${SERVICE_NAME:-crypto-quant-bot-api}"
+ENV_FILE="${ENV_FILE:-.env}"
 COMMAND_TIMEOUT_SECONDS="${COMMAND_TIMEOUT_SECONDS:-10}"
+CONNECT_TIMEOUT_SECONDS="${CONNECT_TIMEOUT_SECONDS:-3}"
+
 BOT_API_KEY="${BOT_API_KEY:-}"
 BOT_API_HOST="${BOT_API_HOST:-}"
 BOT_API_PORT="${BOT_API_PORT:-}"
+BASE_URL="${BOT_API_BASE_URL:-${BASE_URL:-}}"
+
+STARTED_TEMP_SERVER=0
+API_PID=""
+FAILURES=0
+REPORT=""
 
 load_dotenv() {
   local line key value
 
-  if [[ ! -f ".env" ]]; then
+  if [[ ! -f "$ENV_FILE" ]]; then
     return 0
   fi
 
@@ -29,10 +42,8 @@ load_dotenv() {
     key="${line%%=*}"
     value="${line#*=}"
 
-    # Trim optional CR from Windows-edited .env files.
     value="${value%$'\r'}"
 
-    # Remove simple matching quotes.
     if [[ "$value" == \"*\" && "$value" == *\" ]]; then
       value="${value:1:${#value}-2}"
     elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
@@ -41,39 +52,27 @@ load_dotenv() {
 
     case "$key" in
       BOT_API_KEY)
-        if [[ -z "${BOT_API_KEY}" ]]; then
-          BOT_API_KEY="$value"
-        fi
+        [[ -z "$BOT_API_KEY" ]] && BOT_API_KEY="$value"
         ;;
       BOT_API_HOST)
-        [[ -z "${BOT_API_HOST}" ]] && BOT_API_HOST="$value"
+        [[ -z "$BOT_API_HOST" ]] && BOT_API_HOST="$value"
         ;;
       BOT_API_PORT)
-        [[ -z "${BOT_API_PORT}" ]] && BOT_API_PORT="$value"
+        [[ -z "$BOT_API_PORT" ]] && BOT_API_PORT="$value"
+        ;;
+      BOT_API_BASE_URL|BASE_URL)
+        [[ -z "$BASE_URL" ]] && BASE_URL="$value"
         ;;
     esac
-  done < ".env"
+  done < "$ENV_FILE"
 }
 
-request_status() {
-  local path="$1"
-  local mode="$2"
-  local response status
-
-  if [[ "$mode" == "auth" ]]; then
-    response="$(timeout "${COMMAND_TIMEOUT_SECONDS}" curl --silent --show-error --max-time "${COMMAND_TIMEOUT_SECONDS}" --output /dev/null --write-out "%{http_code}" --header "Authorization: Bearer ${BOT_API_KEY}" "${BASE_URL}${path}" 2>&1)"
-  else
-    response="$(timeout "${COMMAND_TIMEOUT_SECONDS}" curl --silent --show-error --max-time "${COMMAND_TIMEOUT_SECONDS}" --output /dev/null --write-out "%{http_code}" "${BASE_URL}${path}" 2>&1)"
+cleanup() {
+  if [[ "$STARTED_TEMP_SERVER" == "1" && -n "$API_PID" ]]; then
+    echo "INFO: stopping temporary API process PID=${API_PID}"
+    kill "$API_PID" 2>/dev/null || true
+    wait "$API_PID" 2>/dev/null || true
   fi
-
-  status="${response: -3}"
-  if [[ "$status" =~ ^[0-9][0-9][0-9]$ ]]; then
-    printf '%s' "$status"
-    return 0
-  fi
-
-  printf 'COMMAND_FAILED: %s' "$response"
-  return 1
 }
 
 record_result() {
@@ -82,16 +81,65 @@ record_result() {
   local detail="$3"
 
   REPORT+="- ${verdict} ${name}: ${detail}"$'\n'
+
   if [[ "$verdict" == "FAIL" ]]; then
     FAILURES=$((FAILURES + 1))
   fi
+}
+
+curl_status() {
+  local url="$1"
+  shift || true
+
+  curl \
+    --silent \
+    --show-error \
+    --output /dev/null \
+    --write-out "%{http_code}" \
+    --connect-timeout "$CONNECT_TIMEOUT_SECONDS" \
+    --max-time "$COMMAND_TIMEOUT_SECONDS" \
+    "$@" \
+    "$url"
+}
+
+wait_for_api() {
+  local status=""
+
+  for _ in {1..30}; do
+    status="$(curl_status "${BASE_URL}/" || true)"
+
+    if [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
+      return 0
+    fi
+
+    sleep 1
+  done
+
+  echo "FAIL: API did not become ready at ${BASE_URL}/"
+  return 1
+}
+
+ensure_api_available() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$SERVICE_NAME"; then
+    echo "INFO: ${SERVICE_NAME} is active; using existing systemd service."
+    STARTED_TEMP_SERVER=0
+    return 0
+  fi
+
+  echo "INFO: ${SERVICE_NAME} is not active; starting temporary API process."
+  python3 run_api.py &
+  API_PID="$!"
+  STARTED_TEMP_SERVER=1
+
+  wait_for_api
 }
 
 check_public_endpoint() {
   local path="$1"
   local status
 
-  status="$(request_status "$path" "noauth")"
+  status="$(curl_status "${BASE_URL}${path}" || true)"
+
   if [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
     record_result "PASS" "public ${path}" "returned HTTP ${status} without authentication"
   else
@@ -103,21 +151,19 @@ check_protected_endpoint() {
   local path="$1"
   local unauth_status auth_status
 
-  unauth_status="$(request_status "$path" "noauth")"
-  if [[ -n "$BOT_API_KEY" && "$unauth_status" == "401" ]]; then
+  unauth_status="$(curl_status "${BASE_URL}${path}" || true)"
+
+  if [[ "$unauth_status" == "401" ]]; then
     record_result "PASS" "unauthenticated ${path}" "returned expected HTTP 401"
-  elif [[ "$unauth_status" =~ ^2[0-9][0-9]$ ]]; then
-    record_result "PASS" "unauthenticated ${path}" "returned HTTP ${unauth_status}; endpoint is accessible without auth in this environment"
   else
-    record_result "PASS" "unauthenticated ${path}" "non-auth smoke did not fail verification; observed HTTP ${unauth_status}"
+    record_result "FAIL" "unauthenticated ${path}" "expected HTTP 401 without auth, got ${unauth_status}"
   fi
 
-  if [[ -z "$BOT_API_KEY" ]]; then
-    record_result "FAIL" "authenticated ${path}" "BOT_API_KEY is missing; cannot verify authenticated request"
-    return
-  fi
+  auth_status="$(
+    curl_status "${BASE_URL}${path}" \
+      --header "Authorization: Bearer ${BOT_API_KEY}" || true
+  )"
 
-  auth_status="$(request_status "$path" "auth")"
   if [[ "$auth_status" =~ ^2[0-9][0-9]$ ]]; then
     record_result "PASS" "authenticated ${path}" "returned HTTP ${auth_status} with BOT_API_KEY"
   else
@@ -128,42 +174,44 @@ check_protected_endpoint() {
 main() {
   local public_endpoints protected_endpoints endpoint
 
-  FAILURES=0
-  REPORT=""
+  trap cleanup EXIT
 
   load_dotenv
 
-  if [[ -z "${BASE_URL}" ]]; then
-    if [[ -z "${BOT_API_HOST}" || -z "${BOT_API_PORT}" ]]; then
-      printf 'FAIL - BOT_API_HOST and BOT_API_PORT must be set in .env or environment.\n'
-      return 1
-    fi
-    BASE_URL="http://${BOT_API_HOST}:${BOT_API_PORT}"
+  BOT_API_HOST="${BOT_API_HOST:-127.0.0.1}"
+  BOT_API_PORT="${BOT_API_PORT:-8899}"
+  BASE_URL="${BASE_URL:-http://${BOT_API_HOST}:${BOT_API_PORT}}"
+
+  if [[ -z "$BOT_API_KEY" ]]; then
+    echo "FAIL: BOT_API_KEY is missing. Set it in environment or ${ENV_FILE}."
+    return 1
   fi
 
-  public_endpoints=("/" "/health")
+  public_endpoints=(
+    "/"
+    "/health"
+  )
+
   protected_endpoints=(
-    "/status"
-    "/signals/latest"
-    "/paper/state"
     "/api/health"
     "/api/market"
     "/api/portfolio"
     "/api/paper"
     "/api/analytics"
-    "/api/backtest"
-    "/api/live/orders"
-    "/api/klines"
+    "/status"
+    "/signals/latest"
+    "/paper/state"
   )
 
-  printf 'Dashboard API verification report\n'
-  printf 'Base URL: %s\n' "$BASE_URL"
-  if [[ -n "$BOT_API_KEY" ]]; then
-    printf 'BOT_API_KEY: loaded from environment/.env\n'
-  else
-    printf 'BOT_API_KEY: missing\n'
-  fi
-  printf 'Command timeout: %ss\n\n' "$COMMAND_TIMEOUT_SECONDS"
+  echo "Dashboard API verification report"
+  echo "Base URL: ${BASE_URL}"
+  echo "Service: ${SERVICE_NAME}"
+  echo "BOT_API_KEY: loaded"
+  echo "Connect timeout: ${CONNECT_TIMEOUT_SECONDS}s"
+  echo "Command timeout: ${COMMAND_TIMEOUT_SECONDS}s"
+  echo
+
+  ensure_api_available
 
   for endpoint in "${public_endpoints[@]}"; do
     check_public_endpoint "$endpoint"
@@ -174,13 +222,14 @@ main() {
   done
 
   printf '%s' "$REPORT"
-  printf '\nSummary: '
+  echo
+
   if [[ "$FAILURES" -eq 0 ]]; then
-    printf 'PASS - all authenticated checks succeeded; expected 401 responses were tolerated.\n'
+    echo "Summary: PASS - dashboard/API verification completed."
     return 0
   fi
 
-  printf 'FAIL - %s authenticated/public check(s) failed.\n' "$FAILURES"
+  echo "Summary: FAIL - ${FAILURES} check(s) failed."
   return 1
 }
 

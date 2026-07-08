@@ -154,12 +154,20 @@ def _register_compat_routes(dashboard: FastAPI) -> None:
             },
         )
         api_key = os.getenv("BOT_API_KEY")
+        cookie_secure = os.getenv("DASHBOARD_COOKIE_SECURE", "false").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         if api_key:
             response.set_cookie(
                 key="dashboard_token",
                 value=api_key,
                 httponly=True,
+                secure=cookie_secure,
                 samesite="strict",
+                max_age=60 * 60 * 12,
             )
         return response
 
