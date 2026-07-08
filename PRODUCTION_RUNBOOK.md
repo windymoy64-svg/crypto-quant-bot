@@ -2,11 +2,9 @@
 
 ## Overview
 
-Crypto Quant Bot runs on an Ubuntu VPS using systemd.
+Crypto Quant Bot runs on an Ubuntu VPS via systemd.
 
-This runbook documents the safe production workflow for operating, verifying, restarting, and debugging the project.
-
-## Project Location
+Project path:
 
 ```bash
 /opt/crypto-quant-bot
