@@ -123,6 +123,7 @@ ensure_api_available() {
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$SERVICE_NAME"; then
     echo "INFO: ${SERVICE_NAME} is active; using existing systemd service."
     STARTED_TEMP_SERVER=0
+    wait_for_api
     return 0
   fi
 
@@ -180,7 +181,14 @@ main() {
 
   BOT_API_HOST="${BOT_API_HOST:-127.0.0.1}"
   BOT_API_PORT="${BOT_API_PORT:-8899}"
-  BASE_URL="${BASE_URL:-http://${BOT_API_HOST}:${BOT_API_PORT}}"
+
+  if [[ -z "$BASE_URL" ]]; then
+    if [[ "$BOT_API_HOST" == "0.0.0.0" || "$BOT_API_HOST" == "::" ]]; then
+      BASE_URL="http://127.0.0.1:${BOT_API_PORT}"
+    else
+      BASE_URL="http://${BOT_API_HOST}:${BOT_API_PORT}"
+    fi
+  fi
 
   if [[ -z "$BOT_API_KEY" ]]; then
     echo "FAIL: BOT_API_KEY is missing. Set it in environment or ${ENV_FILE}."
