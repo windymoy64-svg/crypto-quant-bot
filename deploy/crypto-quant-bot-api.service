@@ -1,0 +1,16 @@
+[Unit]
+Description=Crypto Quant Bot API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/crypto-quant-bot
+ExecStart=/opt/crypto-quant-bot/.venv/bin/python run_api.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/crypto-quant-bot/.env
+
+[Install]
+WantedBy=multi-user.target

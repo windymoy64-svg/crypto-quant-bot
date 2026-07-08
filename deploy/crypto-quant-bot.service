@@ -1,0 +1,15 @@
+[Unit]
+Description=Crypto Quant Bot realtime scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/crypto-quant-bot
+ExecStart=/opt/crypto-quant-bot/.venv/bin/python run_realtime.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

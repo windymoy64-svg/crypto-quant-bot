@@ -1,0 +1,965 @@
+{
+  "rules": [
+    {
+      "id": "RULE_001",
+      "name": "EMA20 above EMA50",
+      "category": "trend",
+      "feature": "ema20_gt_ema50",
+      "operator": "is_true",
+      "weight": 4
+    },
+    {
+      "id": "RULE_002",
+      "name": "EMA50 above EMA200",
+      "category": "trend",
+      "feature": "ema50_gt_ema200",
+      "operator": "is_true",
+      "weight": 4
+    },
+    {
+      "id": "RULE_003",
+      "name": "EMA9 above EMA20",
+      "category": "trend",
+      "feature": "ema9_gt_ema20",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_004",
+      "name": "EMA stack bullish",
+      "category": "trend",
+      "feature": "ema_stack_bullish",
+      "operator": "is_true",
+      "weight": 5
+    },
+    {
+      "id": "RULE_005",
+      "name": "Price above EMA9",
+      "category": "trend",
+      "feature": "price_gt_ema9",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_006",
+      "name": "Price above EMA20",
+      "category": "trend",
+      "feature": "price_gt_ema20",
+      "operator": "is_true",
+      "weight": 4
+    },
+    {
+      "id": "RULE_007",
+      "name": "Price above EMA50",
+      "category": "trend",
+      "feature": "price_gt_ema50",
+      "operator": "is_true",
+      "weight": 4
+    },
+    {
+      "id": "RULE_008",
+      "name": "Price above EMA200",
+      "category": "trend",
+      "feature": "price_gt_ema200",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_009",
+      "name": "Price above SMA20",
+      "category": "trend",
+      "feature": "price_gt_sma20",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_010",
+      "name": "Price above SMA50",
+      "category": "trend",
+      "feature": "price_gt_sma50",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_011",
+      "name": "SMA20 above SMA50",
+      "category": "trend",
+      "feature": "sma20_gt_sma50",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_012",
+      "name": "EMA20 gap positive",
+      "category": "trend",
+      "feature": "ema20_gap_percent",
+      "operator": "gt",
+      "weight": 2,
+      "value": 0
+    },
+    {
+      "id": "RULE_013",
+      "name": "EMA20 gap at least 0.25 percent",
+      "category": "trend",
+      "feature": "ema20_gap_percent",
+      "operator": "gte",
+      "weight": 2,
+      "value": 0.25
+    },
+    {
+      "id": "RULE_014",
+      "name": "EMA20 gap below 5 percent",
+      "category": "risk",
+      "feature": "ema20_gap_percent",
+      "operator": "lte",
+      "weight": 2,
+      "value": 5
+    },
+    {
+      "id": "RULE_015",
+      "name": "EMA50 gap positive",
+      "category": "trend",
+      "feature": "ema50_gap_percent",
+      "operator": "gt",
+      "weight": 2,
+      "value": 0
+    },
+    {
+      "id": "RULE_016",
+      "name": "EMA50 gap below 8 percent",
+      "category": "risk",
+      "feature": "ema50_gap_percent",
+      "operator": "lte",
+      "weight": 2,
+      "value": 8
+    },
+    {
+      "id": "RULE_017",
+      "name": "EMA200 gap positive",
+      "category": "trend",
+      "feature": "ema200_gap_percent",
+      "operator": "gt",
+      "weight": 2,
+      "value": 0
+    },
+    {
+      "id": "RULE_018",
+      "name": "EMA200 gap below 15 percent",
+      "category": "risk",
+      "feature": "ema200_gap_percent",
+      "operator": "lte",
+      "weight": 2,
+      "value": 15
+    },
+    {
+      "id": "RULE_019",
+      "name": "EMA20 to EMA50 spread positive",
+      "category": "trend",
+      "feature": "ema_spread_20_50_percent",
+      "operator": "gt",
+      "weight": 3,
+      "value": 0
+    },
+    {
+      "id": "RULE_020",
+      "name": "EMA20 to EMA50 spread above 0.1 percent",
+      "category": "trend",
+      "feature": "ema_spread_20_50_percent",
+      "operator": "gte",
+      "weight": 2,
+      "value": 0.1
+    },
+    {
+      "id": "RULE_021",
+      "name": "EMA20 to EMA50 spread below 5 percent",
+      "category": "risk",
+      "feature": "ema_spread_20_50_percent",
+      "operator": "lte",
+      "weight": 2,
+      "value": 5
+    },
+    {
+      "id": "RULE_022",
+      "name": "EMA50 to EMA200 spread positive",
+      "category": "trend",
+      "feature": "ema_spread_50_200_percent",
+      "operator": "gt",
+      "weight": 3,
+      "value": 0
+    },
+    {
+      "id": "RULE_023",
+      "name": "EMA50 to EMA200 spread below 10 percent",
+      "category": "risk",
+      "feature": "ema_spread_50_200_percent",
+      "operator": "lte",
+      "weight": 2,
+      "value": 10
+    },
+    {
+      "id": "RULE_024",
+      "name": "Pullback within EMA20 zone",
+      "category": "price_action",
+      "feature": "pullback_zone",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_025",
+      "name": "MACD bullish",
+      "category": "momentum",
+      "feature": "macd_bullish",
+      "operator": "is_true",
+      "weight": 4
+    },
+    {
+      "id": "RULE_026",
+      "name": "MACD line positive",
+      "category": "momentum",
+      "feature": "macd_line",
+      "operator": "gt",
+      "weight": 3,
+      "value": 0
+    },
+    {
+      "id": "RULE_027",
+      "name": "MACD signal positive",
+      "category": "momentum",
+      "feature": "macd_signal",
+      "operator": "gt",
+      "weight": 2,
+      "value": 0
+    },
+    {
+      "id": "RULE_028",
+      "name": "MACD histogram positive",
+      "category": "momentum",
+      "feature": "macd_histogram",
+      "operator": "gt",
+      "weight": 3,
+      "value": 0
+    },
+    {
+      "id": "RULE_029",
+      "name": "MACD histogram at least 0.01",
+      "category": "momentum",
+      "feature": "macd_histogram",
+      "operator": "gte",
+      "weight": 1,
+      "value": 0.01
+    },
+    {
+      "id": "RULE_030",
+      "name": "MACD line above signal by histogram",
+      "category": "momentum",
+      "feature": "macd_histogram",
+      "operator": "gte",
+      "weight": 2,
+      "value": 0
+    },
+    {
+      "id": "RULE_031",
+      "name": "RSI above 45",
+      "category": "momentum",
+      "feature": "rsi_above_45",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_032",
+      "name": "RSI above 50",
+      "category": "momentum",
+      "feature": "rsi_above_50",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_033",
+      "name": "RSI above 55",
+      "category": "momentum",
+      "feature": "rsi_above_55",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_034",
+      "name": "RSI healthy bullish",
+      "category": "momentum",
+      "feature": "rsi_healthy_bullish",
+      "operator": "is_true",
+      "weight": 4
+    },
+    {
+      "id": "RULE_035",
+      "name": "RSI between 45 and 75",
+      "category": "momentum",
+      "feature": "rsi",
+      "operator": "between",
+      "weight": 3,
+      "value": [
+        45,
+        75
+      ]
+    },
+    {
+      "id": "RULE_036",
+      "name": "RSI between 50 and 72",
+      "category": "momentum",
+      "feature": "rsi",
+      "operator": "between",
+      "weight": 3,
+      "value": [
+        50,
+        72
+      ]
+    },
+    {
+      "id": "RULE_037",
+      "name": "RSI not oversold",
+      "category": "momentum",
+      "feature": "rsi",
+      "operator": "gte",
+      "weight": 1,
+      "value": 35
+    },
+    {
+      "id": "RULE_038",
+      "name": "RSI below 65",
+      "category": "risk",
+      "feature": "rsi_below_65",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_039",
+      "name": "RSI below 70",
+      "category": "risk",
+      "feature": "rsi_below_70",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_040",
+      "name": "RSI below 75",
+      "category": "risk",
+      "feature": "rsi",
+      "operator": "lte",
+      "weight": 3,
+      "value": 75
+    },
+    {
+      "id": "RULE_041",
+      "name": "RSI below 80",
+      "category": "risk",
+      "feature": "rsi_below_80",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_042",
+      "name": "RSI not overheated",
+      "category": "risk",
+      "feature": "rsi",
+      "operator": "lte",
+      "weight": 2,
+      "value": 75
+    },
+    {
+      "id": "RULE_043",
+      "name": "ATR above 0.2 percent",
+      "category": "volatility",
+      "feature": "atr_above_0_2_percent",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_044",
+      "name": "ATR below 1 percent",
+      "category": "volatility",
+      "feature": "atr_below_1_percent",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_045",
+      "name": "ATR below 1.5 percent",
+      "category": "volatility",
+      "feature": "atr_below_1_5_percent",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_046",
+      "name": "ATR below 2 percent",
+      "category": "volatility",
+      "feature": "atr_below_2_percent",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_047",
+      "name": "ATR below 3 percent",
+      "category": "volatility",
+      "feature": "atr_below_3_percent",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_048",
+      "name": "ATR percent under 2.5",
+      "category": "volatility",
+      "feature": "atr_percent",
+      "operator": "lt",
+      "weight": 2,
+      "value": 2.5
+    },
+    {
+      "id": "RULE_049",
+      "name": "ATR percent under 4",
+      "category": "volatility",
+      "feature": "atr_percent",
+      "operator": "lt",
+      "weight": 1,
+      "value": 4
+    },
+    {
+      "id": "RULE_050",
+      "name": "ATR percent above 0.1",
+      "category": "volatility",
+      "feature": "atr_percent",
+      "operator": "gt",
+      "weight": 1,
+      "value": 0.1
+    },
+    {
+      "id": "RULE_051",
+      "name": "Volume above average",
+      "category": "volume",
+      "feature": "volume_above_average",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_052",
+      "name": "Volume spike",
+      "category": "volume",
+      "feature": "volume_spike",
+      "operator": "is_true",
+      "weight": 4
+    },
+    {
+      "id": "RULE_053",
+      "name": "Volume ratio above 1.05",
+      "category": "volume",
+      "feature": "volume_ratio_gt_1_05",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_054",
+      "name": "Volume ratio above 1.10",
+      "category": "volume",
+      "feature": "volume_ratio_gt_1_10",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_055",
+      "name": "Volume ratio above 1.25",
+      "category": "volume",
+      "feature": "volume_ratio_gt_1_25",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_056",
+      "name": "Volume ratio numeric above 0.9",
+      "category": "volume",
+      "feature": "volume_ratio",
+      "operator": "gte",
+      "weight": 1,
+      "value": 0.9
+    },
+    {
+      "id": "RULE_057",
+      "name": "Volume ratio numeric above 1.0",
+      "category": "volume",
+      "feature": "volume_ratio",
+      "operator": "gte",
+      "weight": 2,
+      "value": 1.0
+    },
+    {
+      "id": "RULE_058",
+      "name": "Volume versus previous above 0.9",
+      "category": "volume",
+      "feature": "volume_vs_previous_gt_0_9",
+      "operator": "is_true",
+      "weight": 1
+    },
+    {
+      "id": "RULE_059",
+      "name": "Volume versus previous above 1.0",
+      "category": "volume",
+      "feature": "volume_vs_previous_gt_1_0",
+      "operator": "is_true",
+      "weight": 1
+    },
+    {
+      "id": "RULE_060",
+      "name": "Previous volume ratio above 0.8",
+      "category": "volume",
+      "feature": "previous_volume_ratio",
+      "operator": "gte",
+      "weight": 1,
+      "value": 0.8
+    },
+    {
+      "id": "RULE_061",
+      "name": "Volume ratio numeric below 3.0",
+      "category": "risk",
+      "feature": "volume_ratio",
+      "operator": "lte",
+      "weight": 1,
+      "value": 3.0
+    },
+    {
+      "id": "RULE_062",
+      "name": "Previous volume ratio below 2.5",
+      "category": "risk",
+      "feature": "previous_volume_ratio",
+      "operator": "lte",
+      "weight": 1,
+      "value": 2.5
+    },
+    {
+      "id": "RULE_063",
+      "name": "Near 20 candle breakout",
+      "category": "price_action",
+      "feature": "near_breakout",
+      "operator": "is_true",
+      "weight": 4
+    },
+    {
+      "id": "RULE_064",
+      "name": "Near 5 candle high",
+      "category": "price_action",
+      "feature": "near_5_high",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_065",
+      "name": "Near 10 candle high",
+      "category": "price_action",
+      "feature": "near_10_high",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_066",
+      "name": "Above 5 candle midpoint",
+      "category": "price_action",
+      "feature": "above_5_midpoint",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_067",
+      "name": "Above 10 candle midpoint",
+      "category": "price_action",
+      "feature": "above_10_midpoint",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_068",
+      "name": "Breakout distance within 1 percent",
+      "category": "price_action",
+      "feature": "breakout_distance_percent",
+      "operator": "gte",
+      "weight": 2,
+      "value": -1.0
+    },
+    {
+      "id": "RULE_069",
+      "name": "Support buffer above 0.5 percent",
+      "category": "price_action",
+      "feature": "support_buffer_gt_0_5_percent",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_070",
+      "name": "Support buffer above 1 percent",
+      "category": "price_action",
+      "feature": "support_buffer_gt_1_percent",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_071",
+      "name": "Range above midpoint",
+      "category": "price_action",
+      "feature": "range_above_mid",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_072",
+      "name": "Range position above 0.45",
+      "category": "price_action",
+      "feature": "range_position",
+      "operator": "gte",
+      "weight": 2,
+      "value": 0.45
+    },
+    {
+      "id": "RULE_073",
+      "name": "5 candle range above midpoint",
+      "category": "price_action",
+      "feature": "range_5_above_mid",
+      "operator": "is_true",
+      "weight": 1
+    },
+    {
+      "id": "RULE_074",
+      "name": "10 candle range above midpoint",
+      "category": "price_action",
+      "feature": "range_10_above_mid",
+      "operator": "is_true",
+      "weight": 1
+    },
+    {
+      "id": "RULE_075",
+      "name": "5 range position above 0.45",
+      "category": "price_action",
+      "feature": "range_position_5",
+      "operator": "gte",
+      "weight": 1,
+      "value": 0.45
+    },
+    {
+      "id": "RULE_076",
+      "name": "10 range position above 0.45",
+      "category": "price_action",
+      "feature": "range_position_10",
+      "operator": "gte",
+      "weight": 1,
+      "value": 0.45
+    },
+    {
+      "id": "RULE_077",
+      "name": "Breakout distance not extended above 3 percent",
+      "category": "risk",
+      "feature": "breakout_distance_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 3.0
+    },
+    {
+      "id": "RULE_078",
+      "name": "Support distance below 12 percent",
+      "category": "risk",
+      "feature": "support_distance_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 12
+    },
+    {
+      "id": "RULE_079",
+      "name": "Range below top extension",
+      "category": "risk",
+      "feature": "range_below_top",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_080",
+      "name": "Range position below 1.0",
+      "category": "risk",
+      "feature": "range_position",
+      "operator": "lte",
+      "weight": 2,
+      "value": 1.0
+    },
+    {
+      "id": "RULE_081",
+      "name": "1 candle momentum positive",
+      "category": "momentum",
+      "feature": "momentum_1_positive",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_082",
+      "name": "5 candle momentum positive",
+      "category": "momentum",
+      "feature": "momentum_5_positive",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_083",
+      "name": "10 candle momentum positive",
+      "category": "momentum",
+      "feature": "momentum_10_positive",
+      "operator": "is_true",
+      "weight": 3
+    },
+    {
+      "id": "RULE_084",
+      "name": "20 candle momentum positive",
+      "category": "momentum",
+      "feature": "momentum_20_positive",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_085",
+      "name": "5 candle momentum above 0.5 percent",
+      "category": "momentum",
+      "feature": "momentum_5_gt_0_5",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_086",
+      "name": "10 candle momentum above 1 percent",
+      "category": "momentum",
+      "feature": "momentum_10_gt_1",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_087",
+      "name": "20 candle momentum above 2 percent",
+      "category": "momentum",
+      "feature": "momentum_20_gt_2",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_088",
+      "name": "Up streak at least one",
+      "category": "momentum",
+      "feature": "up_streak_ge_1",
+      "operator": "is_true",
+      "weight": 1
+    },
+    {
+      "id": "RULE_089",
+      "name": "Up streak at least two",
+      "category": "momentum",
+      "feature": "up_streak_ge_2",
+      "operator": "is_true",
+      "weight": 1
+    },
+    {
+      "id": "RULE_090",
+      "name": "1 candle momentum below 3 percent",
+      "category": "risk",
+      "feature": "momentum_1_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 3
+    },
+    {
+      "id": "RULE_091",
+      "name": "5 candle momentum below 8 percent",
+      "category": "risk",
+      "feature": "momentum_5_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 8
+    },
+    {
+      "id": "RULE_092",
+      "name": "10 candle momentum below 12 percent",
+      "category": "risk",
+      "feature": "momentum_10_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 12
+    },
+    {
+      "id": "RULE_093",
+      "name": "20 candle momentum below 20 percent",
+      "category": "risk",
+      "feature": "momentum_20_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 20
+    },
+    {
+      "id": "RULE_094",
+      "name": "Down streak no more than one",
+      "category": "risk",
+      "feature": "down_streak_le_1",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_095",
+      "name": "Up streak numeric below six",
+      "category": "risk",
+      "feature": "up_streak",
+      "operator": "lte",
+      "weight": 1,
+      "value": 6
+    },
+    {
+      "id": "RULE_096",
+      "name": "Down streak numeric below three",
+      "category": "risk",
+      "feature": "down_streak",
+      "operator": "lte",
+      "weight": 1,
+      "value": 3
+    },
+    {
+      "id": "RULE_097",
+      "name": "Green count 5 at least three",
+      "category": "price_action",
+      "feature": "green_count_5_ge_3",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_098",
+      "name": "Green count 10 at least six",
+      "category": "price_action",
+      "feature": "green_count_10_ge_6",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_099",
+      "name": "Green count 5 numeric at least two",
+      "category": "price_action",
+      "feature": "green_count_5",
+      "operator": "gte",
+      "weight": 1,
+      "value": 2
+    },
+    {
+      "id": "RULE_100",
+      "name": "Green count 10 numeric at least five",
+      "category": "price_action",
+      "feature": "green_count_10",
+      "operator": "gte",
+      "weight": 1,
+      "value": 5
+    },
+    {
+      "id": "RULE_101",
+      "name": "Latest candle green",
+      "category": "price_action",
+      "feature": "latest_green",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_102",
+      "name": "Latest close near high",
+      "category": "price_action",
+      "feature": "latest_close_near_high",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_103",
+      "name": "Latest lower wick bigger than upper",
+      "category": "price_action",
+      "feature": "latest_lower_wick_gt_upper",
+      "operator": "is_true",
+      "weight": 1
+    },
+    {
+      "id": "RULE_104",
+      "name": "Latest body above 30 percent of range",
+      "category": "price_action",
+      "feature": "latest_body_gt_30_range",
+      "operator": "is_true",
+      "weight": 1
+    },
+    {
+      "id": "RULE_105",
+      "name": "Latest body below 2 percent",
+      "category": "risk",
+      "feature": "latest_body_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 2
+    },
+    {
+      "id": "RULE_106",
+      "name": "Latest range below 3 percent",
+      "category": "risk",
+      "feature": "latest_range_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 3
+    },
+    {
+      "id": "RULE_107",
+      "name": "Latest range below two ATR",
+      "category": "risk",
+      "feature": "latest_range_below_2_atr",
+      "operator": "is_true",
+      "weight": 1
+    },
+    {
+      "id": "RULE_108",
+      "name": "5 candle volatility below 3 percent",
+      "category": "volatility",
+      "feature": "volatility_5_below_3_percent",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_109",
+      "name": "10 candle volatility below 5 percent",
+      "category": "volatility",
+      "feature": "volatility_10_below_5_percent",
+      "operator": "is_true",
+      "weight": 2
+    },
+    {
+      "id": "RULE_110",
+      "name": "5 candle volatility above 0.2 percent",
+      "category": "volatility",
+      "feature": "volatility_5_percent",
+      "operator": "gte",
+      "weight": 1,
+      "value": 0.2
+    },
+    {
+      "id": "RULE_111",
+      "name": "10 candle volatility above 0.3 percent",
+      "category": "volatility",
+      "feature": "volatility_10_percent",
+      "operator": "gte",
+      "weight": 1,
+      "value": 0.3
+    },
+    {
+      "id": "RULE_112",
+      "name": "5 candle volatility below 6 percent",
+      "category": "volatility",
+      "feature": "volatility_5_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 6
+    },
+    {
+      "id": "RULE_113",
+      "name": "10 candle volatility below 8 percent",
+      "category": "volatility",
+      "feature": "volatility_10_percent",
+      "operator": "lte",
+      "weight": 1,
+      "value": 8
+    }
+  ]
+}

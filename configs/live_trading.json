@@ -1,0 +1,14 @@
+{
+  "enabled": false,
+  "dry_run": true,
+  "exchange": "binance",
+  "quote_asset": "USDT",
+  "max_order_notional": 25,
+  "allowed_symbols": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "min_confidence": 95,
+  "allow_market_orders": true
+}

@@ -1,0 +1,11 @@
+{
+  "exchange": "binance",
+  "timeframe": "1m",
+  "limit": 100,
+  "symbols": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT"
+  ],
+  "fallback_to_sample_data": true
+}

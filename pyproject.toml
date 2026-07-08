@@ -1,0 +1,9 @@
+[project]
+name = "crypto-quant-bot"
+version = "0.1.0"
+description = "Deterministic crypto quant trading engine starter"
+requires-python = ">=3.13"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

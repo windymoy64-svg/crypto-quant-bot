@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "paper_state_path": "logs/paper_state.json",
+  "paper_events_path": "logs/paper_events.jsonl",
+  "backtest_results_dir": "logs/backtests",
+  "output_path": "logs/analytics_report.json",
+  "initial_equity": 10000,
+  "periods_per_year": 252,
+  "include_event_bus": true,
+  "include_paper_state": true,
+  "include_backtests": true
+}

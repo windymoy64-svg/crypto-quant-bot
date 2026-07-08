@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "dry_run": true,
+  "exchange": "binance",
+  "order_type": "MARKET",
+  "default_quote_amount": 100,
+  "max_daily_orders": 20,
+  "confirm_before_live": true,
+  "confirm_live": false,
+  "minimum_quote_balance": 100,
+  "max_open_orders": 5,
+  "require_can_trade": true,
+  "require_spot_permission": true,
+  "cooldown_seconds": 300,
+  "max_same_symbol_orders": 1
+}

@@ -1,0 +1,82 @@
+﻿# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Virtual Environment
+# =========================
+.venv/
+venv/
+env/
+
+# =========================
+# Environment Variables
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# IDE
+# =========================
+.vscode/settings.json
+.idea/
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Runtime
+# =========================
+logs/
+reports/
+data/
+
+# Jika ingin struktur folder tetap ada
+!logs/.gitkeep
+!reports/.gitkeep
+!data/.gitkeep
+
+# =========================
+# Build
+# =========================
+build/
+dist/
+*.egg-info/
+
+# =========================
+# Temporary
+# =========================
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# SQLite (jika database runtime)
+# =========================
+*.sqlite
+*.sqlite3
+
+# =========================
+# Docker Override
+# =========================
+docker-compose.override.yml

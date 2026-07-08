@@ -1,0 +1,10 @@
+{
+  "scan_config": "configs/market_scan.json",
+  "paper_config": "configs/paper_trading.json",
+  "live_config": "configs/live_trading.json",
+  "paper_trading_enabled": true,
+  "live_execution_enabled": false,
+  "interval_seconds": 60,
+  "latest_output": "logs/latest_signals.json",
+  "history_output": "logs/signals.jsonl"
+}

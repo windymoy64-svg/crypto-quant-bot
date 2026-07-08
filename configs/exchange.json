@@ -1,0 +1,7 @@
+{
+  "exchange": "binance",
+  "testnet": true,
+  "live_trading": false,
+  "recv_window": 5000,
+  "timeout": 30
+}

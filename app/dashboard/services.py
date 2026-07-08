@@ -1,0 +1,300 @@
+﻿from __future__ import annotations
+
+import json
+import logging
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from app.analytics import AnalyticsConfig, AnalyticsEngine
+from app.market.data_service import MarketDataService
+from app.monitoring import system_health_monitor
+from app.portfolio.sync import PortfolioSynchronizer
+
+
+logger = logging.getLogger(__name__)
+portfolio_synchronizer = PortfolioSynchronizer()
+
+
+SUPPORTED_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")
+DEFAULT_KLINE_SYMBOL = "BTC/USDT"
+DEFAULT_KLINE_TIMEFRAME = "1h"
+DEFAULT_KLINE_LIMIT = 200
+MAX_KLINE_LIMIT = 1000
+
+
+def utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def read_json_file(path: str | Path, default: Any) -> Any:
+    target = Path(path)
+    if not target.exists():
+        return default
+    try:
+        return json.loads(target.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError:
+        return default
+
+
+def read_jsonl_file(path: str | Path, limit: int = 100) -> list[dict[str, Any]]:
+    target = Path(path)
+    if not target.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in target.read_text(encoding="utf-8-sig").splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            rows.append(item)
+    return rows[-limit:]
+
+
+class DashboardService:
+    def market(self) -> dict[str, Any]:
+        latest = read_json_file("logs/latest_signals.json", {})
+        signals = latest.get("signals", []) if isinstance(latest, dict) else []
+        return {
+            "timestamp": latest.get("timestamp") if isinstance(latest, dict) else None,
+            "signals": signals if isinstance(signals, list) else [],
+            "count": len(signals) if isinstance(signals, list) else 0,
+            "read_only": True,
+        }
+
+    def portfolio(self) -> dict[str, Any]:
+        paper = self.paper()
+        account = paper.get("account", {}) if isinstance(paper.get("account"), dict) else {}
+        open_positions = paper.get("open_positions", [])
+        if not isinstance(open_positions, list):
+            open_positions = []
+        base = {
+            "timestamp": paper.get("updated_at"),
+            "equity": paper.get("equity", account.get("cash", paper.get("balance", 0.0))),
+            "available_balance": paper.get("available_balance", account.get("available_balance", paper.get("balance", 0.0))),
+            "open_positions": open_positions,
+            "open_positions_count": len(open_positions),
+            "source": "paper_state",
+            "read_only": True,
+        }
+        return portfolio_synchronizer.sync_from_lifecycle(base, self.live_orders())
+
+    def live_orders(self) -> dict[str, Any]:
+        snapshot = read_json_file("logs/live_orders.json", {})
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        return {
+            "open_orders": snapshot.get("open_orders", []) if isinstance(snapshot.get("open_orders"), list) else [],
+            "filled_orders": snapshot.get("filled_orders", []) if isinstance(snapshot.get("filled_orders"), list) else [],
+            "rejected_orders": snapshot.get("rejected_orders", []) if isinstance(snapshot.get("rejected_orders"), list) else [],
+            "order_history": snapshot.get("order_history", []) if isinstance(snapshot.get("order_history"), list) else [],
+            "read_only": True,
+        }
+
+    def paper(self) -> dict[str, Any]:
+        state = read_json_file("logs/paper_state.json", {})
+        if not isinstance(state, dict):
+            state = {}
+        positions = self._normalize_positions(state.get("positions", state.get("open_positions", [])))
+        fills = state.get("fills", []) if isinstance(state.get("fills"), list) else []
+        orders = state.get("orders", []) if isinstance(state.get("orders"), list) else []
+        account = state.get("account", {}) if isinstance(state.get("account"), dict) else {}
+        balance = state.get("balance", account.get("cash", 0.0))
+        return {
+            "created_at": state.get("created_at"),
+            "updated_at": state.get("updated_at"),
+            "starting_balance": state.get("starting_balance", account.get("initial_balance", 0.0)),
+            "balance": balance,
+            "equity": state.get("equity", balance),
+            "available_balance": account.get("available_balance", balance),
+            "account": account,
+            "open_positions": positions,
+            "orders": orders[-100:],
+            "fills": fills[-100:],
+            "events": read_jsonl_file("logs/paper_events.jsonl", limit=100),
+            "read_only": True,
+        }
+
+    def backtest(self) -> dict[str, Any]:
+        directory = Path("logs/backtests")
+        files: list[dict[str, Any]] = []
+        if directory.exists():
+            for path in sorted(directory.glob("*.json"))[-25:]:
+                data = read_json_file(path, {})
+                files.append({
+                    "path": str(path),
+                    "updated_at": datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(),
+                    "summary": self._backtest_summary(data),
+                })
+        return {"results": files, "count": len(files), "read_only": True}
+
+    def analytics(self) -> dict[str, Any]:
+        report = read_json_file("logs/analytics_report.json", {})
+        if isinstance(report, dict) and report:
+            report["read_only"] = True
+            return report
+        config_path = Path("configs/analytics.json")
+        config = AnalyticsConfig.from_json(config_path) if config_path.exists() else AnalyticsConfig()
+        generated = AnalyticsEngine().build_report(config).to_dict()
+        generated["read_only"] = True
+        generated["generated_at"] = utc_now_iso()
+        return generated
+
+    def health(self) -> dict[str, Any]:
+        system = system_health_monitor.snapshot()
+        return {
+            "status": "ok",
+            "service": "dashboard",
+            "read_only": True,
+            "timestamp": utc_now_iso(),
+            "system": system,
+            "cpu": system.get("cpu"),
+            "ram": system.get("ram"),
+            "disk": system.get("disk"),
+            "latency_ms": system.get("latency_ms"),
+            "api_status": system.get("api_status"),
+            "websocket_status": system.get("websocket_status"),
+            "exchange_status": system.get("exchange_status"),
+            "uptime_seconds": system.get("uptime_seconds"),
+            "sqlite": system.get("sqlite"),
+            "binance_connectivity": system.get("binance_connectivity"),
+            "artifacts": {
+                "latest_signals": Path("logs/latest_signals.json").exists(),
+                "paper_state": Path("logs/paper_state.json").exists(),
+                "portfolio_state": Path("logs/portfolio_state.json").exists(),
+                "analytics_report": Path("logs/analytics_report.json").exists(),
+                "backtests_dir": Path("logs/backtests").exists(),
+            },
+        }
+
+    def klines(
+        self,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        limit: int | None = None,
+        exchange: str = "binance",
+    ) -> dict[str, Any]:
+        resolved_symbol = self._resolve_kline_symbol(symbol)
+        resolved_timeframe = self._resolve_kline_timeframe(timeframe)
+        resolved_limit = self._resolve_kline_limit(limit)
+
+        service = MarketDataService(exchange=exchange, fallback_to_sample_data=True)
+        try:
+            result = service.fetch_ohlcv(
+                symbol=resolved_symbol,
+                timeframe=resolved_timeframe,
+                limit=resolved_limit,
+            )
+        except Exception as exc:
+            logger.exception("Failed to fetch klines for %s", resolved_symbol)
+            return {
+                "symbol": resolved_symbol,
+                "timeframe": resolved_timeframe,
+                "limit": resolved_limit,
+                "source": "error",
+                "warning": str(exc),
+                "candles": [],
+                "count": 0,
+                "read_only": True,
+            }
+
+        candles = [self._candle_to_dict(candle) for candle in result.candles]
+        return {
+            "symbol": resolved_symbol,
+            "timeframe": resolved_timeframe,
+            "limit": resolved_limit,
+            "source": result.source,
+            "warning": result.warning,
+            "candles": candles,
+            "count": len(candles),
+            "read_only": True,
+        }
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "market": self.market(),
+            "portfolio": self.portfolio(),
+            "live_orders": self.live_orders(),
+            "paper": self.paper(),
+            "backtest": self.backtest(),
+            "analytics": self.analytics(),
+            "health": self.health(),
+            "read_only": True,
+        }
+
+    def _resolve_kline_symbol(self, symbol: str | None) -> str:
+        raw = (symbol or "").strip()
+        if not raw:
+            return DEFAULT_KLINE_SYMBOL
+        return raw.upper().replace("-", "/")
+
+    def _resolve_kline_timeframe(self, timeframe: str | None) -> str:
+        raw = (timeframe or "").strip().lower()
+        if raw in SUPPORTED_TIMEFRAMES:
+            return raw
+        return DEFAULT_KLINE_TIMEFRAME
+
+    def _resolve_kline_limit(self, limit: int | None) -> int:
+        try:
+            value = int(limit) if limit is not None else DEFAULT_KLINE_LIMIT
+        except (TypeError, ValueError):
+            return DEFAULT_KLINE_LIMIT
+        if value <= 0:
+            return DEFAULT_KLINE_LIMIT
+        return min(value, MAX_KLINE_LIMIT)
+
+    def _candle_to_dict(self, candle: Any) -> dict[str, Any]:
+        timestamp = getattr(candle, "timestamp", "")
+        return {
+            "symbol": getattr(candle, "symbol", ""),
+            "timestamp": timestamp,
+            "time": self._timestamp_to_unix(timestamp),
+            "open": float(getattr(candle, "open", 0.0)),
+            "high": float(getattr(candle, "high", 0.0)),
+            "low": float(getattr(candle, "low", 0.0)),
+            "close": float(getattr(candle, "close", 0.0)),
+            "volume": float(getattr(candle, "volume", 0.0)),
+        }
+
+    def _timestamp_to_unix(self, timestamp: str) -> int:
+        if not timestamp:
+            return 0
+        try:
+            normalized = str(timestamp).replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return 0
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return int(parsed.timestamp())
+
+    def _normalize_positions(self, value: Any) -> list[dict[str, Any]]:
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            positions: list[dict[str, Any]] = []
+            for symbol, data in value.items():
+                if isinstance(data, dict):
+                    positions.append({"symbol": symbol, **data})
+                else:
+                    positions.append({"symbol": symbol, "value": data})
+            return positions
+        return []
+
+    def _backtest_summary(self, data: Any) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            return {}
+        metrics = data.get("metrics", {}) if isinstance(data.get("metrics"), dict) else {}
+        trades = data.get("trades", []) if isinstance(data.get("trades"), list) else []
+        equity = data.get("equity_curve", []) if isinstance(data.get("equity_curve"), list) else []
+        return {
+            "symbol": data.get("symbol"),
+            "timeframe": data.get("timeframe"),
+            "trades_count": len(trades),
+            "equity_points": len(equity),
+            "metrics": metrics,
+        }
+
+
+dashboard_service = DashboardService()
