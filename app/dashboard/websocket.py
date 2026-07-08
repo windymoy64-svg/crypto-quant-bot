@@ -108,7 +108,11 @@ event_hub = DashboardEventHub()
 @router.websocket("/ws")
 async def dashboard_ws(websocket: WebSocket) -> None:
     expected = os.getenv("BOT_API_KEY")
-    token = websocket.query_params.get("api_key") or websocket.query_params.get("token")
+    token = (
+        websocket.query_params.get("api_key")
+        or websocket.query_params.get("token")
+        or websocket.cookies.get("dashboard_token")
+    )
     if expected and token != expected:
         await websocket.close(code=1008)
         return
