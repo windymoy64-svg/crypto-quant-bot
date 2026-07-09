@@ -154,83 +154,108 @@
         <script src="/static/dashboard.js"></script>
         <script>
         (function(){
-          const money = n => "$" + Number(n||0).toLocaleString("en-US",{maximumFractionDigits:2});
-          const pct = n => (n>=0?"+":"") + Number(n||0).toFixed(2) + "%";
+          const pct = n => (n>=0?"▲ +":"▼ ") + Math.abs(Number(n||0)).toFixed(2) + "%";
 
           async function getJSON(url){
-            const r = await fetch(url, {credentials:"same-origin"});
+            const r = await fetch(url,{credentials:"same-origin"});
             if(!r.ok) throw new Error(url);
             return r.json();
           }
 
-          function renderSignals(market){
+          const ICON_UP    = '<svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg>';
+          const ICON_DOWN  = '<svg viewBox="0 0 24 24"><path d="M3 7l6 6 4-4 8 8M15 17h6v-6"/></svg>';
+          const ICON_CLOCK = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>';
+
+          function renderStats(market, paper, analytics){
             const box = document.getElementById("signal-terminal");
             const count = document.getElementById("signal-terminal-count");
             if(!box) return;
-            const signals = (market && market.signals) || [];
-            if(count) count.textContent = signals.length + " signals";
-            if(!signals.length){ box.innerHTML = '<div class="stream-empty">Belum ada sinyal. Pastikan run_realtime.py berjalan.</div>'; return; }
-            box.innerHTML = signals.slice(0,30).map(s=>{
-              const act = String(s.action||"skip").toLowerCase();
-              const conf = Number(s.confidence||0).toFixed(1);
-              return `<div class="stream-row">
-                <div class="stream-left">
-                  <span class="stream-badge ${act}">${act}</span>
-                  <div style="min-width:0">
-                    <div class="stream-sym">${s.symbol||"-"}</div>
-                    <div class="stream-sub">entry ${money(s.entry)}</div>
-                  </div>
+
+            const perf = (analytics && analytics.performance) || {};
+            const trades = (analytics && analytics.journal && analytics.journal.trades)
+                        || (paper && paper.fills) || [];
+
+            let wins = Number(perf.winning_trades ?? 0);
+            let losses = Number(perf.losing_trades ?? 0);
+            let winRate = Number(perf.win_rate ?? 0);
+
+            if((!wins && !losses) && trades.length){
+              trades.forEach(t=>{
+                const p = Number(t.pnl ?? t.profit ?? t.realized_pnl ?? 0);
+                if(p>0) wins++; else if(p<0) losses++;
+              });
+              const total = wins + losses;
+              winRate = total ? (wins/total*100) : 0;
+            }
+            const totalSig = (market && market.count) || 0;
+            if(count) count.textContent = totalSig + " sinyal";
+            const total = wins + losses;
+            const barPct = total ? (wins/total*100) : 0;
+
+            box.innerHTML = `
+              <div class="stats-summary">
+                <div class="stats-tile profit">
+                  <div class="stats-icon">${ICON_UP}</div>
+                  <div class="stats-value">${wins}</div>
+                  <div class="stats-label">Profit Signals</div>
                 </div>
-                <div class="stream-right">
-                  <div class="stream-pnl">${conf}%</div>
-                  <div class="stream-sub">confidence</div>
+                <div class="stats-tile loss">
+                  <div class="stats-icon">${ICON_DOWN}</div>
+                  <div class="stats-value">${losses}</div>
+                  <div class="stats-label">Loss Signals</div>
                 </div>
-              </div>`;
-            }).join("");
+                <div class="stats-tile accuracy">
+                  <div class="stats-icon">${ICON_CLOCK}</div>
+                  <div class="stats-value">${winRate.toFixed(0)}%</div>
+                  <div class="stats-label">Live Accuracy</div>
+                </div>
+              </div>
+              <div class="stats-bar"><div class="stats-bar-fill" style="width:${barPct}%"></div></div>
+              <div class="stats-caption">${wins} profit · ${losses} loss</div>
+            `;
           }
 
           function renderPnl(paper){
             const box = document.getElementById("pnl-stream");
+            const status = document.getElementById("pnl-stream-status");
             if(!box) return;
             const positions = (paper && paper.open_positions) || [];
+            if(status) status.textContent = positions.length + " signals";
+
             if(!positions.length){
-              box.innerHTML = '<div class="stream-empty">Belum ada posisi terbuka. P&L akan muncul saat bot membuka posisi (sinyal BUY dieksekusi).</div>';
+              box.innerHTML = '<div class="stream-empty">Belum ada posisi terbuka. Coin yang sedang di-entry akan muncul di sini.</div>';
               return;
             }
-            box.innerHTML = positions.map(p=>{
-              const pnl = Number(p.unrealized_pnl ?? p.pnl ?? 0);
-              const pnlPct = Number(p.pnl_percent ?? p.roi ?? 0);
-              const dir = pnl>=0 ? "up" : "down";
-              return `<div class="stream-row">
-                <div class="stream-left">
-                  <span class="stream-badge buy">${(p.side||"long").toLowerCase()}</span>
-                  <div style="min-width:0">
-                    <div class="stream-sym">${p.symbol||"-"}</div>
-                    <div class="stream-sub">qty ${p.quantity ?? p.size ?? "-"}</div>
-                  </div>
-                </div>
-                <div class="stream-right">
-                  <div class="stream-pnl ${dir}">${money(pnl)}</div>
-                  <div class="stream-sub">${pct(pnlPct)}</div>
-                </div>
+
+            box.innerHTML = '<div class="pnl-grid">' + positions.map(p=>{
+              const roi = Number(p.pnl_percent ?? p.roi ?? p.unrealized_pnl_pct ?? 0);
+              const side = String(p.side || "long").toUpperCase();
+              const dir = roi>=0 ? "" : "down";
+              const symShort = String(p.symbol || "-").split("/")[0];
+              return `<div class="pnl-card ${dir}">
+                <div class="pnl-sym">${symShort}</div>
+                <div class="pnl-value">${pct(roi)}</div>
+                <div class="pnl-side">${side}</div>
               </div>`;
-            }).join("");
+            }).join("") + '</div>';
           }
 
           async function tick(){
             try{
-              const [market, paper] = await Promise.all([
+              const [market, paper, analytics] = await Promise.all([
                 getJSON("/api/market").catch(()=>({})),
                 getJSON("/api/paper").catch(()=>({})),
+                getJSON("/api/analytics").catch(()=>({})),
               ]);
-              renderSignals(market);
+              renderStats(market, paper, analytics);
               renderPnl(paper);
-            }catch(e){ /* diam, coba lagi siklus berikutnya */ }
+            }catch(e){}
           }
 
           document.addEventListener("DOMContentLoaded", ()=>{ tick(); setInterval(tick, 5000); });
         })();
         </script>
+
     <script src="https://s3.tradingview.com/tv.js"></script>
     <script>
       // --- TradingView widget (Opsi A) ---
