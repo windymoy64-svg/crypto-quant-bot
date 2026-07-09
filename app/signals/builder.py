@@ -3,12 +3,21 @@
 from app.core.models import Candle, ScoreResult, TradingSignal
 from app.indicators.technical import atr
 
+def _price_decimals(price: float) -> int:
+    """Pembulatan adaptif berdasarkan magnitudo harga."""
+    p = abs(price)
+    if p >= 1000: return 2
+    if p >= 100:  return 3
+    if p >= 1:    return 4
+    if p >= 0.01: return 6
+    return 8
 
 def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> TradingSignal:
     entry = candles[-1].close
     current_atr = atr(candles)
-    stop_loss = round(entry - (current_atr * 1.5), 2)
-    take_profit = [round(entry + (current_atr * multiple), 2) for multiple in (1.5, 2.5, 3.5)]
+    decimals = _price_decimals(entry)
+    stop_loss = round(entry - (current_atr * 1.5), decimals)
+    take_profit = [round(entry + (current_atr * multiple), decimals) for multiple in (1.5, 2.5, 3.5)]
     risk_per_unit = entry - stop_loss
     reward_per_unit = take_profit[1] - entry
     risk_reward = round(reward_per_unit / risk_per_unit, 2) if risk_per_unit else 0.0
@@ -33,7 +42,7 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
         action=score.action,
         score=score.total_score,
         confidence=score.confidence,
-        entry=round(entry, 2),
+        entry=round(entry, decimals),
         stop_loss=stop_loss,
         take_profit=take_profit,
         risk_reward=risk_reward,
