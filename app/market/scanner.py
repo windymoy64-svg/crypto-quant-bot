@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from app.market.data_service import MarketDataService
 from app.scoring.engine import ScoreEngine
 from app.signals.builder import build_signal
+from app.exchange.public_http_client import PublicHttpExchangeClient
 
 
 @dataclass(frozen=True)
@@ -25,12 +26,24 @@ class ScanItem:
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
+def resolve_symbols(config: dict[str, object], exchange: str) -> list[str]:
+    mode = str(config.get("symbol_mode", "static"))
+    if mode == "all":
+        client = PublicHttpExchangeClient(exchange)
+        symbols = client.fetch_all_symbols(
+            quote_asset=str(config.get("quote_asset", "USDT")),
+        )
+        max_symbols = int(config.get("max_symbols", 0))
+        if max_symbols > 0:
+            symbols = symbols[:max_symbols]
+        return symbols
+    return [str(symbol) for symbol in config.get("symbols", [])]
 
 def scan_symbols(config: dict[str, object], rules_path: str = "configs/rules.json") -> list[ScanItem]:
     exchange = str(config.get("exchange", "binance"))
     timeframe = str(config.get("timeframe", "1m"))
     limit = int(config.get("limit", 100))
-    symbols = [str(symbol) for symbol in config.get("symbols", [])]
+    symbols = resolve_symbols(config, exchange)          # <— berubah di sini
     fallback = bool(config.get("fallback_to_sample_data", True))
     market_data = MarketDataService(exchange=exchange, fallback_to_sample_data=fallback)
     score_engine = ScoreEngine.from_json(rules_path)

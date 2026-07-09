@@ -53,6 +53,13 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
     scan_items = scan_symbols(scan_config)
     results = [item.to_dict() for item in scan_items]
 
+    for item in results:
+        if item.get("data_source") == "sample":
+            raise RuntimeError(
+                f"Data {item['symbol']} masih sample — koneksi Binance gagal, "
+                "bukan data real. Periksa jaringan/rate limit."
+            )
+
     paper: dict[str, object] | None = None
     if bool(runtime_config.get("paper_trading_enabled", True)):
         paper_config = PaperTradingConfig.from_dict(load_json(paper_config_path))

@@ -12,6 +12,11 @@ def market() -> dict[str, object]:
     return dashboard_service.market()
 
 
+@router.get("/symbols")
+def symbols() -> dict[str, object]:
+    return dashboard_service.symbols()
+
+
 @router.get("/klines")
 def klines(
     symbol: str = Query(default="BTC/USDT", description="Trading pair, e.g. BTC/USDT"),

@@ -1,319 +1,65 @@
-﻿const state = { liveEvents: [], lastOrders: null, loading: true, tvChart: null, tvSeries: null, tvVolumeSeries: null, apexChart: null, renderEventsTimer: null, toastTimer: null, lastMetrics: {}, chartSymbol: "BTC/USDT", chartTimeframe: "1h", chartLimit: 200, chartLoading: false, chartRefreshTimer: null };
-const fmt = (value) => typeof value === "number" ? value.toLocaleString(undefined, { maximumFractionDigits: 4 }) : (value ?? "-");
-const byId = (id) => document.getElementById(id);
-const text = (id, value) => { const node = byId(id); if (node) node.textContent = value; };
-const json = (id, value) => text(id, JSON.stringify(value, null, 2));
-const escapeHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
-
-function dashboardApp() { return { theme: localStorage.getItem("theme") || "dark", query: "", toggleTheme() { this.theme = this.theme === "dark" ? "light" : "dark"; localStorage.setItem("theme", this.theme); } }; }
-async function getJson(path) { const response = await fetch(path); if (!response.ok) throw new Error(`${path} ${response.status}`); return response.json(); }
-
-async function loadAll() {
-  const started = performance.now();
-  setLoading(true);
-  const [market, portfolio, paper, analytics, liveOrders, health] = await Promise.all([getJson("/api/market"), getJson("/api/portfolio"), getJson("/api/paper"), getJson("/api/analytics"), getJson("/api/live/orders"), getJson("/api/health")]);
-  text("latency-badge", `Latency ${Math.round(performance.now() - started)} ms`);
-  render({ market, portfolio, paper, analytics, liveOrders, health });
-}
-
-function setLoading(isLoading) {
-  state.loading = isLoading;
-  document.body.classList.toggle("is-loading", isLoading);
-  ["market", "positions", "journal-list", "events", "live-orders", "portfolio-json"].forEach((id) => byId(id)?.classList.toggle("loading", isLoading));
-}
-
-function render(payload) {
-  setLoading(false);
-  animateMetric("metric-signals", payload.market?.count ?? 0);
-  animateMetric("metric-equity", payload.portfolio?.equity);
-  animateMetric("metric-balance", payload.paper?.balance);
-  animateMetric("metric-positions", payload.portfolio?.open_positions_count ?? 0);
-  renderMarket(payload.market?.signals ?? []);
-  renderPositions(payload.portfolio?.open_positions ?? []);
-  renderJournal(payload.analytics?.journal?.trades ?? []);
-  renderHealth(payload.health ?? {});
-  renderOrders(payload.liveOrders ?? {});
-  json("portfolio-json", payload.portfolio ?? {});
-  json("analytics-json", payload.analytics?.performance ?? payload.analytics ?? {});
-  state.lastOrders = payload.liveOrders ?? {};
-  renderCharts(payload);
-}
-
-function animateMetric(id, value) {
-  const node = byId(id);
-  if (!node) return;
-  if (typeof value !== "number" || !Number.isFinite(value)) { node.textContent = fmt(value); return; }
-  const start = Number(node.dataset.value ?? 0);
-  const end = value;
-  updateTrend(id.replace("metric-", ""), start, end);
-  const duration = 650;
-  const started = performance.now();
-  node.dataset.value = String(end);
-  node.classList.remove("metric-pop");
-  requestAnimationFrame(() => node.classList.add("metric-pop"));
-  const step = (now) => {
-    const progress = Math.min((now - started) / duration, 1);
-    const eased = 1 - Math.pow(1 - progress, 3);
-    node.textContent = fmt(start + (end - start) * eased);
-    if (progress < 1) requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
-}
-
-function updateTrend(name, start, end) {
-  const node = byId(`trend-${name}`);
-  if (!node) return;
-  const delta = end - start;
-  const direction = delta > 0 ? "UP" : delta < 0 ? "DOWN" : "FLAT";
-  node.textContent = `${direction} ${delta === 0 ? "" : fmt(Math.abs(delta))}`.trim();
-  node.className = direction.toLowerCase();
-}
-
-function emptyState(title, detail) {
-  return `<div class="empty-state"><span class="empty-mark">--</span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></div>`;
-}
-
-function statusClass(value) {
-  const textValue = String(value ?? "").toUpperCase();
-  if (textValue.includes("BUY") || textValue.includes("WIN") || textValue.includes("FILLED")) return "success";
-  if (textValue.includes("SELL") || textValue.includes("LOSS") || textValue.includes("ERROR") || textValue.includes("REJECT")) return "danger";
-  if (textValue.includes("PENDING") || textValue.includes("OPEN") || textValue.includes("NEW")) return "warning";
-  return "info";
-}
-
-function badge(value) {
-  return `<span class="status-badge ${statusClass(value)}">${escapeHtml(value ?? "-")}</span>`;
-}
-
-function renderMarket(signals) {
-  const node = byId("market");
-  if (!node) return;
-  const filter = byId("market-filter")?.value || "all";
-  const rows = signals.filter(signal => filter === "all" || signal.action === filter);
-  node.innerHTML = rows.map(signal => `<div class="item signal-card"><strong><span>${escapeHtml(signal.symbol ?? "unknown")}</span>${badge(signal.action)}</strong><small>score ${fmt(signal.score)} | confidence ${fmt(signal.confidence)}</small></div>`).join("") || emptyState("No market signals", "Scanner output will appear here after the next API refresh.");
-}
-
-function renderPositions(positions) {
-  const node = byId("positions");
-  if (!node) return;
-  node.innerHTML = positions.map(position => `<div class="item"><strong><span>${escapeHtml(position.symbol ?? "unknown")}</span><b>${fmt(position.quantity)}</b></strong><small>entry ${fmt(position.average_entry_price ?? position.price)} | source ${escapeHtml(position.source ?? "portfolio")}</small></div>`).join("") || emptyState("No open positions", "Exposure is clear while no positions are reported.");
-}
-
-function renderJournal(trades) {
-  const node = byId("journal-list");
-  if (!node) return;
-  const needle = (byId("journal-filter")?.value || "").toLowerCase();
-  const rows = trades.filter(trade => JSON.stringify(trade).toLowerCase().includes(needle)).slice(-40).reverse();
-  if (!rows.length) { node.innerHTML = emptyState("No closed trades", "Completed trades will build a searchable journal here."); return; }
-  node.innerHTML = `<table><thead><tr><th>Symbol</th><th>Net PnL</th><th>Entry</th><th>Exit</th></tr></thead><tbody>${rows.map(trade => `<tr><td data-label="Symbol">${escapeHtml(trade.symbol ?? "unknown")}</td><td data-label="Net PnL"><b>${fmt(trade.net_pnl ?? 0)}</b></td><td data-label="Entry">${escapeHtml(trade.entry_time ?? "-")}</td><td data-label="Exit">${escapeHtml(trade.exit_time ?? "-")}</td></tr>`).join("")}</tbody></table>`;
-}
-
-function renderOrders(orders) {
-  const node = byId("live-orders");
-  if (!node) return;
-  const history = Array.isArray(orders?.order_history) ? orders.order_history : (Array.isArray(orders?.orders) ? orders.orders : []);
-  if (!history.length) { node.innerHTML = emptyState("No live orders", "Order history from the current API response will appear here."); return; }
-  node.innerHTML = `<table><thead><tr><th>Symbol</th><th>Side</th><th>Status</th><th>Qty</th><th>Updated</th></tr></thead><tbody>${history.slice(-50).reverse().map(order => `<tr><td data-label="Symbol">${escapeHtml(order.symbol ?? order.pair ?? "-")}</td><td data-label="Side">${badge(order.side ?? order.action ?? "-")}</td><td data-label="Status">${badge(order.status ?? order.state ?? "-")}</td><td data-label="Qty">${fmt(order.quantity ?? order.qty ?? order.executed_qty)}</td><td data-label="Updated">${escapeHtml(order.update_time ?? order.updated_at ?? order.created_at ?? "-")}</td></tr>`).join("")}</tbody></table>`;
-}
-
-function renderHealth(health) { json("health-json", { status: health.status, cpu: health.cpu, ram: health.ram, disk: health.disk, latency_ms: health.latency_ms, exchange_status: health.exchange_status, artifacts: health.artifacts }); }
-
-function renderEventsNow() {
-  const node = byId("events");
-  if (!node) return;
-  node.innerHTML = state.liveEvents.slice(-100).reverse().map(event => `<div class="item event-row"><strong><span>${escapeHtml(event.event_type ?? event.type ?? "event")}</span><b>${escapeHtml(event.occurred_at ?? "")}</b></strong><small>${escapeHtml(JSON.stringify(event.payload ?? {}))}</small></div>`).join("") || emptyState("Waiting for events", "Realtime Event Bus updates will stream into this panel.");
-}
-
-function renderEvents() {
-  if (state.renderEventsTimer) return;
-  state.renderEventsTimer = requestAnimationFrame(() => {
-    state.renderEventsTimer = null;
-    renderEventsNow();
-  });
-}
-
-function renderCharts(payload) {
-  if (window.ApexCharts && byId("pnl-chart") && !state.apexChart) {
-    state.apexChart = new ApexCharts(byId("pnl-chart"), {
-      chart: { type: "area", height: 190, toolbar: { show: false }, foreColor: "#8b98ad", animations: { enabled: true } },
-      theme: { mode: "dark" },
-      series: [{ name: "Equity", data: [payload.paper?.balance ?? 0, payload.portfolio?.equity ?? 0] }],
-      stroke: { curve: "smooth", width: 3 },
-      fill: { type: "gradient", gradient: { opacityFrom: 0.36, opacityTo: 0.02 } },
-      colors: ["#38bdf8"],
-      grid: { borderColor: "rgba(148,163,184,.12)" },
-    });
-    state.apexChart.render();
-  }
-  ensureTradingViewChart();
-}
-
-function ensureTradingViewChart() {
-  if (!window.LightweightCharts || !byId("tv-chart") || state.tvChart) return;
-  const node = byId("tv-chart");
-  state.tvChart = LightweightCharts.createChart(node, {
-    height: node.clientHeight || 460,
-    layout: { background: { color: "transparent" }, textColor: "#8b98ad" },
-    grid: { vertLines: { color: "rgba(148,163,184,.08)" }, horzLines: { color: "rgba(148,163,184,.08)" } },
-    rightPriceScale: { borderColor: "rgba(148,163,184,.14)" },
-    timeScale: { borderColor: "rgba(148,163,184,.14)", timeVisible: true, secondsVisible: false },
-    crosshair: { mode: 1 },
-  });
-  state.tvSeries = state.tvChart.addCandlestickSeries({
-    upColor: "#22c55e",
-    downColor: "#ef4444",
-    borderUpColor: "#22c55e",
-    borderDownColor: "#ef4444",
-    wickUpColor: "#22c55e",
-    wickDownColor: "#ef4444",
-  });
-  state.tvVolumeSeries = state.tvChart.addHistogramSeries({
-    priceFormat: { type: "volume" },
-    priceScaleId: "",
-    color: "rgba(56,189,248,.35)",
-  });
-  state.tvVolumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-  resizeCharts();
-  loadKlines().catch((error) => console.warn("initial klines load failed", error));
-  if (!state.chartRefreshTimer) {
-    state.chartRefreshTimer = setInterval(() => loadKlines().catch(() => {}), 60_000);
-  }
-}
-
-async function loadKlines() {
-  if (state.chartLoading || !state.tvSeries) return;
-  state.chartLoading = true;
-  const params = new URLSearchParams({
-    symbol: state.chartSymbol,
-    timeframe: state.chartTimeframe,
-    limit: String(state.chartLimit),
-  });
-  try {
-    const payload = await getJson(`/api/klines?${params.toString()}`);
-    applyKlines(payload);
-  } finally {
-    state.chartLoading = false;
-  }
-}
-
-function applyKlines(payload) {
-  if (!state.tvSeries || !state.tvVolumeSeries) return;
-  const candles = Array.isArray(payload?.candles) ? payload.candles : [];
-  const seen = new Set();
-  const priceRows = [];
-  const volumeRows = [];
-  for (const candle of candles) {
-    const time = Number(candle?.time);
-    if (!Number.isFinite(time) || time <= 0 || seen.has(time)) continue;
-    seen.add(time);
-    priceRows.push({
-      time,
-      open: Number(candle.open ?? 0),
-      high: Number(candle.high ?? 0),
-      low: Number(candle.low ?? 0),
-      close: Number(candle.close ?? 0),
-    });
-    const close = Number(candle.close ?? 0);
-    const open = Number(candle.open ?? 0);
-    volumeRows.push({
-      time,
-      value: Number(candle.volume ?? 0),
-      color: close >= open ? "rgba(34,197,94,.45)" : "rgba(239,68,68,.45)",
-    });
-  }
-  priceRows.sort((a, b) => a.time - b.time);
-  volumeRows.sort((a, b) => a.time - b.time);
-  state.tvSeries.setData(priceRows);
-  state.tvVolumeSeries.setData(volumeRows);
-  if (priceRows.length) state.tvChart?.timeScale().fitContent();
-  const source = payload?.source ? ` | source ${payload.source}` : "";
-  const warning = payload?.warning ? ` | ${payload.warning}` : "";
-  text("chart-caption", `${payload?.symbol ?? state.chartSymbol} @ ${payload?.timeframe ?? state.chartTimeframe} | ${priceRows.length} candles${source}${warning}`);
-}
-
-function setChartSymbol(symbol) {
-  if (!symbol || symbol === state.chartSymbol) return;
-  state.chartSymbol = symbol;
-  loadKlines().catch((error) => showToast(`chart: ${error.message}`));
-}
-
-function setChartTimeframe(timeframe) {
-  if (!timeframe || timeframe === state.chartTimeframe) return;
-  state.chartTimeframe = timeframe;
-  loadKlines().catch((error) => showToast(`chart: ${error.message}`));
-}
-
-function sortOrders() {
-  const orders = state.lastOrders || {};
-  const history = [...(orders.order_history || orders.orders || [])].sort((a, b) => String(b.update_time || b.updated_at || "").localeCompare(String(a.update_time || a.updated_at || "")));
-  renderOrders({ ...orders, order_history: history });
-}
-
-function setWsStatus(status) {
-  const node = byId("ws-status");
-  if (!node) return;
-  node.textContent = status;
-  node.className = `pill ws ${status.toLowerCase()}`;
-}
-
-function showToast(message) {
-  const node = byId("toast");
-  if (!node) return;
-  node.textContent = message;
-  node.classList.remove("show");
-  requestAnimationFrame(() => node.classList.add("show"));
-  clearTimeout(state.toastTimer);
-  state.toastTimer = setTimeout(() => node.classList.remove("show"), 3200);
-}
-
-function toggleSidebar() {
-  document.body.classList.toggle("sidebar-collapsed");
-  localStorage.setItem("sidebarCollapsed", document.body.classList.contains("sidebar-collapsed") ? "1" : "0");
-  resizeCharts();
-}
-
-function toggleFullscreenChart() {
-  byId("chart-card")?.classList.toggle("fullscreen-chart");
-  setTimeout(resizeCharts, 120);
-}
-
-function resizeCharts() {
-  const chartNode = byId("tv-chart");
-  if (state.tvChart && chartNode) state.tvChart.applyOptions({ width: chartNode.clientWidth, height: chartNode.clientHeight || 460 });
-  if (state.apexChart) state.apexChart.updateOptions({ chart: { height: byId("pnl-chart")?.clientHeight || 190 } }, false, false);
-}
-
-function debounce(fn, wait = 160) {
-  let timer;
-  return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), wait); };
-}
-
-function tickClock() {
-  text("clock", new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
-}
-
-function initUi() {
-  if (localStorage.getItem("sidebarCollapsed") === "1") document.body.classList.add("sidebar-collapsed");
-  tickClock();
-  setInterval(tickClock, 1000);
-  window.addEventListener("resize", debounce(resizeCharts, 180), { passive: true });
-  document.querySelectorAll(".sidebar nav a").forEach((link) => link.addEventListener("click", () => {
-    document.querySelectorAll(".sidebar nav a").forEach((item) => item.classList.remove("active"));
-    link.classList.add("active");
-  }));
-}
-
-function connectWs() {
-  const protocol = location.protocol === "https:" ? "wss" : "ws";
-  setWsStatus("Reconnecting");
-  const ws = new WebSocket(`${protocol}://${location.host}/ws`);
-  ws.onopen = () => { setWsStatus("Connected"); showToast("Websocket connected"); };
-  ws.onerror = () => setWsStatus("Disconnected");
-  ws.onclose = () => { setWsStatus("Disconnected"); setTimeout(() => { setWsStatus("Reconnecting"); connectWs(); }, 3000); };
-  ws.onmessage = (message) => { const data = JSON.parse(message.data); if (data.type === "snapshot") render(data.payload); if (data.type === "live_events") state.liveEvents = data.payload ?? []; if (data.type === "event") { state.liveEvents.push(data); showToast(`${data.event_type ?? "event"} received`); } renderEvents(); };
-}
-
-document.addEventListener("change", (event) => { if (event.target?.id === "market-filter") loadAll().catch(handleError); });
-document.addEventListener("input", (event) => { if (event.target?.id === "journal-filter") loadAll().catch(handleError); });
-function handleError(error) { console.error(error); setLoading(false); showToast(error.message); }
+const FALLBACK_SYMBOLS = ["BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT","XRP/USDT","ADA/USDT","DOGE/USDT","TRX/USDT","TON/USDT","AVAX/USDT","SHIB/USDT","DOT/USDT","LINK/USDT","BCH/USDT","NEAR/USDT","MATIC/USDT","LTC/USDT","UNI/USDT","ICP/USDT","APT/USDT","ETC/USDT","ATOM/USDT","FIL/USDT","HBAR/USDT","ARB/USDT","OP/USDT","INJ/USDT","SUI/USDT","SEI/USDT","TIA/USDT","RUNE/USDT","AAVE/USDT","MKR/USDT","RENDER/USDT","FET/USDT","GRT/USDT","ALGO/USDT","XLM/USDT","VET/USDT","EOS/USDT","WIF/USDT","PEPE/USDT","BONK/USDT","FLOKI/USDT","JUP/USDT","PYTH/USDT","JTO/USDT","WLD/USDT","STRK/USDT","ENA/USDT","PENDLE/USDT","LDO/USDT","CRV/USDT","SAND/USDT","MANA/USDT","AXS/USDT"];
+const DEFAULT_PAYLOAD = { market:{count:0,signals:[],symbols:FALLBACK_SYMBOLS,configured_symbols:[]}, portfolio:{equity:0,available_balance:0,open_positions_count:0,open_positions:[],source:"local"}, paper:{balance:0,equity:0,available_balance:0,open_positions:[],fills:[],orders:[]}, analytics:{performance:{},journal:{trades:[]}}, liveOrders:{order_history:[],open_orders:[],filled_orders:[],rejected_orders:[]}, health:{status:"unknown"} };
+const state = { liveEvents:[], lastOrders:null, loading:true, tvChart:null, tvSeries:null, tvVolumeSeries:null, apexChart:null, renderEventsTimer:null, toastTimer:null, chartSymbol:"BTC/USDT", chartTimeframe:"1h", chartLimit:200, chartLoading:false, chartRefreshTimer:null, symbols:[...FALLBACK_SYMBOLS], configuredSymbols:[], currentView:"overview", lastPayload:clone(DEFAULT_PAYLOAD) };
+const byId = id => document.getElementById(id);
+const fmt = v => typeof v === "number" && Number.isFinite(v) ? v.toLocaleString(undefined,{maximumFractionDigits:4}) : (v ?? "-");
+const money = v => `$${fmt(Number(v ?? 0))}`;
+const text = (id,v) => { const n=byId(id); if(n) n.textContent=v; };
+const json = (id,v) => text(id, JSON.stringify(v,null,2));
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function clone(v){ return JSON.parse(JSON.stringify(v)); }
+function list(v){ return Array.isArray(v)?v:[]; }
+function normalizePayload(payload={}){ const raw=payload&&typeof payload==="object"?payload:{}; const p={...clone(DEFAULT_PAYLOAD),...raw}; p.market={...clone(DEFAULT_PAYLOAD.market),...(raw.market??{})}; p.paper={...clone(DEFAULT_PAYLOAD.paper),...(raw.paper??{})}; p.portfolio={...clone(DEFAULT_PAYLOAD.portfolio),...(raw.portfolio??{})}; p.analytics={...clone(DEFAULT_PAYLOAD.analytics),...(raw.analytics??{})}; p.health={...clone(DEFAULT_PAYLOAD.health),...(raw.health??{})}; p.liveOrders={...clone(DEFAULT_PAYLOAD.liveOrders),...(raw.liveOrders??raw.live_orders??{})}; p.market.signals=list(p.market.signals); p.market.symbols=list(p.market.symbols); p.market.configured_symbols=list(p.market.configured_symbols); p.paper.open_positions=list(p.paper.open_positions); p.paper.fills=list(p.paper.fills); p.paper.orders=list(p.paper.orders); p.portfolio.open_positions=list(p.portfolio.open_positions); p.liveOrders.order_history=list(p.liveOrders.order_history); p.liveOrders.open_orders=list(p.liveOrders.open_orders); p.liveOrders.filled_orders=list(p.liveOrders.filled_orders); p.liveOrders.rejected_orders=list(p.liveOrders.rejected_orders); return p; }
+function orderHistory(orders){ return list(orders?.order_history).length?list(orders.order_history):list(orders?.orders); }
+function positionsFrom(portfolio,paper){ return list(portfolio?.open_positions).length?list(portfolio.open_positions):list(paper?.open_positions); }
+function dashboardApp(){ return { theme:localStorage.getItem("theme")||"dark", query:"", toggleTheme(){ this.theme=this.theme==="dark"?"light":"dark"; localStorage.setItem("theme",this.theme); } }; }
+async function getJson(path){ const r=await fetch(path,{cache:"no-store"}); if(!r.ok) throw new Error(`${path} ${r.status}`); return r.json(); }
+async function loadAll(){ const start=performance.now(); setLoading(true); const endpoints=[["market","/api/market"],["portfolio","/api/portfolio"],["paper","/api/paper"],["analytics","/api/analytics"],["liveOrders","/api/live/orders"],["health","/api/health"]]; const payload=clone(DEFAULT_PAYLOAD); const results=await Promise.allSettled(endpoints.map(([,p])=>getJson(p))); results.forEach((res,i)=>{ const [key,path]=endpoints[i]; if(res.status==="fulfilled") payload[key]=res.value; else console.warn(`Failed to load ${path}`,res.reason); }); text("latency-badge",`Latency ${Math.round(performance.now()-start)} ms`); render(payload); }
+function setLoading(v){ state.loading=v; document.body.classList.toggle("is-loading",v); ["market","symbol-universe","portfolio-summary","portfolio-detail","positions","journal-list","events","live-orders","portfolio-json","analytics-summary"].forEach(id=>byId(id)?.classList.toggle("loading",v)); }
+function render(payload){ const p=normalizePayload(payload); const positions=positionsFrom(p.portfolio,p.paper); state.lastPayload=p; setLoading(false); animateMetric("metric-signals",Number(p.market?.count??0)); animateMetric("metric-equity",Number(p.portfolio?.equity??p.paper?.equity??0)); animateMetric("metric-balance",Number(p.paper?.balance??p.portfolio?.available_balance??0)); animateMetric("metric-positions",Number(p.portfolio?.open_positions_count??positions.length)); renderMarket(p.market?.signals??[]); renderSymbolUniverse(p.market??{}); renderPortfolioSummary(p.portfolio??{},p.paper??{},p.liveOrders??{}); renderPortfolioDetail(p.portfolio??{},p.paper??{}); renderPositions(positions); renderAnalyticsSummary(p.analytics??{}); renderJournal(p.analytics?.journal?.trades??[]); renderHealth(p.health??{}); renderOrders(p.liveOrders??{}); json("portfolio-json",p.portfolio??{}); json("analytics-json",p.analytics?.performance??p.analytics??{}); state.lastOrders=p.liveOrders??{}; renderCharts(p); }
+function animateMetric(id,value){ const n=byId(id); if(!n) return; if(typeof value!=="number"||!Number.isFinite(value)){ n.textContent=fmt(value); return; } const start=Number(n.dataset.value??0), end=value, t0=performance.now(); updateTrend(id.replace("metric-",""),start,end); n.dataset.value=String(end); n.classList.remove("metric-pop"); requestAnimationFrame(()=>n.classList.add("metric-pop")); const step=now=>{ const x=Math.min((now-t0)/650,1), e=1-Math.pow(1-x,3); n.textContent=fmt(start+(end-start)*e); if(x<1) requestAnimationFrame(step); }; requestAnimationFrame(step); }
+function updateTrend(name,start,end){ const n=byId(`trend-${name}`); if(!n) return; const d=end-start, dir=d>0?"UP":d<0?"DOWN":"FLAT"; n.textContent=`${dir} ${d?fmt(Math.abs(d)):""}`.trim(); n.className=dir.toLowerCase(); }
+function emptyState(title,detail){ return `<div class="empty-state"><span class="empty-mark">--</span><strong>${esc(title)}</strong><small>${esc(detail)}</small></div>`; }
+function statusClass(v){ const s=String(v??"").toUpperCase(); if(/BUY|WIN|FILLED|OK|CONNECTED/.test(s)) return "success"; if(/SELL|LOSS|ERROR|REJECT|DOWN|DISCONNECT/.test(s)) return "danger"; if(/PENDING|OPEN|NEW|RECONNECT/.test(s)) return "warning"; return "info"; }
+function badge(v){ return `<span class="status-badge ${statusClass(v)}">${esc(v??"-")}</span>`; }
+function globalSearch(){ return (byId("search")?.value||"").trim().toLowerCase(); }
+function matchesQuery(v,q){ return !q || JSON.stringify(v??{}).toLowerCase().includes(q); }
+function normalizeSymbols(symbols){ const seen=new Set(); return symbols.map(s=>String(s||"").trim().toUpperCase().replace("-","/")).filter(s=>s&&!seen.has(s)&&seen.add(s)); }
+function renderMarket(signals){ const n=byId("market"); if(!n) return; const filter=byId("market-filter")?.value||"all", q=globalSearch(); const rows=signals.filter(s=>(filter==="all"||s.action===filter)&&matchesQuery(s,q)); n.innerHTML=rows.map(s=>`<div class="item signal-card"><strong><span>${esc(s.symbol??"unknown")}</span>${badge(s.action)}</strong><small>score ${fmt(s.score)} | confidence ${fmt(s.confidence)}</small></div>`).join("")||emptyState("No market signals","Scanner output will appear here after the next API refresh."); }
+function renderSymbolUniverse(market){ const api=Array.isArray(market?.symbols)?market.symbols:[], configured=normalizeSymbols(Array.isArray(market?.configured_symbols)?market.configured_symbols:[]); state.symbols=normalizeSymbols([...api,...configured,...FALLBACK_SYMBOLS]); state.configuredSymbols=configured; populateChartSymbols(state.symbols); text("universe-count",`${state.symbols.length} symbols`); text("universe-caption",`${configured.length} symbols from bot config + curated Binance USDT universe. Click a symbol to open its chart.`); const n=byId("symbol-universe"); if(!n) return; const q=(byId("symbol-filter")?.value||globalSearch()).trim().toLowerCase(); const rows=state.symbols.filter(s=>!q||s.toLowerCase().includes(q)); n.innerHTML=rows.map(s=>`<button type="button" class="symbol-chip${configured.includes(s)?" configured":""}" onclick="setChartSymbol('${esc(s)}')"><strong>${esc(s)}</strong><small>${configured.includes(s)?"config":"binance"}</small></button>`).join("")||emptyState("No symbols found","Try BTC, ETH, SOL, PEPE, or LINK."); }
+function populateChartSymbols(symbols){ const sel=byId("chart-symbol"); if(!sel||!symbols?.length) return; if(!symbols.includes(state.chartSymbol)) state.chartSymbol=symbols[0]; sel.innerHTML=symbols.map(s=>`<option value="${esc(s)}"${s===state.chartSymbol?" selected":""}>${esc(s)}</option>`).join(""); }
+function summaryTile(label,value,detail="",icon=""){ return `<div class="summary-tile"><small>${esc(label)}</small><strong>${esc(fmt(value))}</strong>${detail?`<span>${esc(detail)}</span>`:""}${icon?`<em>${esc(icon)}</em>`:""}</div>`; }
+function renderPortfolioSummary(portfolio,paper,liveOrders){ const n=byId("portfolio-summary"); if(!n) return; const orders=orderHistory(liveOrders), positions=positionsFrom(portfolio,paper), equity=Number(portfolio?.equity??paper?.equity??0), available=Number(portfolio?.available_balance??paper?.available_balance??0), exposure=Math.max(equity-available,0), openCount=Number(portfolio?.open_positions_count??positions.length); n.innerHTML=[summaryTile("Total Equity",money(equity),"synced account","EQ"),summaryTile("Available",money(available),"free balance","BL"),summaryTile("Exposure",money(exposure),`${openCount} open positions`,"PX"),summaryTile("Orders",orders.length,"live history","OR")].join(""); }
+function renderPortfolioDetail(portfolio,paper){ const n=byId("portfolio-detail"); if(!n) return; const positions=positionsFrom(portfolio,paper), fills=list(paper?.fills); const allocation=positions.length?positions.slice(0,6).map(p=>{ const qty=Number(p.quantity??p.qty??p.amount??0), price=Number(p.average_entry_price??p.entry_price??p.price??0); return `<div class="allocation-row"><span>${esc(p.symbol??"unknown")}</span><strong>${fmt(qty)}</strong><small>${money(qty*price)}</small></div>`; }).join(""):emptyState("No allocation yet","Portfolio cards stay ready and will update when positions are reported."); n.innerHTML=`<div class="portfolio-hero"><div><small>Portfolio Source</small><strong>${esc(portfolio?.source??"paper/live sync")}</strong><span>Read-only account reconciliation</span></div><div><small>Last Update</small><strong>${esc(portfolio?.timestamp??paper?.updated_at??"-")}</strong><span>${fills.length} recent fills tracked</span></div></div><div class="allocation-list">${allocation}</div>`; }
+function renderAnalyticsSummary(a){ const n=byId("analytics-summary"); if(!n) return; const p=a?.performance??a??{}, j=a?.journal??{}, trades=Array.isArray(j?.trades)?j.trades.length:0; n.innerHTML=[summaryTile("Total Return",p.total_return??p.total_return_pct??0,"performance","TR"),summaryTile("Win Rate",p.win_rate??0,"closed trades","WR"),summaryTile("Max Drawdown",p.max_drawdown??0,"risk","DD"),summaryTile("Trades",p.trades_count??trades,"journal","TJ")].join(""); }
+function renderPositions(pos){ const n=byId("positions"); if(!n) return; n.innerHTML=pos.map(p=>`<div class="item"><strong><span>${esc(p.symbol??"unknown")}</span><b>${fmt(p.quantity??p.qty)}</b></strong><small>entry ${fmt(p.average_entry_price??p.price)} | source ${esc(p.source??"portfolio")}</small></div>`).join("")||emptyState("No open positions","Exposure is clear while no positions are reported."); }
+function renderJournal(trades){ const n=byId("journal-list"); if(!n) return; const q=(byId("journal-filter")?.value||"").toLowerCase(), rows=trades.filter(t=>JSON.stringify(t).toLowerCase().includes(q)).slice(-40).reverse(); n.innerHTML=rows.length?`<table><thead><tr><th>Symbol</th><th>Net PnL</th><th>Entry</th><th>Exit</th></tr></thead><tbody>${rows.map(t=>`<tr><td data-label="Symbol">${esc(t.symbol??"unknown")}</td><td data-label="Net PnL"><b>${fmt(t.net_pnl??0)}</b></td><td data-label="Entry">${esc(t.entry_time??"-")}</td><td data-label="Exit">${esc(t.exit_time??"-")}</td></tr>`).join("")}</tbody></table>`:emptyState("No closed trades","Completed trades will build a searchable journal here."); }
+function renderOrders(orders){ const n=byId("live-orders"); if(!n) return; const h=orderHistory(orders); n.innerHTML=h.length?`<table><thead><tr><th>Symbol</th><th>Side</th><th>Status</th><th>Qty</th><th>Updated</th></tr></thead><tbody>${h.slice(-50).reverse().map(o=>`<tr><td data-label="Symbol">${esc(o.symbol??o.pair??"-")}</td><td data-label="Side">${badge(o.side??o.action??"-")}</td><td data-label="Status">${badge(o.status??o.state??"-")}</td><td data-label="Qty">${fmt(o.quantity??o.qty??o.executed_qty??o.filled_qty)}</td><td data-label="Updated">${esc(o.update_time??o.updated_at??o.created_at??"-")}</td></tr>`).join("")}</tbody></table>`:emptyState("No live orders","Order history from the current API response will appear here."); }
+function renderHealth(h){ json("health-json",{status:h.status,cpu:h.cpu,ram:h.ram,disk:h.disk,latency_ms:h.latency_ms,exchange_status:h.exchange_status,artifacts:h.artifacts}); }
+function renderEventsNow(){ const n=byId("events"); if(!n) return; n.innerHTML=state.liveEvents.slice(-100).reverse().map(e=>`<div class="item event-row"><strong><span>${esc(e.event_type??e.type??"event")}</span><b>${esc(e.occurred_at??"")}</b></strong><small>${esc(JSON.stringify(e.payload??{}))}</small></div>`).join("")||emptyState("Waiting for events","Realtime Event Bus updates will stream into this panel."); }
+function renderEvents(){ if(state.renderEventsTimer) return; state.renderEventsTimer=requestAnimationFrame(()=>{ state.renderEventsTimer=null; renderEventsNow(); }); }
+function renderCharts(payload){ renderApexChart(payload); ensureTradingViewChart(); }
+function renderApexChart(payload){ if(!window.ApexCharts||!byId("pnl-chart")) return; const data=[Number(payload.paper?.balance??0),Number(payload.portfolio?.equity??0)]; if(!state.apexChart){ state.apexChart=new ApexCharts(byId("pnl-chart"),{chart:{type:"area",height:220,toolbar:{show:false},foreColor:"#64748b",animations:{enabled:true}},theme:{mode:"light"},series:[{name:"Equity",data}],stroke:{curve:"smooth",width:3},fill:{type:"gradient",gradient:{opacityFrom:.32,opacityTo:.02}},colors:["#2563eb"],grid:{borderColor:"rgba(100,116,139,.16)"}}); state.apexChart.render(); } else state.apexChart.updateSeries([{name:"Equity",data}],true); }
+function ensureTradingViewChart(){ const node=byId("tv-chart"); if(!node||state.tvChart) return; if(!window.LightweightCharts){ renderFallbackChart([],"Chart library unavailable. Fallback is active."); loadKlines().catch(()=>{}); return; } try{ state.tvChart=LightweightCharts.createChart(node,{height:node.clientHeight||460,layout:{background:{color:"transparent"},textColor:"#64748b"},grid:{vertLines:{color:"rgba(100,116,139,.10)"},horzLines:{color:"rgba(100,116,139,.10)"}},rightPriceScale:{borderColor:"rgba(100,116,139,.18)"},timeScale:{borderColor:"rgba(100,116,139,.18)",timeVisible:true,secondsVisible:false},crosshair:{mode:1}}); state.tvSeries=state.tvChart.addCandlestickSeries({upColor:"#16a34a",downColor:"#dc2626",borderUpColor:"#16a34a",borderDownColor:"#dc2626",wickUpColor:"#16a34a",wickDownColor:"#dc2626"}); state.tvVolumeSeries=state.tvChart.addHistogramSeries({priceFormat:{type:"volume"},priceScaleId:"",color:"rgba(37,99,235,.32)"}); state.tvVolumeSeries.priceScale().applyOptions({scaleMargins:{top:.82,bottom:0}}); resizeCharts(); loadKlines().catch(err=>renderFallbackChart([],err.message)); } catch(err){ console.warn("chart init failed",err); renderFallbackChart([],err.message); loadKlines().catch(()=>{}); } if(!state.chartRefreshTimer) state.chartRefreshTimer=setInterval(()=>loadKlines().catch(()=>{}),60000); }
+async function loadKlines(){ if(state.chartLoading) return; state.chartLoading=true; text("chart-caption",`${state.chartSymbol} @ ${state.chartTimeframe} | loading candles...`); const params=new URLSearchParams({symbol:state.chartSymbol,timeframe:state.chartTimeframe,limit:String(state.chartLimit)}); try{ const p=await getJson(`/api/klines?${params.toString()}`); applyKlines(p); } catch(err){ renderFallbackChart(makeSyntheticCandles(),`API candles unavailable: ${err.message}`); throw err; } finally{ state.chartLoading=false; } }
+function normalizeCandles(candles){ const seen=new Set(), priceRows=[], volumeRows=[]; for(const c of candles){ const time=Number(c?.time); if(!Number.isFinite(time)||time<=0||seen.has(time)) continue; seen.add(time); const open=Number(c.open??0), high=Number(c.high??open), low=Number(c.low??open), close=Number(c.close??open); priceRows.push({time,open,high,low,close}); volumeRows.push({time,value:Number(c.volume??0),color:close>=open?"rgba(22,163,74,.42)":"rgba(220,38,38,.42)"}); } priceRows.sort((a,b)=>a.time-b.time); volumeRows.sort((a,b)=>a.time-b.time); return {priceRows,volumeRows}; }
+function applyKlines(payload){ const rows=normalizeCandles(Array.isArray(payload?.candles)?payload.candles:[]); if(state.tvSeries&&state.tvVolumeSeries){ state.tvSeries.setData(rows.priceRows); state.tvVolumeSeries.setData(rows.volumeRows); if(rows.priceRows.length) state.tvChart?.timeScale().fitContent(); } else renderFallbackChart(rows.priceRows,"Fallback chart active."); const source=payload?.source?` | source ${payload.source}`:"", warning=payload?.warning?` | ${payload.warning}`:""; text("chart-caption",`${payload?.symbol??state.chartSymbol} @ ${payload?.timeframe??state.chartTimeframe} | ${rows.priceRows.length} candles${source}${warning}`); }
+function makeSyntheticCandles(){ const now=Math.floor(Date.now()/1000); let price=state.chartSymbol.startsWith("BTC")?65000:state.chartSymbol.startsWith("ETH")?3200:100; return Array.from({length:64},(_,i)=>{ const open=price, wave=Math.sin(i/4)*price*.006, close=Math.max(.0001,open+wave+(i%5-2)*price*.001); price=close; return {time:now-(63-i)*3600,open,high:Math.max(open,close)*1.004,low:Math.min(open,close)*.996,close}; }); }
+function renderFallbackChart(rows,message){ const n=byId("tv-chart"); if(!n) return; const candles=rows.length?rows:makeSyntheticCandles(), values=candles.map(x=>Number(x.close??x.value??0)), min=Math.min(...values), max=Math.max(...values), range=Math.max(max-min,1); const points=values.map((v,i)=>`${(i/Math.max(values.length-1,1))*100},${92-((v-min)/range)*76}`).join(" "); n.innerHTML=`<div class="fallback-chart"><svg viewBox="0 0 100 100" preserveAspectRatio="none"><defs><linearGradient id="fallbackFill" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#2563eb" stop-opacity="0.32"/><stop stop-color="#2563eb" stop-opacity="0.02"/></linearGradient></defs><polyline points="${points}"/><polygon points="0,100 ${points} 100,100"/></svg><div><strong>${esc(state.chartSymbol)}</strong><span>${esc(message||"Fallback chart ready")}</span></div></div>`; text("chart-caption",`${state.chartSymbol} @ ${state.chartTimeframe} | fallback chart displayed`); }
+function setChartSymbol(symbol){ if(!symbol) return; state.chartSymbol=symbol; const sel=byId("chart-symbol"); if(sel) sel.value=symbol; showView("overview"); loadKlines().catch(err=>showToast(`chart: ${err.message}`)); }
+function setChartTimeframe(tf){ if(!tf||tf===state.chartTimeframe) return; state.chartTimeframe=tf; loadKlines().catch(err=>showToast(`chart: ${err.message}`)); }
+function sortOrders(){ const orders=state.lastOrders||{}, h=[...orderHistory(orders)].sort((a,b)=>String(b.update_time||b.updated_at||b.created_at||"").localeCompare(String(a.update_time||a.updated_at||a.created_at||""))); renderOrders({...orders,order_history:h}); }
+function setWsStatus(s){ const n=byId("ws-status"); if(!n) return; n.textContent=s; n.className=`pill ws ${s.toLowerCase()}`; }
+function showToast(msg){ const n=byId("toast"); if(!n) return; n.textContent=msg; n.classList.remove("show"); requestAnimationFrame(()=>n.classList.add("show")); clearTimeout(state.toastTimer); state.toastTimer=setTimeout(()=>n.classList.remove("show"),3200); }
+function toggleSidebar(){ document.body.classList.toggle("sidebar-collapsed"); localStorage.setItem("sidebarCollapsed",document.body.classList.contains("sidebar-collapsed")?"1":"0"); resizeCharts(); }
+function toggleFullscreenChart(){ byId("chart-card")?.classList.toggle("fullscreen-chart"); setTimeout(resizeCharts,120); }
+function resizeCharts(){ const node=byId("tv-chart"); if(state.tvChart&&node) state.tvChart.applyOptions({width:node.clientWidth,height:node.clientHeight||460}); if(state.apexChart) state.apexChart.updateOptions({chart:{height:byId("pnl-chart")?.clientHeight||220}},false,false); }
+function debounce(fn,wait=160){ let timer; return (...args)=>{ clearTimeout(timer); timer=setTimeout(()=>fn(...args),wait); }; }
+function tickClock(){ text("clock",new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})); }
+function showView(view){ state.currentView=view||"overview"; document.querySelectorAll("[data-view-section]").forEach(s=>s.classList.toggle("active",s.dataset.viewSection===state.currentView)); document.querySelectorAll("[data-view-link]").forEach(l=>l.classList.toggle("active",l.dataset.viewLink===state.currentView)); document.body.dataset.view=state.currentView; history.replaceState(null,"",`#${state.currentView}`); setTimeout(resizeCharts,80); }
+function initUi(){ if(localStorage.getItem("sidebarCollapsed")==="1") document.body.classList.add("sidebar-collapsed"); populateChartSymbols(state.symbols); renderSymbolUniverse({symbols:state.symbols,configured_symbols:[]}); tickClock(); setInterval(tickClock,1000); window.addEventListener("resize",debounce(resizeCharts,180),{passive:true}); document.querySelectorAll("[data-view-link]").forEach(link=>link.addEventListener("click",e=>{ e.preventDefault(); showView(link.dataset.viewLink); })); showView(location.hash?.replace("#","")||"overview"); }
+function connectWs(){ const protocol=location.protocol==="https:"?"wss":"ws"; setWsStatus("Reconnecting"); const ws=new WebSocket(`${protocol}://${location.host}/ws`); ws.onopen=()=>{ setWsStatus("Connected"); showToast("Websocket connected"); }; ws.onerror=()=>setWsStatus("Disconnected"); ws.onclose=()=>{ setWsStatus("Disconnected"); setTimeout(()=>{ setWsStatus("Reconnecting"); connectWs(); },3000); }; ws.onmessage=msg=>{ let data; try{ data=JSON.parse(msg.data); }catch(err){ console.warn("Invalid websocket payload",err); return; } if(data.type==="snapshot") render(data.payload); if(data.type==="live_events") state.liveEvents=list(data.payload); if(data.type==="event"){ state.liveEvents.push(data); showToast(`${data.event_type??"event"} received`); } renderEvents(); }; }
+document.addEventListener("change",e=>{ if(e.target?.id==="market-filter") render(state.lastPayload); });
+document.addEventListener("input",debounce(e=>{ if(["journal-filter","symbol-filter","search"].includes(e.target?.id)) render(state.lastPayload); },180));
+function handleError(err){ console.error(err); setLoading(false); showToast(err.message); render(clone(DEFAULT_PAYLOAD)); }
 initUi(); loadAll().catch(handleError); connectWs();

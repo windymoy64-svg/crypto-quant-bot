@@ -16,7 +16,7 @@ class BinanceWebSocket:
 
     def __init__(
         self,
-        testnet: bool = True,
+        testnet: bool = False,
         *,
         callbacks: BinanceStreamCallbacks | None = None,
         heartbeat: BinanceHeartbeat | None = None,

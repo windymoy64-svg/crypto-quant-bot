@@ -1,5 +1,3 @@
-﻿from __future__ import annotations
-
 import asyncio
 from collections import deque
 import logging
@@ -23,6 +21,7 @@ class DashboardEventHub:
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._drain_task: asyncio.Task[None] | None = None
+        self._snapshot_task: asyncio.Task[None] | None = None
         self._subscribed = False
 
     async def connect(self, websocket: WebSocket) -> None:
@@ -42,6 +41,8 @@ class DashboardEventHub:
     async def shutdown(self) -> None:
         if self._drain_task and not self._drain_task.done():
             self._drain_task.cancel()
+        if self._snapshot_task and not self._snapshot_task.done():
+            self._snapshot_task.cancel()
         for websocket in list(self.connections):
             try:
                 await websocket.close()
@@ -81,12 +82,17 @@ class DashboardEventHub:
         loop_changed = self._loop is not None and self._loop is not loop
         if loop_changed and self._drain_task and not self._drain_task.done():
             self._drain_task.cancel()
+        if loop_changed and self._snapshot_task and not self._snapshot_task.done():
+            self._snapshot_task.cancel()
         if self._queue is None or loop_changed:
             self._loop = loop
             self._queue = asyncio.Queue()
             self._drain_task = None
+            self._snapshot_task = None
         if self._drain_task is None or self._drain_task.done():
             self._drain_task = asyncio.create_task(self._drain())
+        if self._snapshot_task is None or self._snapshot_task.done():
+            self._snapshot_task = asyncio.create_task(self._broadcast_snapshots())
         if not self._subscribed:
             subscribe("*", self.handle_event)
             self._subscribed = True
@@ -100,6 +106,19 @@ class DashboardEventHub:
                 await self.broadcast(message)
             except Exception:
                 logger.exception("Dashboard websocket broadcast failed")
+
+    async def _broadcast_snapshots(self, interval_seconds: int = 15) -> None:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            if not self.connections:
+                continue
+            try:
+                await self.broadcast({
+                    "type": "snapshot",
+                    "payload": dashboard_service.snapshot(),
+                })
+            except Exception:
+                logger.exception("Periodic snapshot broadcast failed")
 
 
 event_hub = DashboardEventHub()

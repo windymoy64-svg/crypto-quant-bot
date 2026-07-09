@@ -27,15 +27,13 @@
           </button>
         </div>
         <nav>
-          <a class="active" href="#chart-card"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 18h16M6 15l4-4 3 3 5-7" /></svg></span><span>Overview</span></a>
-          <a href="#scanner"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4" /></svg></span><span>Scanner</span></a>
-          <a href="#portfolio"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 7h14v10H5zM8 7V5h8v2" /></svg></span><span>Portfolio</span></a>
-          <a href="#orders"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 5h12M6 12h12M6 19h8" /></svg></span><span>Orders</span></a>
-          <a href="#positions-card"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 4v16M5 12h14M7 7l10 10" /></svg></span><span>Positions</span></a>
-          <a href="#analytics"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7" /></svg></span><span>Analytics</span></a>
-          <a href="#journal"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 5h12v14H6zM9 9h6M9 13h6" /></svg></span><span>Journal</span></a>
-          <a href="#health"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 13h4l2-6 4 12 2-6h4" /></svg></span><span>Health</span></a>
-          <a href="#settings"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zM4 12h2m12 0h2M12 4v2m0 12v2" /></svg></span><span>Settings</span></a>
+          <a class="active" href="#overview" data-view-link="overview"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 18h16M6 15l4-4 3 3 5-7" /></svg></span><span>Overview</span></a>
+          <a href="#scanner" data-view-link="scanner"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4" /></svg></span><span>Scanner</span></a>
+          <a href="#portfolio" data-view-link="portfolio"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 7h14v10H5zM8 7V5h8v2" /></svg></span><span>Portfolio</span></a>
+          <a href="#orders" data-view-link="orders"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 5h12M6 12h12M6 19h8" /></svg></span><span>Orders</span></a>
+          <a href="#analytics" data-view-link="analytics"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7" /></svg></span><span>Analytics</span></a>
+          <a href="#health" data-view-link="health"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 13h4l2-6 4 12 2-6h4" /></svg></span><span>Health</span></a>
+          <a href="#settings" data-view-link="settings"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zM4 12h2m12 0h2M12 4v2m0 12v2" /></svg></span><span>Settings</span></a>
         </nav>
       </aside>
 
@@ -46,9 +44,10 @@
             <h1>Quant Command Center</h1>
           </div>
           <nav class="top-nav" aria-label="Dashboard sections">
-            <a href="#scanner">Scanner</a>
-            <a href="#analytics">Analytics</a>
-            <a href="#events-card">Events</a>
+            <a href="#overview" data-view-link="overview">Overview</a>
+            <a href="#scanner" data-view-link="scanner">Scanner</a>
+            <a href="#portfolio" data-view-link="portfolio">Portfolio</a>
+            <a href="#analytics" data-view-link="analytics">Analytics</a>
           </nav>
           <div class="top-actions">
             <span class="market-badge exchange">Binance</span>
@@ -63,24 +62,20 @@
           </div>
         </header>
 
-        <section class="metrics">
-          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon">SG</span><span class="status-badge neutral">Scanner</span></div><span>Signals</span><strong id="metric-signals">0</strong><div class="kpi-meta"><small>scanner output</small><b id="trend-signals">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 28 L22 22 L40 24 L58 13 L78 17 L96 8 L118 11" /></svg></article>
-          <article class="kpi-card featured"><div class="kpi-top"><span class="kpi-icon">EQ</span><span class="status-badge success">Synced</span></div><span>Equity</span><strong id="metric-equity">0</strong><div class="kpi-meta"><small>synced portfolio</small><b id="trend-equity">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 24 L20 25 L38 18 L57 21 L76 12 L96 14 L118 6" /></svg></article>
-          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon">BL</span><span class="status-badge info">Paper</span></div><span>Balance</span><strong id="metric-balance">0</strong><div class="kpi-meta"><small>paper/live source</small><b id="trend-balance">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 20 L23 16 L42 19 L62 11 L82 15 L101 10 L118 13" /></svg></article>
-          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon">PX</span><span class="status-badge warning">Exposure</span></div><span>Positions</span><strong id="metric-positions">0</strong><div class="kpi-meta"><small>open exposure</small><b id="trend-positions">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 26 L22 18 L42 20 L62 17 L82 21 L100 14 L118 16" /></svg></article>
+        <section id="overview" class="metrics view-section active" data-view-section="overview">
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-16 3 9h4v2h-5l-2-6-4 15-4-9H3z"/></svg></span><span class="status-badge neutral">Scanner</span></div><span>Signals</span><strong id="metric-signals">0</strong><div class="kpi-meta"><small>scanner output</small><b id="trend-signals">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 28 L22 22 L40 24 L58 13 L78 17 L96 8 L118 11" /></svg></article>
+          <article class="kpi-card featured"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18v-2H5V3H3zm4 12l4-4 3 3 6-6-1.5-1.5L14 9l-3-3-6 6 2 3z"/></svg></span><span class="status-badge success">Synced</span></div><span>Equity</span><strong id="metric-equity">0</strong><div class="kpi-meta"><small>synced portfolio</small><b id="trend-equity">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 24 L20 25 L38 18 L57 21 L76 12 L96 14 L118 6" /></svg></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 012-2h12a2 2 0 012 2v1h1a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm14 7a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/></svg></span><span class="status-badge info">Paper</span></div><span>Balance</span><strong id="metric-balance">0</strong><div class="kpi-meta"><small>paper/live source</small><b id="trend-balance">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 20 L23 16 L42 19 L62 11 L82 15 L101 10 L118 13" /></svg></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 5h-2v6l5 3 1-1.7-4-2.3V7z"/></svg></span><span class="status-badge warning">Exposure</span></div><span>Positions</span><strong id="metric-positions">0</strong><div class="kpi-meta"><small>open exposure</small><b id="trend-positions">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 26 L22 18 L42 20 L62 17 L82 21 L100 14 L118 16" /></svg></article>
         </section>
 
-        <section class="workspace">
+        <section class="workspace view-section active" data-view-section="overview">
           <article id="chart-card" class="panel hero-chart">
             <div class="panel-head">
               <div><p>Market</p><h2>Realtime Chart</h2></div>
               <div class="panel-actions">
                 <select id="chart-symbol" aria-label="Symbol" onchange="setChartSymbol(this.value)">
                   <option value="BTC/USDT">BTC/USDT</option>
-                  <option value="ETH/USDT">ETH/USDT</option>
-                  <option value="SOL/USDT">SOL/USDT</option>
-                  <option value="BNB/USDT">BNB/USDT</option>
-                  <option value="XRP/USDT">XRP/USDT</option>
                 </select>
                 <select id="chart-timeframe" aria-label="Timeframe" onchange="setChartTimeframe(this.value)">
                   <option value="1m">1m</option>
@@ -94,22 +89,198 @@
                 <button class="ghost icon-button" type="button" aria-label="Toggle chart fullscreen" onclick="toggleFullscreenChart()">Fullscreen</button>
               </div>
             </div>
-            <div id="tv-chart" class="chart skeleton"></div>
+            <div id="tv-chart" class="chart">
+              <div class="tradingview-widget-container" style="height:100%;width:100%;">
+                <div id="tv_advanced_chart" style="height:100%;width:100%;"></div>
+              </div>
+            </div>
             <small id="chart-caption" class="chart-caption">Loading candles...</small>
           </article>
-          <article id="scanner" class="panel"><div class="panel-head"><div><p>Scanner</p><h2>Signal Feed</h2></div><select id="market-filter"><option value="all">All</option><option value="BUY">BUY</option><option value="SELL">SELL</option></select></div><div id="market" class="list skeleton"></div></article>
-          <article id="portfolio" class="panel"><div class="panel-head"><div><p>Portfolio</p><h2>Account State</h2></div><span class="pill">reconciled</span></div><pre id="portfolio-json" class="code-panel skeleton-box"></pre></article>
-          <article id="orders" class="panel"><div class="panel-head"><div><p>Execution</p><h2>Orders</h2></div><button class="ghost" type="button" onclick="sortOrders()">Sort</button></div><div id="live-orders" class="table skeleton-box"></div></article>
+          <article id="universe" class="panel"><div class="panel-head"><div><p>Market</p><h2>Binance Coin Universe</h2></div><span id="universe-count" class="pill">0 symbols</span></div><input id="symbol-filter" placeholder="Filter symbols: BTC, ETH, SOL..." /><div id="symbol-universe" class="symbol-grid"></div><small id="universe-caption">Loaded from dashboard defaults and bot config.</small></article>
+        </section>
+
+        <section class="workspace view-section active" data-view-section="overview">
+          <article id="signal-terminal-card" class="panel">
+            <div class="panel-head">
+              <div><p>Live</p><h2>Signal Terminal</h2></div>
+              <span id="signal-terminal-count" class="pill">0 signals</span>
+            </div>
+            <div id="signal-terminal" class="stream-list"></div>
+          </article>
+          <article id="pnl-stream-card" class="panel">
+            <div class="panel-head">
+              <div><p>Real-time</p><h2>P&amp;L Stream</h2></div>
+              <span id="pnl-stream-status" class="pill">paper</span>
+            </div>
+            <div id="pnl-stream" class="stream-list"></div>
+          </article>
+        </section>
+
+        <section class="workspace view-section" data-view-section="scanner">
+          <article id="scanner" class="panel xwide"><div class="panel-head"><div><p>Scanner</p><h2>Signal Feed</h2></div><select id="market-filter"><option value="all">All</option><option value="BUY">BUY</option><option value="SELL">SELL</option></select></div><div id="market" class="list skeleton"></div></article>
+          <article id="events-card" class="panel"><div class="panel-head"><div><p>Event Bus</p><h2>Event Stream</h2></div><span id="toast" class="toast">Realtime ready</span></div><div id="events" class="events"></div></article>
+        </section>
+
+        <section class="workspace view-section" data-view-section="portfolio">
+          <article id="portfolio" class="panel xwide portfolio-panel"><div class="panel-head"><div><p>Portfolio</p><h2>Account State</h2></div><span class="pill">reconciled</span></div><div id="portfolio-summary" class="summary-grid portfolio-cards"></div><div id="portfolio-detail" class="portfolio-detail"></div><pre id="portfolio-json" class="code-panel skeleton-box compact-json"></pre></article>
           <article id="positions-card" class="panel"><div class="panel-head"><div><p>Risk</p><h2>Positions</h2></div><span class="pill">exposure</span></div><div id="positions" class="list"></div></article>
-          <article id="analytics" class="panel"><div class="panel-head"><div><p>Analytics</p><h2>Performance</h2></div><span class="pill">ApexCharts</span></div><div id="pnl-chart" class="mini-chart"></div><pre id="analytics-json" class="code-panel"></pre></article>
-          <article id="journal" class="panel wide"><div class="panel-head"><div><p>Journal</p><h2>Trade Journal</h2></div><input id="journal-filter" placeholder="Filter journal" /></div><div id="journal-list" class="table"></div></article>
-          <article id="events-card" class="panel wide"><div class="panel-head"><div><p>Event Bus</p><h2>Event Stream</h2></div><span id="toast" class="toast">Realtime ready</span></div><div id="events" class="events"></div></article>
-          <article id="health" class="panel"><div class="panel-head"><div><p>Monitoring</p><h2>System Health</h2></div><span class="pill">live</span></div><pre id="health-json" class="code-panel"></pre></article>
-          <article id="settings" class="panel"><div class="panel-head"><div><p>Settings</p><h2>Safety Mode</h2></div><span class="pill">safe mode</span></div><div class="settings-grid"><div>Read only</div><strong>{{ read_only }}</strong><div>Release</div><strong>{{ release }}</strong><div>Controls</div><strong>No BUY/SELL buttons</strong></div></article>
+        </section>
+
+        <section class="workspace view-section" data-view-section="orders">
+          <article id="orders" class="panel xwide"><div class="panel-head"><div><p>Execution</p><h2>Orders</h2></div><button class="ghost" type="button" onclick="sortOrders()">Sort</button></div><div id="live-orders" class="table skeleton-box"></div></article>
+          <article id="journal" class="panel"><div class="panel-head"><div><p>Journal</p><h2>Trade Journal</h2></div><input id="journal-filter" placeholder="Filter journal" /></div><div id="journal-list" class="table"></div></article>
+        </section>
+
+        <section class="workspace view-section" data-view-section="analytics">
+          <article id="analytics" class="panel xwide"><div class="panel-head"><div><p>Analytics</p><h2>Performance</h2></div><span class="pill">ApexCharts</span></div><div id="analytics-summary" class="summary-grid"></div><div id="pnl-chart" class="mini-chart"></div><pre id="analytics-json" class="code-panel"></pre></article>
+        </section>
+
+        <section class="workspace view-section" data-view-section="health">
+          <article id="health" class="panel xwide"><div class="panel-head"><div><p>Monitoring</p><h2>System Health</h2></div><span class="pill">live</span></div><pre id="health-json" class="code-panel"></pre></article>
+        </section>
+
+        <section class="workspace view-section" data-view-section="settings">
+          <article id="settings" class="panel xwide"><div class="panel-head"><div><p>Settings</p><h2>Safety Mode</h2></div><span class="pill">safe mode</span></div><div class="settings-grid"><div>Read only</div><strong>{{ read_only }}</strong><div>Release</div><strong>{{ release }}</strong><div>Controls</div><strong>No BUY/SELL buttons</strong></div></article>
         </section>
       </main>
     </div>
-    <nav class="bottom-nav"><a href="#scanner">Scan</a><a href="#portfolio">Port</a><a href="#orders">Orders</a><a href="#events-card">Events</a></nav>
-    <script src="/static/dashboard.js"></script>
+    <nav class="bottom-nav">
+      <a href="#overview" data-view-link="overview" class="active"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 10v10h14V10"/></svg><span>Home</span></a>
+      <a href="#scanner" data-view-link="scanner"><svg viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4"/></svg><span>Scan</span></a>
+      <a href="#portfolio" data-view-link="portfolio"><svg viewBox="0 0 24 24"><path d="M5 7h14v10H5zM8 7V5h8v2"/></svg><span>Port</span></a>
+      <a href="#analytics" data-view-link="analytics"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7"/></svg><span>Stats</span></a>
+      <a href="#health" data-view-link="health"><svg viewBox="0 0 24 24"><path d="M4 13h4l2-6 4 12 2-6h4"/></svg><span>Health</span></a>
+    </nav>
+        <script src="/static/dashboard.js"></script>
+        <script>
+        (function(){
+          const money = n => "$" + Number(n||0).toLocaleString("en-US",{maximumFractionDigits:2});
+          const pct = n => (n>=0?"+":"") + Number(n||0).toFixed(2) + "%";
+
+          async function getJSON(url){
+            const r = await fetch(url, {credentials:"same-origin"});
+            if(!r.ok) throw new Error(url);
+            return r.json();
+          }
+
+          function renderSignals(market){
+            const box = document.getElementById("signal-terminal");
+            const count = document.getElementById("signal-terminal-count");
+            if(!box) return;
+            const signals = (market && market.signals) || [];
+            if(count) count.textContent = signals.length + " signals";
+            if(!signals.length){ box.innerHTML = '<div class="stream-empty">Belum ada sinyal. Pastikan run_realtime.py berjalan.</div>'; return; }
+            box.innerHTML = signals.slice(0,30).map(s=>{
+              const act = String(s.action||"skip").toLowerCase();
+              const conf = Number(s.confidence||0).toFixed(1);
+              return `<div class="stream-row">
+                <div class="stream-left">
+                  <span class="stream-badge ${act}">${act}</span>
+                  <div style="min-width:0">
+                    <div class="stream-sym">${s.symbol||"-"}</div>
+                    <div class="stream-sub">entry ${money(s.entry)}</div>
+                  </div>
+                </div>
+                <div class="stream-right">
+                  <div class="stream-pnl">${conf}%</div>
+                  <div class="stream-sub">confidence</div>
+                </div>
+              </div>`;
+            }).join("");
+          }
+
+          function renderPnl(paper){
+            const box = document.getElementById("pnl-stream");
+            if(!box) return;
+            const positions = (paper && paper.open_positions) || [];
+            if(!positions.length){
+              box.innerHTML = '<div class="stream-empty">Belum ada posisi terbuka. P&L akan muncul saat bot membuka posisi (sinyal BUY dieksekusi).</div>';
+              return;
+            }
+            box.innerHTML = positions.map(p=>{
+              const pnl = Number(p.unrealized_pnl ?? p.pnl ?? 0);
+              const pnlPct = Number(p.pnl_percent ?? p.roi ?? 0);
+              const dir = pnl>=0 ? "up" : "down";
+              return `<div class="stream-row">
+                <div class="stream-left">
+                  <span class="stream-badge buy">${(p.side||"long").toLowerCase()}</span>
+                  <div style="min-width:0">
+                    <div class="stream-sym">${p.symbol||"-"}</div>
+                    <div class="stream-sub">qty ${p.quantity ?? p.size ?? "-"}</div>
+                  </div>
+                </div>
+                <div class="stream-right">
+                  <div class="stream-pnl ${dir}">${money(pnl)}</div>
+                  <div class="stream-sub">${pct(pnlPct)}</div>
+                </div>
+              </div>`;
+            }).join("");
+          }
+
+          async function tick(){
+            try{
+              const [market, paper] = await Promise.all([
+                getJSON("/api/market").catch(()=>({})),
+                getJSON("/api/paper").catch(()=>({})),
+              ]);
+              renderSignals(market);
+              renderPnl(paper);
+            }catch(e){ /* diam, coba lagi siklus berikutnya */ }
+          }
+
+          document.addEventListener("DOMContentLoaded", ()=>{ tick(); setInterval(tick, 5000); });
+        })();
+        </script>
+    <script src="https://s3.tradingview.com/tv.js"></script>
+    <script>
+      // --- TradingView widget (Opsi A) ---
+      var tvWidget = null;
+      var tvSymbol = "BTC/USDT";
+      var tvInterval = "60"; // default 1h
+
+      function tvMapSymbol(sym) {
+        // "BTC/USDT" -> "BINANCE:BTCUSDT"
+        return "BINANCE:" + sym.replace("/", "").toUpperCase();
+      }
+
+      function tvMapInterval(tf) {
+        var map = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D" };
+        return map[tf] || "60";
+      }
+
+      function renderTradingView() {
+        var el = document.getElementById("tv_advanced_chart");
+        if (!el || typeof TradingView === "undefined") return;
+        el.innerHTML = "";
+        tvWidget = new TradingView.widget({
+          container_id: "tv_advanced_chart",
+          symbol: tvMapSymbol(tvSymbol),
+          interval: tvInterval,
+          theme: (document.documentElement.getAttribute("data-theme") === "light") ? "light" : "dark",
+          style: "1",
+          locale: "id",
+          timezone: "Asia/Jakarta",
+          autosize: true,
+          hide_side_toolbar: false,
+          allow_symbol_change: true
+        });
+      }
+
+      // Override fungsi lama dari dashboard.js supaya dropdown menggerakkan widget TradingView,
+      // bukan lightweight-charts yang sudah tidak dipakai.
+      window.setChartSymbol = function (value) {
+        tvSymbol = value;
+        renderTradingView();
+      };
+      window.setChartTimeframe = function (value) {
+        tvInterval = tvMapInterval(value);
+        renderTradingView();
+      };
+      window.loadKlines = function () { renderTradingView(); return Promise.resolve(); };
+      window.ensureTradingViewChart = function () {};
+      window.renderFallbackChart = function () {};
+      document.addEventListener("DOMContentLoaded", renderTradingView);
+    </script>
+
   </body>
 </html>

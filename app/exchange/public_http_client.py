@@ -21,6 +21,36 @@ class PublicHttpExchangeClient(ExchangeClient):
             return self._fetch_okx_candles(symbol, timeframe, limit)
         raise ValueError(f"Unsupported public HTTP exchange: {self.exchange_id}")
 
+    def fetch_all_symbols(
+        self,
+        *,
+        quote_asset: str = "USDT",
+        only_trading: bool = True,
+        spot_only: bool = True,
+    ) -> list[str]:
+        """Ambil semua simbol dari Binance secara dinamis.
+
+        Coin baru otomatis muncul, coin yang delisting otomatis hilang,
+        karena sumbernya langsung exchangeInfo.
+        """
+        if self.exchange_id != "binance":
+            raise ValueError(f"fetch_all_symbols belum didukung untuk {self.exchange_id}")
+
+        data = self._get_json("https://api.binance.com/api/v3/exchangeInfo", {})
+        symbols: list[str] = []
+        for row in data.get("symbols", []):
+            if only_trading and row.get("status") != "TRADING":
+                continue
+            if quote_asset and row.get("quoteAsset") != quote_asset:
+                continue
+            if spot_only and not row.get("isSpotTradingAllowed", False):
+                continue
+            base = row.get("baseAsset")
+            quote = row.get("quoteAsset")
+            if base and quote:
+                symbols.append(f"{base}/{quote}")
+        return sorted(symbols)
+
     def fetch_ticker(self, symbol: str) -> dict[str, float | str]:
         if self.exchange_id == "binance":
             market_symbol = self._binance_symbol(symbol)
@@ -92,7 +122,8 @@ class PublicHttpExchangeClient(ExchangeClient):
 
     def _get_json(self, url: str, params: dict[str, str | int]) -> object:
         query = urlencode(params)
-        with urlopen(f"{url}?{query}", timeout=self.timeout_seconds) as response:
+        full_url = f"{url}?{query}" if query else url
+        with urlopen(full_url, timeout=self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _format_timestamp(self, value: int | float | str) -> str:

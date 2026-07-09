@@ -14,13 +14,63 @@ from app.portfolio.sync import PortfolioSynchronizer
 
 logger = logging.getLogger(__name__)
 portfolio_synchronizer = PortfolioSynchronizer()
-
+_DYNAMIC_SYMBOLS_CACHE: list[str] = []
+_DYNAMIC_SYMBOLS_TS: float = 0.0
 
 SUPPORTED_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")
 DEFAULT_KLINE_SYMBOL = "BTC/USDT"
 DEFAULT_KLINE_TIMEFRAME = "1h"
 DEFAULT_KLINE_LIMIT = 200
 MAX_KLINE_LIMIT = 1000
+DEFAULT_DASHBOARD_SYMBOLS = (
+    "BTC/USDT",
+    "ETH/USDT",
+    "BNB/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+    "ADA/USDT",
+    "DOGE/USDT",
+    "TRX/USDT",
+    "TON/USDT",
+    "AVAX/USDT",
+    "SHIB/USDT",
+    "DOT/USDT",
+    "LINK/USDT",
+    "BCH/USDT",
+    "NEAR/USDT",
+    "MATIC/USDT",
+    "LTC/USDT",
+    "UNI/USDT",
+    "ICP/USDT",
+    "APT/USDT",
+    "ETC/USDT",
+    "ATOM/USDT",
+    "FIL/USDT",
+    "HBAR/USDT",
+    "ARB/USDT",
+    "OP/USDT",
+    "INJ/USDT",
+    "SUI/USDT",
+    "SEI/USDT",
+    "TIA/USDT",
+    "RUNE/USDT",
+    "AAVE/USDT",
+    "MKR/USDT",
+    "RENDER/USDT",
+    "FET/USDT",
+    "GRT/USDT",
+    "ALGO/USDT",
+    "XLM/USDT",
+    "VET/USDT",
+    "EOS/USDT",
+)
+SYMBOL_CONFIG_PATHS = (
+    Path("configs/market_scan.json"),
+    Path("configs/paper.json"),
+    Path("configs/paper_trading.json"),
+    Path("configs/live_trading.json"),
+    Path("configs/live.json"),
+)
 
 
 def utc_now_iso() -> str:
@@ -56,12 +106,46 @@ class DashboardService:
     def market(self) -> dict[str, Any]:
         latest = read_json_file("logs/latest_signals.json", {})
         signals = latest.get("signals", []) if isinstance(latest, dict) else []
+        symbols = self.symbols()
         return {
             "timestamp": latest.get("timestamp") if isinstance(latest, dict) else None,
             "signals": signals if isinstance(signals, list) else [],
             "count": len(signals) if isinstance(signals, list) else 0,
+            "symbols": symbols["symbols"],
+            "symbol_count": symbols["count"],
+            "configured_symbols": symbols["configured_symbols"],
             "read_only": True,
         }
+
+    def symbols(self) -> dict[str, Any]:
+        configured = self._load_symbols_from_configs()
+        dynamic = self._load_dynamic_symbols()
+        symbols = self._dedupe_symbols([*dynamic, *configured, *DEFAULT_DASHBOARD_SYMBOLS])
+        return {
+            "symbols": symbols,
+            "configured_symbols": configured,
+            "count": len(symbols),
+            "read_only": True,
+        }
+
+    def _load_dynamic_symbols(self) -> list[str]:
+        config = read_json_file("configs/market_scan.json", {})
+        if not isinstance(config, dict) or str(config.get("symbol_mode", "static")) != "all":
+            return []
+        global _DYNAMIC_SYMBOLS_CACHE, _DYNAMIC_SYMBOLS_TS
+        now = datetime.now(UTC).timestamp()
+        if _DYNAMIC_SYMBOLS_CACHE and (now - _DYNAMIC_SYMBOLS_TS) < 300:
+            return _DYNAMIC_SYMBOLS_CACHE
+        try:
+            from app.exchange.public_http_client import PublicHttpExchangeClient
+            client = PublicHttpExchangeClient(str(config.get("exchange", "binance")))
+            fetched = client.fetch_all_symbols(quote_asset=str(config.get("quote_asset", "USDT")))
+        except Exception:
+            logger.exception("Gagal ambil simbol dinamis untuk dashboard")
+            return _DYNAMIC_SYMBOLS_CACHE or []
+        _DYNAMIC_SYMBOLS_CACHE = fetched
+        _DYNAMIC_SYMBOLS_TS = now
+        return fetched
 
     def portfolio(self) -> dict[str, Any]:
         paper = self.paper()
@@ -228,6 +312,43 @@ class DashboardService:
         if not raw:
             return DEFAULT_KLINE_SYMBOL
         return raw.upper().replace("-", "/")
+
+    def _load_symbols_from_configs(self) -> list[str]:
+        symbols: list[str] = []
+        for path in SYMBOL_CONFIG_PATHS:
+            data = read_json_file(path, {})
+            if not isinstance(data, dict):
+                continue
+            symbols.extend(self._extract_symbols(data.get("symbols")))
+            symbols.extend(self._extract_symbols(data.get("allowed_symbols")))
+            symbols.extend(self._extract_symbols(data.get("watchlist")))
+        return self._dedupe_symbols(symbols)
+
+    def _extract_symbols(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        symbols: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                raw = item.strip()
+            elif isinstance(item, dict):
+                raw = str(item.get("symbol", "")).strip()
+            else:
+                continue
+            if raw:
+                symbols.append(raw.upper().replace("-", "/"))
+        return symbols
+
+    def _dedupe_symbols(self, symbols: list[str] | tuple[str, ...]) -> list[str]:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for symbol in symbols:
+            normalized = str(symbol).strip().upper().replace("-", "/")
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique.append(normalized)
+        return unique
 
     def _resolve_kline_timeframe(self, timeframe: str | None) -> str:
         raw = (timeframe or "").strip().lower()
