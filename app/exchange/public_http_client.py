@@ -50,6 +50,50 @@ class PublicHttpExchangeClient(ExchangeClient):
             if base and quote:
                 symbols.append(f"{base}/{quote}")
         return sorted(symbols)
+    
+    def fetch_top_symbols_by_volume(
+        self,
+        *,
+        quote_asset: str = "USDT",
+        top_n: int = 100,
+        only_trading: bool = True,
+    ) -> list[str]:
+        """Ambil top-N simbol paling likuid berdasarkan quoteVolume 24h.
+
+        Ini prefilter penting: menyaring coin dead/ilikuid, dan menghemat
+        jumlah request klines saat scanning.
+        """
+        if self.exchange_id != "binance":
+            raise ValueError(f"fetch_top_symbols_by_volume belum didukung untuk {self.exchange_id}")
+
+        info = self._get_json("https://api.binance.com/api/v3/exchangeInfo", {})
+        allowed: set[str] = set()
+        for row in info.get("symbols", []):
+            if only_trading and row.get("status") != "TRADING":
+                continue
+            if quote_asset and row.get("quoteAsset") != quote_asset:
+                continue
+            if not row.get("isSpotTradingAllowed", False):
+                continue
+            allowed.add(row.get("symbol", ""))
+
+        tickers = self._get_json("https://api.binance.com/api/v3/ticker/24hr", {})
+        rows: list[tuple[str, str, float]] = []
+        for t in tickers if isinstance(tickers, list) else []:
+            sym = t.get("symbol", "")
+            if sym not in allowed:
+                continue
+            try:
+                quote_vol = float(t.get("quoteVolume") or 0)
+            except (TypeError, ValueError):
+                quote_vol = 0.0
+            if quote_vol <= 0:
+                continue
+            base = sym[: -len(quote_asset)] if sym.endswith(quote_asset) else sym
+            rows.append((f"{base}/{quote_asset}", sym, quote_vol))
+
+        rows.sort(key=lambda r: r[2], reverse=True)
+        return [r[0] for r in rows[:top_n]]
 
     def fetch_ticker(self, symbol: str) -> dict[str, float | str]:
         if self.exchange_id == "binance":

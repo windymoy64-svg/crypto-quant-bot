@@ -117,7 +117,13 @@
         </section>
 
         <section class="workspace view-section" data-view-section="scanner">
-          <article id="scanner" class="panel xwide"><div class="panel-head"><div><p>Scanner</p><h2>Signal Feed</h2></div><select id="market-filter"><option value="all">All</option><option value="BUY">BUY</option><option value="SELL">SELL</option></select></div><div id="market" class="list skeleton"></div></article>
+          <article id="scanner" class="panel xwide">
+            <div class="panel-head">
+              <div><p>Scanner</p><h2>Sinyal per Coin</h2></div>
+              <span id="signal-list-count" class="pill">0 sinyal</span>
+            </div>
+            <div id="signal-list" class="signal-rows"></div>
+          </article>
           <article id="events-card" class="panel"><div class="panel-head"><div><p>Event Bus</p><h2>Event Stream</h2></div><span id="toast" class="toast">Realtime ready</span></div><div id="events" class="events"></div></article>
         </section>
 
@@ -167,9 +173,10 @@
           const ICON_CLOCK = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>';
 
           function renderStats(market, paper, analytics){
-            const box = document.getElementById("signal-terminal");
-            const count = document.getElementById("signal-terminal-count");
-            if(!box) return;
+            const summaryBox = document.getElementById("signal-terminal");
+            const summaryCount = document.getElementById("signal-terminal-count");
+            const listBox = document.getElementById("signal-list");
+            const listCount = document.getElementById("signal-list-count");
 
             const perf = (analytics && analytics.performance) || {};
             const trades = (analytics && analytics.journal && analytics.journal.trades)
@@ -187,32 +194,62 @@
               const total = wins + losses;
               winRate = total ? (wins/total*100) : 0;
             }
-            const totalSig = (market && market.count) || 0;
-            if(count) count.textContent = totalSig + " sinyal";
+
+            const signals = (market && market.signals) || [];
             const total = wins + losses;
             const barPct = total ? (wins/total*100) : 0;
 
-            box.innerHTML = `
-              <div class="stats-summary">
-                <div class="stats-tile profit">
-                  <div class="stats-icon">${ICON_UP}</div>
-                  <div class="stats-value">${wins}</div>
-                  <div class="stats-label">Profit Signals</div>
+            // --- Bagian 1: Ringkasan (tetap di Overview) ---
+            if(summaryBox){
+              if(summaryCount) summaryCount.textContent = signals.length + " sinyal";
+              summaryBox.innerHTML = `
+                <div class="stats-summary">
+                  <div class="stats-tile profit">
+                    <div class="stats-icon">${ICON_UP}</div>
+                    <div class="stats-value">${wins}</div>
+                    <div class="stats-label">Profit Signals</div>
+                  </div>
+                  <div class="stats-tile loss">
+                    <div class="stats-icon">${ICON_DOWN}</div>
+                    <div class="stats-value">${losses}</div>
+                    <div class="stats-label">Loss Signals</div>
+                  </div>
+                  <div class="stats-tile accuracy">
+                    <div class="stats-icon">${ICON_CLOCK}</div>
+                    <div class="stats-value">${winRate.toFixed(0)}%</div>
+                    <div class="stats-label">Live Accuracy</div>
+                  </div>
                 </div>
-                <div class="stats-tile loss">
-                  <div class="stats-icon">${ICON_DOWN}</div>
-                  <div class="stats-value">${losses}</div>
-                  <div class="stats-label">Loss Signals</div>
-                </div>
-                <div class="stats-tile accuracy">
-                  <div class="stats-icon">${ICON_CLOCK}</div>
-                  <div class="stats-value">${winRate.toFixed(0)}%</div>
-                  <div class="stats-label">Live Accuracy</div>
-                </div>
-              </div>
-              <div class="stats-bar"><div class="stats-bar-fill" style="width:${barPct}%"></div></div>
-              <div class="stats-caption">${wins} profit · ${losses} loss</div>
-            `;
+                <div class="stats-bar"><div class="stats-bar-fill" style="width:${barPct}%"></div></div>
+                <div class="stats-caption">${wins} profit · ${losses} loss · ${signals.length} sinyal aktif</div>
+              `;
+            }
+
+            // --- Bagian 2: Daftar per-coin (pindah ke Scanner) ---
+            if(listBox){
+              if(listCount) listCount.textContent = signals.length + " sinyal";
+              const rows = signals.map(s => {
+                const act = String(s.action || "skip").toLowerCase();
+                const failed = Array.isArray(s.failed_gates) ? s.failed_gates : [];
+                const reason = failed.length
+                  ? '<div class="sig-reason">' + failed.map(g =>
+                      `<span class="sig-reason-chip">✕ ${g.replace("_"," ")}</span>`
+                    ).join("") + '</div>'
+                  : '<span class="sig-reason-ok">✓ semua gate lolos</span>';
+                const rawConf = s.raw_confidence != null && s.raw_confidence !== s.confidence
+                  ? `<small>raw ${Number(s.raw_confidence).toFixed(1)}</small>`
+                  : `<small>confidence</small>`;
+                return `<div class="signal-row">
+                  <span class="sig-badge ${act}">${act}</span>
+                  <div class="sig-mid">
+                    <div class="sig-sym">${s.symbol || "-"}</div>
+                    ${reason}
+                  </div>
+                  <div class="sig-conf">${Number(s.confidence || 0).toFixed(1)}%${rawConf}</div>
+                </div>`;
+              }).join("");
+              listBox.innerHTML = rows || '<div class="stream-empty">Belum ada sinyal aktif.</div>';
+            }
           }
 
           function renderPnl(paper){

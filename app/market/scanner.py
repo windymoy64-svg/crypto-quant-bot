@@ -22,12 +22,21 @@ class ScanItem:
     take_profit: list[float]
     risk: str
     warning: str | None
+    failed_gates: list[str]
+    raw_confidence: float | None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
 def resolve_symbols(config: dict[str, object], exchange: str) -> list[str]:
     mode = str(config.get("symbol_mode", "static"))
+    if mode == "top_volume":
+        client = PublicHttpExchangeClient(exchange)
+        top_n = int(config.get("prefilter_top_n", 100))
+        return client.fetch_top_symbols_by_volume(
+            quote_asset=str(config.get("quote_asset", "USDT")),
+            top_n=top_n,
+        )
     if mode == "all":
         client = PublicHttpExchangeClient(exchange)
         symbols = client.fetch_all_symbols(
@@ -57,6 +66,7 @@ def scan_symbols(config: dict[str, object], rules_path: str = "configs/rules.jso
         )
         score = score_engine.score(loaded.candles)
         signal = build_signal(symbol=symbol, candles=loaded.candles, score=score)
+        signal_meta = getattr(signal, "meta", {}) or {}
         results.append(
             ScanItem(
                 symbol=symbol,
@@ -71,6 +81,12 @@ def scan_symbols(config: dict[str, object], rules_path: str = "configs/rules.jso
                 take_profit=signal.take_profit,
                 risk=signal.risk,
                 warning=loaded.warning,
+                failed_gates=list(signal_meta.get("failed_gates", []) or []),
+                raw_confidence=signal_meta.get("raw_confidence"),
             )
         )
-    return sorted(results, key=lambda item: item.score, reverse=True)
+    results.sort(key=lambda item: item.score, reverse=True)
+    top_n = int(config.get("top_n", 0))
+    if top_n > 0:
+        results = results[:top_n]
+    return results

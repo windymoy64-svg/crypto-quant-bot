@@ -578,3 +578,50 @@ a{color:inherit;text-decoration:none}
   .pnl-sym{font-size:12.5px}
   .pnl-value{font-size:15px}
 }
+
+/* ===== Daftar sinyal per coin + info gate ===== */
+.signal-rows{
+  display:flex;flex-direction:column;gap:8px;
+  margin-top:14px;max-height:520px;overflow-y:auto;padding-right:4px;
+}
+.signal-row{
+  display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
+  padding:12px 14px;border-radius:14px;
+  background:var(--bg-2);border:1px solid var(--border);transition:.16s;
+}
+.signal-row:hover{border-color:var(--border-2)}
+.signal-row .sig-badge{
+  padding:4px 10px;border-radius:999px;
+  font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+}
+.signal-row .sig-badge.buy{background:var(--green-bg);color:var(--green)}
+.signal-row .sig-badge.watch{background:rgba(245,158,11,.14);color:var(--amber)}
+.signal-row .sig-badge.skip{background:var(--panel-2);color:var(--txt-mute)}
+.signal-row .sig-mid{min-width:0;display:flex;flex-direction:column;gap:4px}
+.signal-row .sig-sym{
+  font-size:13px;font-weight:700;color:var(--txt);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.signal-row .sig-reason{
+  display:flex;flex-wrap:wrap;gap:4px;
+}
+.signal-row .sig-reason-chip{
+  padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.04em;
+  background:var(--red-bg);color:var(--red);border:1px solid var(--red-br);
+}
+.signal-row .sig-reason-ok{
+  font-size:10px;color:var(--green);font-weight:600;
+}
+.signal-row .sig-conf{
+  text-align:right;font-size:14px;font-weight:800;
+  color:var(--txt);font-variant-numeric:tabular-nums;
+}
+.signal-row .sig-conf small{
+  display:block;font-size:9px;font-weight:600;color:var(--txt-mute);
+  text-transform:uppercase;letter-spacing:.06em;margin-top:2px;
+}
+@media(max-width:640px){
+  .signal-row{padding:10px 12px;gap:8px}
+  .signal-row .sig-conf{font-size:12px}
+}
