@@ -185,6 +185,28 @@ class DashboardService:
         orders = state.get("orders", []) if isinstance(state.get("orders"), list) else []
         account = state.get("account", {}) if isinstance(state.get("account"), dict) else {}
         balance = state.get("balance", account.get("cash", 0.0))
+
+        # Baca trade tertutup dari paper_trades.jsonl (ditulis oleh auto-exit engine)
+        trade_events = read_jsonl_file("logs/paper_trades.jsonl", limit=500)
+        closed_trades: list[dict[str, Any]] = []
+        for ev in trade_events:
+            if ev.get("type") not in ("closed", "partial_close"):
+                continue
+            pos = ev.get("position") or {}
+            pnl = pos.get("realized_pnl")
+            if pnl is None:
+                pnl = pos.get("partial_realized_pnl", 0)
+            closed_trades.append({
+                "symbol": ev.get("symbol"),
+                "pnl": float(pnl or 0),
+                "reason": ev.get("reason"),
+                "closed_at": ev.get("timestamp"),
+                "type": ev.get("type"),
+            })
+
+        # Kalau state.fills kosong, pakai closed_trades sebagai fills — supaya panel LIVE terisi
+        effective_fills = fills if fills else closed_trades
+
         return {
             "created_at": state.get("created_at"),
             "updated_at": state.get("updated_at"),
@@ -195,7 +217,8 @@ class DashboardService:
             "account": account,
             "open_positions": positions,
             "orders": orders[-100:],
-            "fills": fills[-100:],
+            "fills": effective_fills[-100:],
+            "trades": closed_trades[-100:],
             "events": read_jsonl_file("logs/paper_events.jsonl", limit=100),
             "read_only": True,
         }

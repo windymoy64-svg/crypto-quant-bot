@@ -265,13 +265,18 @@
             }
 
             box.innerHTML = '<div class="pnl-grid">' + positions.map(p=>{
-              const roi = Number(p.pnl_percent ?? p.roi ?? p.unrealized_pnl_pct ?? 0);
+              const entry = Number(p.entry ?? 0);
+              const last = Number(p.last_price ?? entry);
+              const roi = entry > 0 ? ((last - entry) / entry) * 100 : 0;
+              const pnlDollar = Number(p.unrealized_pnl ?? 0);
+              const dollarLabel = (pnlDollar >= 0 ? "+$" : "-$") + Math.abs(pnlDollar).toFixed(2);
               const side = String(p.side || "long").toUpperCase();
               const dir = roi>=0 ? "" : "down";
               const symShort = String(p.symbol || "-").split("/")[0];
               return `<div class="pnl-card ${dir}">
                 <div class="pnl-sym">${symShort}</div>
                 <div class="pnl-value">${pct(roi)}</div>
+                <div class="pnl-dollar">${dollarLabel}</div>
                 <div class="pnl-side">${side}</div>
               </div>`;
             }).join("") + '</div>';
