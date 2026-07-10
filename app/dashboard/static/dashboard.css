@@ -371,7 +371,10 @@ a{color:inherit;text-decoration:none}
 /* ===== PATCH: Mobile ala Vidoy (KPI 2 kolom + bottom-nav ikon) ===== */
 @media (max-width: 640px) {
   /* KPI dua kolom berdampingan */
-  .metrics { grid-template-columns: repeat(2, 1fr) !important; gap: 12px; }
+  .metrics { 
+    grid-template-columns: repeat(2, 1fr) !important; 
+    gap:10px !important;
+  }
   .kpi-card { padding: 15px 14px; gap: 8px; }
   .kpi-card > strong { font-size: 22px; }
   .kpi-card > span { font-size: 10px; }
@@ -430,7 +433,7 @@ a{color:inherit;text-decoration:none}
 .kpi-card:nth-child(2) > strong::before,
 .kpi-card.featured > strong::before,
 .kpi-card:nth-child(3) > strong::before{
-  content:"$";
+  content: none !important;
   margin-right:2px;
   font-weight:800;
 }
@@ -506,25 +509,52 @@ a{color:inherit;text-decoration:none}
 #signal-terminal-card .panel-head h2{display:none}
 
 /* 3 kartu ringkasan besar */
-.stats-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
+.stats-summary{
+  display:grid;
+  grid-template-columns:repeat(4,1fr) !important;
+  gap:10px;
+  margin-bottom:14px
+}
 .stats-tile{
-  padding:22px 12px;border-radius:16px;text-align:center;
-  display:flex;flex-direction:column;align-items:center;gap:8px;
-  background:var(--bg-2);border:1px solid var(--border);
+  padding:16px 10px !important;
+  border-radius:16px;
+  text-align:center;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:6px !important;
+  background:var(--bg-2);
+  border:1px solid var(--border);
 }
 .stats-tile.profit{background:rgba(34,197,94,.07);border-color:rgba(34,197,94,.22)}
 .stats-tile.loss{background:rgba(244,63,94,.05);border-color:rgba(244,63,94,.18)}
 .stats-tile.accuracy{background:rgba(59,130,246,.08);border-color:rgba(59,130,246,.24)}
-.stats-icon{width:32px;height:32px;display:grid;place-items:center}
-.stats-icon svg{width:22px;height:22px;fill:none;stroke-width:2.4}
+.stats-icon{
+  width: 30px !important;
+  height: 30px !important;
+  display:grid;
+  place-items:center
+}
+.stats-icon svg{
+  width: 18px !important;
+  height: 18px !important;
+  fill:none;
+  stroke-width:2.4
+}
+.stats-tile.open{
+  background: var(--blue-bg) !important;
+  border-color: var(--blue-br) !important;
+}
+.stats-tile.open .stats-value{ color: var(--blue) !important; }
+.stats-tile.open .stats-icon svg{ stroke: var(--blue) !important; }
 .stats-tile.profit .stats-icon svg{stroke:var(--green)}
 .stats-tile.loss .stats-icon svg{stroke:var(--red)}
 .stats-tile.accuracy .stats-icon svg{stroke:var(--blue)}
-.stats-value{font-size:34px;font-weight:800;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+.stats-value{font-size: 26px !important;font-weight:800;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
 .stats-tile.profit .stats-value{color:var(--green)}
 .stats-tile.loss .stats-value{color:var(--red)}
 .stats-tile.accuracy .stats-value{color:var(--blue)}
-.stats-label{color:var(--txt-mute);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;line-height:1.2}
+.stats-label{color:var(--txt-mute);font-size: 10px !important;font-weight:700;text-transform:uppercase;letter-spacing:.08em;line-height:1.2}
 
 /* Progress bar hijau + caption */
 .stats-bar{width:100%;height:6px;border-radius:999px;background:var(--bg-2);overflow:hidden;margin:8px 0 8px}
@@ -573,9 +603,8 @@ a{color:inherit;text-decoration:none}
 
 
 @media(max-width:640px){
-  .stats-summary{gap:8px}
-  .stats-tile{padding:16px 8px;gap:6px}
-  .stats-value{font-size:26px}
+  .stats-summary{ grid-template-columns: repeat(2, 1fr) !important; }
+  .stats-tile .stats-value{ font-size: 22px !important; }
   .stats-label{font-size:9px}
   .pnl-grid{gap:8px}
   .pnl-card{padding:13px 8px}
@@ -651,16 +680,39 @@ a{color:inherit;text-decoration:none}
 
 /* ===== Kartu KPI ukuran seragam ===== */
 .metrics .kpi-card{
-  min-height: 104px !important;
-  min-width: 0;
+  min-height:76px !important;
+  padding:13px 14px !important;
+  gap:10px !important;
+  column-gap:12px !important;
+  border-radius:16px !important;
 }
+.metrics .kpi-icon{
+  width:34px !important;
+  height:34px !important;
+  border-radius:50% !important;
+}
+.metrics .kpi-icon svg{
+  width:16px !important;
+  height:16px !important;
+}
+.metrics .kpi-card > span{
+  font-size:11px !important;
+  letter-spacing:.04em !important;
+  color:var(--txt-dim) !important;
+}
+
+/* Angka utama lebih ringkas */
 .metrics .kpi-card > strong{
-  font-size: 22px !important;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size:19px !important;
+  font-weight:800 !important;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
 }
 
 /* ===== Warna dinamis Profit Hari Ini ===== */
 #metric-profit-today.is-profit{ color: var(--green) !important; }
 #metric-profit-today.is-loss{ color: var(--red) !important; }
+.metrics .status-badge,
+.metrics .kpi-meta,
+.metrics .sparkline{ display:none !important; }

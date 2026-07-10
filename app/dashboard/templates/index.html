@@ -63,8 +63,8 @@
         </header>
 
         <section id="overview" class="metrics view-section active" data-view-section="overview">
-          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-16 3 9h4v2h-5l-2-6-4 15-4-9H3z"/></svg></span><span class="status-badge neutral">Hari Ini</span></div><span>Today Trade</span><strong id="metric-trades-today">0</strong><div class="kpi-meta"><small>trade dieksekusi</small></div></article>
-          <article class="kpi-card featured"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18v-2H5V3H3zm4 12l4-4 3 3 6-6-1.5-1.5L14 9l-3-3-6 6 2 3z"/></svg></span><span class="status-badge success">Hari Ini</span></div><span>Today Profit </span><strong id="metric-profit-today">$0</strong><div class="kpi-meta"><small>realized PnL</small></div></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-16 3 9h4v2h-5l-2-6-4 15-4-9H3z"/></svg></span><span class="status-badge neutral">Hari Ini</span></div><span>Trade</span><strong id="metric-trades-today">0</strong><div class="kpi-meta"><small>trade dieksekusi</small></div></article>
+          <article class="kpi-card featured"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18v-2H5V3H3zm4 12l4-4 3 3 6-6-1.5-1.5L14 9l-3-3-6 6 2 3z"/></svg></span><span class="status-badge success">Hari Ini</span></div><span>Profit </span><strong id="metric-profit-today">0</strong><div class="kpi-meta"><small>realized PnL</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 012-2h12a2 2 0 012 2v1h1a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm14 7a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/></svg></span><span class="status-badge info">Paper</span></div><span>Balance</span><strong id="metric-balance">0</strong><div class="kpi-meta"><small>paper/live source</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 5h-2v6l5 3 1-1.7-4-2.3V7z"/></svg></span><span class="status-badge warning">Exposure</span></div><span>Positions</span><strong id="metric-positions">0</strong><div class="kpi-meta"><small>open exposure</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg></span><span class="status-badge success">Profit</span></div><span>Trade Profit</span><strong id="metric-total-wins">0</strong><div class="kpi-meta"><small>trade menang</small></div></article>
@@ -105,7 +105,7 @@
         <section class="workspace view-section active" data-view-section="overview">
           <article id="signal-terminal-card" class="panel">
             <div class="panel-head">
-              <div><p>Live</p><h2>Signal Terminal</h2></div>
+              <div><p>Live Signal</p><h2>Signal Terminal</h2></div>
               <span id="signal-terminal-count" class="pill">0 signals</span>
             </div>
             <div id="signal-terminal" class="stream-list"></div>
@@ -194,8 +194,9 @@
               if (summaryCount) summaryCount.textContent = totalOpen + " posisi";
               summaryBox.innerHTML = `
                 <div class="stats-summary">
-                  <div class="stats-tile profit"><div class="stats-icon">${ICON_UP}</div><div class="stats-value">${pWin}</div><div class="stats-label">Posisi Profit</div></div>
-                  <div class="stats-tile loss"><div class="stats-icon">${ICON_DOWN}</div><div class="stats-value">${pLoss}</div><div class="stats-label">Posisi Loss</div></div>
+                  <div class="stats-tile open"><div class="stats-icon">${ICON_CLOCK}</div><div class="stats-value">${totalOpen}</div><div class="stats-label">Open</div></div>
+                  <div class="stats-tile profit"><div class="stats-icon">${ICON_UP}</div><div class="stats-value">${pWin}</div><div class="stats-label">Profit</div></div>
+                  <div class="stats-tile loss"><div class="stats-icon">${ICON_DOWN}</div><div class="stats-value">${pLoss}</div><div class="stats-label">Loss</div></div>
                   <div class="stats-tile accuracy"><div class="stats-icon">${ICON_CLOCK}</div><div class="stats-value">${acc.toFixed(0)}%</div><div class="stats-label">Accuracy</div></div>
                 </div>
                 <div class="stats-bar"><div class="stats-bar-fill" style="width:${acc}%"></div></div>
