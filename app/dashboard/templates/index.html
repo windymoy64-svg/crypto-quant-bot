@@ -282,23 +282,27 @@
             }).join("") + '</div>';
           }
 
-          function tick(){
-            // Ambil data dari state global dashboard.js (sudah lolos auth via cookie)
-            const p = (window.state && window.state.lastPayload) || {};
-            const market = p.market || {};
-            const paper = p.paper || {};
-            const analytics = p.analytics || {};
+          async function getJSON(url){
+            const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+            if(!r.ok) throw new Error(url + " " + r.status);
+            return r.json();
+          }
+
+          async function tick(){
             try {
+              const [market, paper, analytics] = await Promise.all([
+                getJSON("/api/market").catch(()=>({})),
+                getJSON("/api/paper").catch(()=>({})),
+                getJSON("/api/analytics").catch(()=>({})),
+              ]);
               renderStats(market, paper, analytics);
               renderPnl(paper);
             } catch (e) {
-              console.warn("panel render error:", e);
+              console.warn("panel tick error:", e);
             }
           }
 
-          // Jalankan berkala; data selalu segar karena dashboard.js update state.lastPayload
-          setInterval(tick, 3000);
-          tick();
+          document.addEventListener("DOMContentLoaded", ()=>{ tick(); setInterval(tick, 5000); });
         })();
         </script>
 
