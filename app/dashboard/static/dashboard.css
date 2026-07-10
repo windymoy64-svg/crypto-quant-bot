@@ -15,7 +15,11 @@
   --txt:#0f1a26; --txt-dim:#54637a; --txt-mute:#9aa8bb;
   --shadow:0 4px 24px rgba(15,23,42,.08);
 }
-*{box-sizing:border-box;margin:0;padding:0}
+*{
+  box-sizing:border-box;
+  margin:0;
+  padding:0
+}
 html,body{height:100%}
 body{
   font-family:'Inter',system-ui,-apple-system,sans-serif;

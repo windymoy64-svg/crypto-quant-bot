@@ -162,12 +162,6 @@
         (function(){
           const pct = n => (n>=0?"▲ +":"▼ ") + Math.abs(Number(n||0)).toFixed(2) + "%";
 
-          async function getJSON(url){
-            const r = await fetch(url,{credentials:"same-origin"});
-            if(!r.ok) throw new Error(url);
-            return r.json();
-          }
-
           const ICON_UP    = '<svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg>';
           const ICON_DOWN  = '<svg viewBox="0 0 24 24"><path d="M3 7l6 6 4-4 8 8M15 17h6v-6"/></svg>';
           const ICON_CLOCK = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>';
@@ -178,9 +172,15 @@
             const listBox = document.getElementById("signal-list");
             const listCount = document.getElementById("signal-list-count");
 
+            const journalTrades = (analytics && analytics.journal && analytics.journal.trades) || [];
+            const paperFills = (paper && paper.fills) || [];
+            const paperTrades = (paper && paper.trades) || [];
+            // Pilih sumber yang benar-benar berisi, prioritas: trades > fills > journal
+            const trades = paperTrades.length ? paperTrades
+                        : paperFills.length ? paperFills
+                        : journalTrades;
+            
             const perf = (analytics && analytics.performance) || {};
-            const trades = (analytics && analytics.journal && analytics.journal.trades)
-                        || (paper && paper.fills) || [];
 
             let wins = Number(perf.winning_trades ?? 0);
             let losses = Number(perf.losing_trades ?? 0);
@@ -282,19 +282,23 @@
             }).join("") + '</div>';
           }
 
-          async function tick(){
-            try{
-              const [market, paper, analytics] = await Promise.all([
-                getJSON("/api/market").catch(()=>({})),
-                getJSON("/api/paper").catch(()=>({})),
-                getJSON("/api/analytics").catch(()=>({})),
-              ]);
+          function tick(){
+            // Ambil data dari state global dashboard.js (sudah lolos auth via cookie)
+            const p = (window.state && window.state.lastPayload) || {};
+            const market = p.market || {};
+            const paper = p.paper || {};
+            const analytics = p.analytics || {};
+            try {
               renderStats(market, paper, analytics);
               renderPnl(paper);
-            }catch(e){}
+            } catch (e) {
+              console.warn("panel render error:", e);
+            }
           }
 
-          document.addEventListener("DOMContentLoaded", ()=>{ tick(); setInterval(tick, 5000); });
+          // Jalankan berkala; data selalu segar karena dashboard.js update state.lastPayload
+          setInterval(tick, 3000);
+          tick();
         })();
         </script>
 
