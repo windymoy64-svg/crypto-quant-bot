@@ -189,20 +189,23 @@ class DashboardService:
         # Baca trade tertutup dari paper_trades.jsonl (ditulis oleh auto-exit engine)
         trade_events = read_jsonl_file("logs/paper_trades.jsonl", limit=500)
         closed_trades: list[dict[str, Any]] = []
+        all_exits: list[dict[str, Any]] = []
         for ev in trade_events:
-            if ev.get("type") not in ("closed", "partial_close"):
+            t = ev.get("type")
+            if t not in ("closed", "partial_close"):
                 continue
             pos = ev.get("position") or {}
-            pnl = pos.get("realized_pnl")
-            if pnl is None:
-                pnl = pos.get("partial_realized_pnl", 0)
-            closed_trades.append({
+            pnl = pos.get("realized_pnl") if t == "closed" else pos.get("partial_realized_pnl", 0)
+            entry = {
                 "symbol": ev.get("symbol"),
                 "pnl": float(pnl or 0),
                 "reason": ev.get("reason"),
                 "closed_at": ev.get("timestamp"),
-                "type": ev.get("type"),
-            })
+                "type": t,
+            }
+            all_exits.append(entry)
+            if t == "closed":
+                closed_trades.append(entry)
 
         # Kalau state.fills kosong, pakai closed_trades sebagai fills — supaya panel LIVE terisi
         effective_fills = fills if fills else closed_trades

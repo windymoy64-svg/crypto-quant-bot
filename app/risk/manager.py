@@ -13,16 +13,45 @@ from app.risk.takeprofit import RiskRewardValidator
 from app.risk.volatility import ATRVolatilityFilter
 
 
-def calculate_position_size(account_balance: float, risk_percent: float, entry: float, stop_loss: float) -> float:
+def calculate_position_size(
+    account_balance: float,
+    risk_percent: float,
+    entry: float,
+    stop_loss: float,
+    max_position_percent: float = 25.0,
+) -> float:
+    """Hitung size posisi dengan dua batasan wajib:
+    1. Risk per trade: (entry - SL) × size ≤ balance × risk_percent
+    2. Notional cap: size × entry ≤ balance × max_position_percent
+    """
     if account_balance <= 0:
         raise ValueError("account_balance must be positive")
     if risk_percent <= 0:
         raise ValueError("risk_percent must be positive")
+
     risk_per_unit = abs(entry - stop_loss)
     if risk_per_unit == 0:
         return 0.0
+    if entry <= 0:
+        return 0.0
+
+    # Batas 1: risk-based sizing
     amount_to_risk = account_balance * (risk_percent / 100)
-    return round(amount_to_risk / risk_per_unit, 8)
+    size_by_risk = amount_to_risk / risk_per_unit
+
+    # Batas 2: notional cap (posisi tidak boleh > X% dari balance)
+    max_notional = account_balance * (max_position_percent / 100)
+    size_by_notional = max_notional / entry
+
+    # Ambil yang lebih kecil — mana yang lebih ketat
+    size = min(size_by_risk, size_by_notional)
+
+    # Batas 3: SL terlalu dekat (< 0.5% dari entry) → tolak
+    sl_distance_pct = (risk_per_unit / entry) * 100
+    if sl_distance_pct < 0.5:
+        return 0.0
+
+    return round(size, 8)
 
 
 @dataclass(frozen=True)
