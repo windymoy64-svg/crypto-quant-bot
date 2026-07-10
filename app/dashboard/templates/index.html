@@ -63,10 +63,13 @@
         </header>
 
         <section id="overview" class="metrics view-section active" data-view-section="overview">
-          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-16 3 9h4v2h-5l-2-6-4 15-4-9H3z"/></svg></span><span class="status-badge neutral">Scanner</span></div><span>Signals</span><strong id="metric-signals">0</strong><div class="kpi-meta"><small>scanner output</small><b id="trend-signals">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 28 L22 22 L40 24 L58 13 L78 17 L96 8 L118 11" /></svg></article>
-          <article class="kpi-card featured"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18v-2H5V3H3zm4 12l4-4 3 3 6-6-1.5-1.5L14 9l-3-3-6 6 2 3z"/></svg></span><span class="status-badge success">Synced</span></div><span>Equity</span><strong id="metric-equity">0</strong><div class="kpi-meta"><small>synced portfolio</small><b id="trend-equity">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 24 L20 25 L38 18 L57 21 L76 12 L96 14 L118 6" /></svg></article>
-          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 012-2h12a2 2 0 012 2v1h1a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm14 7a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/></svg></span><span class="status-badge info">Paper</span></div><span>Balance</span><strong id="metric-balance">0</strong><div class="kpi-meta"><small>paper/live source</small><b id="trend-balance">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 20 L23 16 L42 19 L62 11 L82 15 L101 10 L118 13" /></svg></article>
-          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 5h-2v6l5 3 1-1.7-4-2.3V7z"/></svg></span><span class="status-badge warning">Exposure</span></div><span>Positions</span><strong id="metric-positions">0</strong><div class="kpi-meta"><small>open exposure</small><b id="trend-positions">FLAT</b></div><svg class="sparkline" viewBox="0 0 120 34" aria-hidden="true"><path d="M2 26 L22 18 L42 20 L62 17 L82 21 L100 14 L118 16" /></svg></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-16 3 9h4v2h-5l-2-6-4 15-4-9H3z"/></svg></span><span class="status-badge neutral">Hari Ini</span></div><span>Today Trade</span><strong id="metric-trades-today">0</strong><div class="kpi-meta"><small>trade dieksekusi</small></div></article>
+          <article class="kpi-card featured"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18v-2H5V3H3zm4 12l4-4 3 3 6-6-1.5-1.5L14 9l-3-3-6 6 2 3z"/></svg></span><span class="status-badge success">Hari Ini</span></div><span>Today Profit </span><strong id="metric-profit-today">$0</strong><div class="kpi-meta"><small>realized PnL</small></div></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 012-2h12a2 2 0 012 2v1h1a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm14 7a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/></svg></span><span class="status-badge info">Paper</span></div><span>Balance</span><strong id="metric-balance">0</strong><div class="kpi-meta"><small>paper/live source</small></div></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 5h-2v6l5 3 1-1.7-4-2.3V7z"/></svg></span><span class="status-badge warning">Exposure</span></div><span>Positions</span><strong id="metric-positions">0</strong><div class="kpi-meta"><small>open exposure</small></div></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg></span><span class="status-badge success">Profit</span></div><span>Trade Profit</span><strong id="metric-total-wins">0</strong><div class="kpi-meta"><small>trade menang</small></div></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 7l6 6 4-4 8 8M15 17h6v-6"/></svg></span><span class="status-badge warning">Loss</span></div><span>Trade Loss</span><strong id="metric-total-losses">0</strong><div class="kpi-meta"><small>trade rugi</small></div></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></span><span class="status-badge info">Winrate</span></div><span>Winrate</span><strong id="metric-winrate">0%</strong><div class="kpi-meta"><small>akurasi all-time</small></div></article>
         </section>
 
         <section class="workspace view-section" data-view-section="scanner">
@@ -166,90 +169,84 @@
           const ICON_DOWN  = '<svg viewBox="0 0 24 24"><path d="M3 7l6 6 4-4 8 8M15 17h6v-6"/></svg>';
           const ICON_CLOCK = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>';
 
+          function setText(id, val){ const n = document.getElementById(id); if(n) n.textContent = val; }
+
+          // Panel LIVE — sinkron dengan POSISI TERBUKA (bukan trade tertutup)
           function renderStats(market, paper, analytics){
             const summaryBox = document.getElementById("signal-terminal");
             const summaryCount = document.getElementById("signal-terminal-count");
             const listBox = document.getElementById("signal-list");
             const listCount = document.getElementById("signal-list-count");
 
-            const journalTrades = (analytics && analytics.journal && analytics.journal.trades) || [];
-            const paperFills = (paper && paper.fills) || [];
-            const paperTrades = (paper && paper.trades) || [];
-            // Pilih sumber yang benar-benar berisi, prioritas: trades > fills > journal
-            const trades = paperTrades.length ? paperTrades
-                        : paperFills.length ? paperFills
-                        : journalTrades;
-            
-            const perf = (analytics && analytics.performance) || {};
+            const positions = (paper && paper.open_positions) || [];
+            let pWin = 0, pLoss = 0;
+            positions.forEach(p => {
+              const entry = Number(p.entry ?? 0);
+              const last = Number(p.last_price ?? entry);
+              const size = Number(p.remaining_size ?? p.size ?? 0);
+              const pnl = Number(p.unrealized_pnl ?? ((last - entry) * size));
+              if (pnl > 0) pWin++; else if (pnl < 0) pLoss++;
+            });
+            const totalOpen = positions.length;
+            const acc = totalOpen ? (pWin / totalOpen * 100) : 0;
 
-            let wins = Number(perf.winning_trades ?? 0);
-            let losses = Number(perf.losing_trades ?? 0);
-            let winRate = Number(perf.win_rate ?? 0);
-
-            if((!wins && !losses) && trades.length){
-              trades.forEach(t=>{
-                const p = Number(t.pnl ?? t.profit ?? t.realized_pnl ?? 0);
-                if(p>0) wins++; else if(p<0) losses++;
-              });
-              const total = wins + losses;
-              winRate = total ? (wins/total*100) : 0;
-            }
-
-            const signals = (market && market.signals) || [];
-            const total = wins + losses;
-            const barPct = total ? (wins/total*100) : 0;
-
-            // --- Bagian 1: Ringkasan (tetap di Overview) ---
-            if(summaryBox){
-              if(summaryCount) summaryCount.textContent = signals.length + " sinyal";
+            if (summaryBox) {
+              if (summaryCount) summaryCount.textContent = totalOpen + " posisi";
               summaryBox.innerHTML = `
                 <div class="stats-summary">
-                  <div class="stats-tile profit">
-                    <div class="stats-icon">${ICON_UP}</div>
-                    <div class="stats-value">${wins}</div>
-                    <div class="stats-label">Profit Signals</div>
-                  </div>
-                  <div class="stats-tile loss">
-                    <div class="stats-icon">${ICON_DOWN}</div>
-                    <div class="stats-value">${losses}</div>
-                    <div class="stats-label">Loss Signals</div>
-                  </div>
-                  <div class="stats-tile accuracy">
-                    <div class="stats-icon">${ICON_CLOCK}</div>
-                    <div class="stats-value">${winRate.toFixed(0)}%</div>
-                    <div class="stats-label">Live Accuracy</div>
-                  </div>
+                  <div class="stats-tile profit"><div class="stats-icon">${ICON_UP}</div><div class="stats-value">${pWin}</div><div class="stats-label">Posisi Profit</div></div>
+                  <div class="stats-tile loss"><div class="stats-icon">${ICON_DOWN}</div><div class="stats-value">${pLoss}</div><div class="stats-label">Posisi Loss</div></div>
+                  <div class="stats-tile accuracy"><div class="stats-icon">${ICON_CLOCK}</div><div class="stats-value">${acc.toFixed(0)}%</div><div class="stats-label">Accuracy</div></div>
                 </div>
-                <div class="stats-bar"><div class="stats-bar-fill" style="width:${barPct}%"></div></div>
-                <div class="stats-caption">${wins} profit · ${losses} loss · ${signals.length} sinyal aktif</div>
+                <div class="stats-bar"><div class="stats-bar-fill" style="width:${acc}%"></div></div>
+                <div class="stats-caption">${pWin} profit · ${pLoss} loss · ${totalOpen} posisi terbuka</div>
               `;
             }
 
-            // --- Bagian 2: Daftar per-coin (pindah ke Scanner) ---
-            if(listBox){
-              if(listCount) listCount.textContent = signals.length + " sinyal";
+            // Daftar per-coin (Scanner) — dari market.signals
+            if (listBox) {
+              const signals = (market && market.signals) || [];
+              if (listCount) listCount.textContent = signals.length + " sinyal";
               const rows = signals.map(s => {
                 const act = String(s.action || "skip").toLowerCase();
                 const failed = Array.isArray(s.failed_gates) ? s.failed_gates : [];
                 const reason = failed.length
-                  ? '<div class="sig-reason">' + failed.map(g =>
-                      `<span class="sig-reason-chip">✕ ${g.replace("_"," ")}</span>`
-                    ).join("") + '</div>'
+                  ? '<div class="sig-reason">' + failed.map(g => `<span class="sig-reason-chip">✕ ${g.replace("_"," ")}</span>`).join("") + '</div>'
                   : '<span class="sig-reason-ok">✓ semua gate lolos</span>';
-                const rawConf = s.raw_confidence != null && s.raw_confidence !== s.confidence
-                  ? `<small>raw ${Number(s.raw_confidence).toFixed(1)}</small>`
-                  : `<small>confidence</small>`;
-                return `<div class="signal-row">
-                  <span class="sig-badge ${act}">${act}</span>
-                  <div class="sig-mid">
-                    <div class="sig-sym">${s.symbol || "-"}</div>
-                    ${reason}
-                  </div>
-                  <div class="sig-conf">${Number(s.confidence || 0).toFixed(1)}%${rawConf}</div>
-                </div>`;
+                return `<div class="signal-row"><span class="sig-badge ${act}">${act}</span><div class="sig-mid"><div class="sig-sym">${s.symbol||"-"}</div>${reason}</div><div class="sig-conf">${Number(s.confidence||0).toFixed(1)}%<small>confidence</small></div></div>`;
               }).join("");
               listBox.innerHTML = rows || '<div class="stream-empty">Belum ada sinyal aktif.</div>';
             }
+          }
+
+          // KPI atas — Trade Hari Ini, Profit Hari Ini, Total Profit/Loss/Winrate (dari trade tertutup)
+          function renderKpiExtra(paper){
+            const trades = (paper && (paper.trades || paper.fills)) || [];
+            const today = new Date().toISOString().slice(0, 10);  // UTC
+            let wins = 0, losses = 0, tradesToday = 0, profitToday = 0;
+            trades.forEach(t => {
+              const pnl = Number(t.pnl ?? t.realized_pnl ?? 0);
+              if (pnl > 0) wins++; else if (pnl < 0) losses++;
+              if (String(t.closed_at || "").slice(0, 10) === today) {
+                tradesToday++;
+                profitToday += pnl;
+              }
+            });
+            const total = wins + losses;
+            const winrate = total ? (wins / total * 100) : 0;
+
+            setText("metric-trades-today", tradesToday);
+            const profitEl = document.getElementById("metric-profit-today");
+            if (profitEl) {
+              const sign = profitToday >= 0 ? "+" : "-";
+              profitEl.textContent = sign + "$" + Math.abs(profitToday).toFixed(2);
+              profitEl.classList.remove("is-profit", "is-loss");
+              profitEl.classList.add(profitToday >= 0 ? "is-profit" : "is-loss");
+            }
+
+            setText("metric-total-wins", wins);
+            setText("metric-total-losses", losses);
+            setText("metric-winrate", winrate.toFixed(0) + "%");
           }
 
           function renderPnl(paper){
@@ -297,6 +294,7 @@
               ]);
               renderStats(market, paper, analytics);
               renderPnl(paper);
+              renderKpiExtra(paper);
             } catch (e) {
               console.warn("panel tick error:", e);
             }
