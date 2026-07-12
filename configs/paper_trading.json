@@ -2,7 +2,7 @@
   "enabled": true,
   "starting_balance": 10000,
   "risk_percent": 1,
-  "max_open_positions": 4,
+  "max_open_positions": 20,
   "state_path": "logs/paper_state.json",
   "trades_path": "logs/paper_trades.jsonl",
   "auto_exit": {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from app.exchange.public_http_client import PublicHttpExchangeClient
 from app.market.data_service import MarketDataService
@@ -41,6 +41,9 @@ class ScanItem:
 class ScanRankings:
     long: list[ScanItem]
     short: list[ScanItem]
+    # Simbol yang wajib dipantau (misalnya posisi terbuka) disimpan terpisah
+    # agar ranking top N tetap benar-benar berisi kandidat terbaik.
+    tracked: list[ScanItem] = field(default_factory=list)
 
     def __iter__(self):
         # Kompatibilitas opsional jika ada kode yang ingin membongkar dua hasil.
@@ -95,6 +98,19 @@ def scan_symbol_rankings(
     timeframe = str(config.get("timeframe", "1m"))
     limit = int(config.get("limit", 100))
     symbols = resolve_symbols(config, exchange)
+    tracked_symbols = [
+        str(symbol).strip().upper().replace("-", "/")
+        for symbol in config.get("tracked_symbols", [])
+        if str(symbol).strip()
+    ]
+
+    # Posisi yang sudah entry tidak boleh kehilangan pembaruan harga hanya
+    # karena simbolnya keluar dari prefilter volume atau ranking top N.
+    seen_symbols = set(symbols)
+    for symbol in tracked_symbols:
+        if symbol not in seen_symbols:
+            symbols.append(symbol)
+            seen_symbols.add(symbol)
     fallback = bool(config.get("fallback_to_sample_data", True))
 
     market_data = MarketDataService(
@@ -244,9 +260,17 @@ def scan_symbol_rankings(
     if short_top_n > 0:
         short_ranked = short_ranked[:short_top_n]
 
+    tracked_set = set(tracked_symbols)
+    tracked_results = [
+        item
+        for item in all_results
+        if item.symbol in tracked_set
+    ]
+
     return ScanRankings(
         long=long_ranked,
         short=short_ranked,
+        tracked=tracked_results,
     )
 
 

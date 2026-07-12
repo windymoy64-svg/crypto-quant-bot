@@ -36,6 +36,68 @@ def read_json_file(
     except (OSError, json.JSONDecodeError):
         return default
 
+
+def load_open_position_symbols(state_path: str) -> list[str]:
+    """Ambil simbol posisi terbuka yang wajib terus dipantau harganya."""
+
+    state = read_json_file(Path(state_path), {})
+    if not isinstance(state, dict):
+        return []
+
+    positions = state.get("open_positions", {})
+    if isinstance(positions, dict):
+        raw_symbols = positions.keys()
+    elif isinstance(positions, list):
+        raw_symbols = (
+            item.get("symbol")
+            for item in positions
+            if isinstance(item, dict)
+        )
+    else:
+        return []
+
+    seen: set[str] = set()
+    symbols: list[str] = []
+    for value in raw_symbols:
+        symbol = str(value or "").strip().upper().replace("-", "/")
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        symbols.append(symbol)
+    return symbols
+
+
+def prepare_paper_signals(
+    entry_signals: list[dict[str, object]],
+    tracked_signals: list[dict[str, object]],
+    open_position_symbols: list[str],
+) -> list[dict[str, object]]:
+    """Gabungkan kandidat entry dan tick posisi tanpa simbol duplikat.
+
+    Sinyal untuk posisi yang sudah terbuka dipaksa menjadi SKIP. Harga tetap
+    diproses untuk PnL/SL/TP/trailing stop, tetapi posisi yang tertutup pada
+    siklus yang sama tidak langsung dibuka ulang oleh sinyal entry lama.
+    """
+
+    open_symbols = set(open_position_symbols)
+    prepared: list[dict[str, object]] = []
+    seen: set[str] = set()
+
+    for source in [*entry_signals, *tracked_signals]:
+        symbol = str(source.get("symbol", ""))
+        if not symbol or symbol in seen:
+            continue
+
+        signal_item = dict(source)
+        if symbol in open_symbols:
+            signal_item["action"] = "SKIP"
+            signal_item["tracking_reason"] = "open_position"
+
+        prepared.append(signal_item)
+        seen.add(symbol)
+
+    return prepared
+
 def write_scan_outputs(
     results: list[dict[str, object]],
     short_results: list[dict[str, object]],
@@ -391,6 +453,35 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
     history_output = str(runtime_config.get("history_output", "logs/signals.jsonl"))
 
     scan_config = load_json(scan_config_path)
+
+    paper_enabled = bool(
+        runtime_config.get("paper_trading_enabled", True)
+    )
+    paper_config: PaperTradingConfig | None = None
+    open_position_symbols: list[str] = []
+    if paper_enabled:
+        paper_config = PaperTradingConfig.from_dict(
+            load_json(paper_config_path)
+        )
+        open_position_symbols = load_open_position_symbols(
+            paper_config.state_path
+        )
+
+        configured_tracked = scan_config.get("tracked_symbols", [])
+        if not isinstance(configured_tracked, list):
+            configured_tracked = []
+        scan_config = {
+            **scan_config,
+            "tracked_symbols": list(
+                dict.fromkeys(
+                    [
+                        *[str(value) for value in configured_tracked],
+                        *open_position_symbols,
+                    ]
+                )
+            ),
+        }
+
     rankings = scan_symbol_rankings(scan_config)
 
     # Hanya LONG yang dikirim ke paper/live executor.
@@ -401,6 +492,10 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
         item.to_dict()
         for item in rankings.short
     ]
+    tracked_results = [
+        item.to_dict()
+        for item in rankings.tracked
+    ]
 
     confirmed_short_results = (
         prepare_confirmed_short_signals(
@@ -409,7 +504,7 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
             scan_config,
         )
     )
-    for item in [*results, *short_results]:
+    for item in [*results, *short_results, *tracked_results]:
         if item.get("data_source") == "sample":
             raise RuntimeError(
                 f"Data {item['symbol']} masih sample — koneksi Binance gagal, "
@@ -417,17 +512,12 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
             )
 
     paper: dict[str, object] | None = None
-    if bool(runtime_config.get("paper_trading_enabled", True)):
-        paper_config = PaperTradingConfig.from_dict(load_json(paper_config_path))
-        paper_signals = [
-            *results,
-            *confirmed_short_results,
-        ]
-
-        paper_signals = [
-            *results,
-            *confirmed_short_results,
-        ]
+    if paper_enabled and paper_config is not None:
+        paper_signals = prepare_paper_signals(
+            [*results, *confirmed_short_results],
+            tracked_results,
+            open_position_symbols,
+        )
 
         paper = RealtimePaperTradingEngine(
             paper_config
@@ -451,6 +541,7 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
         "history_output": history_output,
         "signals": results,
         "short_signals": short_results,
+        "tracked_position_signals": tracked_results,
         "confirmed_short_signals": confirmed_short_results,
         "paper": paper,
         "live_decisions": live_decisions,
