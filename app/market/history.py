@@ -31,8 +31,15 @@ class HistoricalMarketDataEngine:
         timeframe: str,
         limit: int,
         downloader: DownloadFn,
+        force_refresh: bool = False,
     ) -> HistoryLoadResult:
-        cached = self.cache.get(self.exchange, symbol, timeframe, limit)
+        # Simbol yang sedang di-entry (force_refresh) wajib mengambil harga
+        # realtime, jadi cache dilewati agar tidak menyajikan data basi.
+        cached = (
+            None
+            if force_refresh
+            else self.cache.get(self.exchange, symbol, timeframe, limit)
+        )
         if cached:
             return HistoryLoadResult(
                 symbol=symbol,
@@ -69,5 +76,12 @@ class HistoryLoader:
         timeframe: str,
         limit: int,
         downloader: DownloadFn,
+        force_refresh: bool = False,
     ) -> HistoryLoadResult:
-        return self.engine.load_history(symbol, timeframe, limit, downloader)
+        return self.engine.load_history(
+            symbol,
+            timeframe,
+            limit,
+            downloader,
+            force_refresh=force_refresh,
+        )

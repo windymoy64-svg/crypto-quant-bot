@@ -116,12 +116,22 @@ class DashboardService:
             if isinstance(latest, dict)
             else []
         )
+        # Sinyal untuk posisi terbuka yang keluar dari top N tetap dikirim
+        # agar harganya tetap realtime di dashboard.
+        tracked_signals = (
+            latest.get("tracked_signals", [])
+            if isinstance(latest, dict)
+            else []
+        )
 
         if not isinstance(signals, list):
             signals = []
 
         if not isinstance(short_signals, list):
             short_signals = []
+
+        if not isinstance(tracked_signals, list):
+            tracked_signals = []
 
         symbols = self.symbols()
 
@@ -135,11 +145,14 @@ class DashboardService:
             "count": len(signals),
             "short_signals": short_signals,
             "short_count": len(short_signals),
+            "tracked_signals": tracked_signals,
+            "tracked_count": len(tracked_signals),
             "symbols": symbols["symbols"],
             "symbol_count": symbols["count"],
             "configured_symbols": symbols["configured_symbols"],
             "read_only": True,
         }
+
 
     def symbols(self) -> dict[str, Any]:
         configured = self._load_symbols_from_configs()

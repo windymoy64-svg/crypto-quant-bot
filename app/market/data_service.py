@@ -29,11 +29,25 @@ class MarketDataService:
         self.fallback_to_sample_data = fallback_to_sample_data
         self.history_loader = HistoryLoader(HistoricalMarketDataEngine(exchange=exchange))
 
-    def fetch_ohlcv(self, symbol: str, timeframe: str = "1h", limit: int = 100) -> MarketDataResult:
+    def fetch_ohlcv(
+        self,
+        symbol: str,
+        timeframe: str = "1h",
+        limit: int = 100,
+        *,
+        force_refresh: bool = False,
+    ) -> MarketDataResult:
         errors: list[str] = []
 
         try:
-            history = self.history_loader.load(symbol, timeframe, limit, self._download_ohlcv)
+            history = self.history_loader.load(
+                symbol,
+                timeframe,
+                limit,
+                self._download_ohlcv,
+                force_refresh=force_refresh,
+            )
+
             return MarketDataResult(
                 symbol=symbol,
                 timeframe=timeframe,

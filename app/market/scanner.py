@@ -136,14 +136,20 @@ def scan_symbol_rankings(
 
     all_results: list[ScanItem] = []
 
+    tracked_set = set(tracked_symbols)
+
     for symbol in symbols:
+        # Simbol posisi terbuka wajib harga realtime: lewati cache agar
+        # perubahan harga benar-benar terpantau tiap siklus scan.
         loaded = market_data.fetch_ohlcv(
             symbol=symbol,
             timeframe=timeframe,
             limit=limit,
+            force_refresh=symbol in tracked_set,
         )
 
         # LONG: jalur lama.
+
         long_score = long_engine.score(loaded.candles)
         long_signal = build_signal(
             symbol=symbol,
@@ -260,12 +266,12 @@ def scan_symbol_rankings(
     if short_top_n > 0:
         short_ranked = short_ranked[:short_top_n]
 
-    tracked_set = set(tracked_symbols)
     tracked_results = [
         item
         for item in all_results
         if item.symbol in tracked_set
     ]
+
 
     return ScanRankings(
         long=long_ranked,

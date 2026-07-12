@@ -104,15 +104,20 @@ def write_scan_outputs(
     latest_output: str,
     history_output: str,
     paper: dict[str, object] | None = None,
+    tracked_results: list[dict[str, object]] | None = None,
 ) -> None:
     now = datetime.now(tz=UTC).isoformat()
     payload = {
         "timestamp": now,
         "signals": results,
         "short_signals": short_results,
+        # Simbol posisi terbuka yang keluar dari top N tetap dikirim ke
+        # dashboard agar harganya ikut realtime setiap siklus scan.
+        "tracked_signals": tracked_results or [],
     }
     if paper is not None:
         payload["paper"] = paper
+
 
     latest_path = Path(latest_output)
     latest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -535,7 +540,9 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
         latest_output,
         history_output,
         paper=paper,
+        tracked_results=tracked_results,
     )
+
     return {
         "latest_output": latest_output,
         "history_output": history_output,
