@@ -6,6 +6,12 @@
   "quote_asset": "USDT",
   "prefilter_top_n": 100,
   "top_n": 20,
+  "short_shadow_enabled": true,
+  "short_rules_path": "configs/short_rules.json",
+  "short_execution_enabled": true,
+  "short_confirmation_cycles": 2,
+  "minimum_direction_edge": 5.0,
+  "short_confirmation_state_path": "logs/short_confirmation_state.json",
   "symbols": [],
   "fallback_to_sample_data": false
 }

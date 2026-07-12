@@ -1,0 +1,66 @@
+{
+  "buy_confidence": 85,
+  "watch_confidence": 75,
+  "quality_gates": {
+    "trend":        { "min_score": 26, "max_score": 43 },
+    "momentum":     { "min_score": 22, "max_score": 39 },
+    "price_action": { "min_score": 15, "max_score": 27 },
+    "volume":       { "min_score": 6,  "max_score": 11 },
+    "volatility":   { "min_score": 6,  "max_score": 11 }
+  },
+  "rules": [
+    {"id":"SHORT_001","name":"EMA20 below EMA50","category":"trend","feature":"ema20_lt_ema50","operator":"is_true","weight":4},
+    {"id":"SHORT_002","name":"EMA50 below EMA200","category":"trend","feature":"ema50_lt_ema200","operator":"is_true","weight":4},
+    {"id":"SHORT_003","name":"EMA9 below EMA20","category":"trend","feature":"ema9_lt_ema20","operator":"is_true","weight":3},
+    {"id":"SHORT_004","name":"EMA stack bearish","category":"trend","feature":"ema_stack_bearish","operator":"is_true","weight":5},
+    {"id":"SHORT_005","name":"Price below EMA9","category":"trend","feature":"price_lt_ema9","operator":"is_true","weight":3},
+    {"id":"SHORT_006","name":"Price below EMA20","category":"trend","feature":"price_lt_ema20","operator":"is_true","weight":4},
+    {"id":"SHORT_007","name":"Price below EMA50","category":"trend","feature":"price_lt_ema50","operator":"is_true","weight":4},
+    {"id":"SHORT_008","name":"Price below EMA200","category":"trend","feature":"price_lt_ema200","operator":"is_true","weight":3},
+    {"id":"SHORT_009","name":"Price below SMA20","category":"trend","feature":"price_lt_sma20","operator":"is_true","weight":3},
+    {"id":"SHORT_010","name":"Price below SMA50","category":"trend","feature":"price_lt_sma50","operator":"is_true","weight":3},
+    {"id":"SHORT_011","name":"SMA20 below SMA50","category":"trend","feature":"sma20_lt_sma50","operator":"is_true","weight":3},
+    {"id":"SHORT_012","name":"EMA20 gap negative","category":"trend","feature":"ema20_gap_percent","operator":"lt","value":0,"weight":2},
+    {"id":"SHORT_013","name":"EMA50 gap negative","category":"trend","feature":"ema50_gap_percent","operator":"lt","value":0,"weight":2},
+
+    {"id":"SHORT_014","name":"MACD bearish","category":"momentum","feature":"macd_bearish","operator":"is_true","weight":5},
+    {"id":"SHORT_015","name":"MACD histogram negative","category":"momentum","feature":"macd_histogram","operator":"lt","value":0,"weight":4},
+    {"id":"SHORT_016","name":"Momentum 1 negative","category":"momentum","feature":"momentum_1_negative","operator":"is_true","weight":2},
+    {"id":"SHORT_017","name":"Momentum 5 negative","category":"momentum","feature":"momentum_5_negative","operator":"is_true","weight":4},
+    {"id":"SHORT_018","name":"Momentum 10 negative","category":"momentum","feature":"momentum_10_negative","operator":"is_true","weight":4},
+    {"id":"SHORT_019","name":"Momentum 20 negative","category":"momentum","feature":"momentum_20_negative","operator":"is_true","weight":4},
+    {"id":"SHORT_020","name":"Momentum 5 below -0.5","category":"momentum","feature":"momentum_5_lt_minus_0_5","operator":"is_true","weight":3},
+    {"id":"SHORT_021","name":"Momentum 10 below -1","category":"momentum","feature":"momentum_10_lt_minus_1","operator":"is_true","weight":3},
+    {"id":"SHORT_022","name":"Momentum 20 below -2","category":"momentum","feature":"momentum_20_lt_minus_2","operator":"is_true","weight":3},
+    {"id":"SHORT_023","name":"RSI below 55","category":"momentum","feature":"rsi_below_55","operator":"is_true","weight":2},
+    {"id":"SHORT_024","name":"RSI below 50","category":"momentum","feature":"rsi_below_50","operator":"is_true","weight":3},
+    {"id":"SHORT_025","name":"RSI healthy bearish","category":"momentum","feature":"rsi_healthy_bearish","operator":"is_true","weight":2},
+
+    {"id":"SHORT_026","name":"Near support breakdown","category":"price_action","feature":"near_support_breakdown","operator":"is_true","weight":4},
+    {"id":"SHORT_027","name":"Near 5-candle low","category":"price_action","feature":"near_5_low","operator":"is_true","weight":3},
+    {"id":"SHORT_028","name":"Near 10-candle low","category":"price_action","feature":"near_10_low","operator":"is_true","weight":3},
+    {"id":"SHORT_029","name":"Below 5 midpoint","category":"price_action","feature":"below_5_midpoint","operator":"is_true","weight":3},
+    {"id":"SHORT_030","name":"Below 10 midpoint","category":"price_action","feature":"below_10_midpoint","operator":"is_true","weight":3},
+    {"id":"SHORT_031","name":"Range below midpoint","category":"price_action","feature":"range_below_mid","operator":"is_true","weight":3},
+    {"id":"SHORT_032","name":"Latest candle red","category":"price_action","feature":"latest_red","operator":"is_true","weight":3},
+    {"id":"SHORT_033","name":"Latest close near low","category":"price_action","feature":"latest_close_near_low","operator":"is_true","weight":3},
+    {"id":"SHORT_034","name":"Red count 5 >= 3","category":"price_action","feature":"red_count_5_ge_3","operator":"is_true","weight":2},
+    {"id":"SHORT_035","name":"Down streak >= 1","category":"price_action","feature":"down_streak_ge_1","operator":"is_true","weight":2},
+
+    {"id":"SHORT_036","name":"Volume above average","category":"volume","feature":"volume_above_average","operator":"is_true","weight":3},
+    {"id":"SHORT_037","name":"Volume ratio > 1.05","category":"volume","feature":"volume_ratio_gt_1_05","operator":"is_true","weight":3},
+    {"id":"SHORT_038","name":"Volume ratio > 1.10","category":"volume","feature":"volume_ratio_gt_1_10","operator":"is_true","weight":3},
+    {"id":"SHORT_039","name":"Previous volume sustained","category":"volume","feature":"volume_vs_previous_gt_0_9","operator":"is_true","weight":2},
+
+    {"id":"SHORT_040","name":"ATR above 0.2 percent","category":"volatility","feature":"atr_above_0_2_percent","operator":"is_true","weight":3},
+    {"id":"SHORT_041","name":"ATR below 3 percent","category":"volatility","feature":"atr_below_3_percent","operator":"is_true","weight":3},
+    {"id":"SHORT_042","name":"Volatility 5 below 3 percent","category":"volatility","feature":"volatility_5_below_3_percent","operator":"is_true","weight":2},
+    {"id":"SHORT_043","name":"Volatility 10 below 5 percent","category":"volatility","feature":"volatility_10_below_5_percent","operator":"is_true","weight":3},
+
+    {"id":"SHORT_044","name":"RSI above 20","category":"risk","feature":"rsi_above_20","operator":"is_true","weight":2},
+    {"id":"SHORT_045","name":"RSI above 25","category":"risk","feature":"rsi_above_25","operator":"is_true","weight":2},
+    {"id":"SHORT_046","name":"RSI above 30","category":"risk","feature":"rsi_above_30","operator":"is_true","weight":2},
+    {"id":"SHORT_047","name":"Not extended up streak","category":"risk","feature":"up_streak_le_1","operator":"is_true","weight":2},
+    {"id":"SHORT_048","name":"Range above bottom","category":"risk","feature":"range_above_bottom","operator":"is_true","weight":2}
+  ]
+}

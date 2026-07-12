@@ -1082,7 +1082,14 @@ a{color:inherit;text-decoration:none}
 }
 
 /* Header: nama coin kiri, side+trailing kanan */
-
+.pnl-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:8px;
+  width:100%;
+  min-width:0;
+}
 
 .pnl-sym{
   min-width:0;
@@ -1095,7 +1102,14 @@ a{color:inherit;text-decoration:none}
   text-overflow:ellipsis;
 }
 
-
+.pnl-head-badges{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+  gap:5px;
+  flex-shrink:0;
+}
 
 /* Side LONG/SHORT menjadi badge kecil di header */
 .pnl-side{
@@ -1132,7 +1146,16 @@ a{color:inherit;text-decoration:none}
 }
 
 /* Angka dipusatkan di body */
-
+.pnl-body{
+  display:flex;
+  flex:1;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:5px;
+  width:100%;
+  padding-top:10px;
+}
 
 .pnl-value{
   margin:0 !important;
@@ -1157,7 +1180,9 @@ a{color:inherit;text-decoration:none}
 }
 
 /* Sisakan ruang kanan agar titik tidak bertabrakan */
-
+.pnl-head-badges{
+  padding-right:12px;
+}
 
 @media (max-width:640px){
   .pnl-grid{
@@ -1308,136 +1333,6 @@ a{color:inherit;text-decoration:none}
 }
 
 /* Header sekarang hanya menampung badge trailing */
-
-/* ===== Live Signal: Profit Realtime ===== */
-
-.stats-tile.realtime.profit{
-  background:rgba(34,197,94,.09) !important;
-  border-color:rgba(34,197,94,.24) !important;
-}
-
-.stats-tile.realtime.profit .stats-value{
-  color:var(--green) !important;
-}
-
-.stats-tile.realtime.profit .stats-icon{
-  color:var(--green) !important;
-  background:rgba(34,197,94,.14) !important;
-}
-
-.stats-tile.realtime.loss{
-  background:rgba(244,63,94,.08) !important;
-  border-color:rgba(244,63,94,.24) !important;
-}
-
-.stats-tile.realtime.loss .stats-value{
-  color:var(--red) !important;
-}
-
-.stats-tile.realtime.loss .stats-icon{
-  color:var(--red) !important;
-  background:rgba(244,63,94,.13) !important;
-}
-
-/* =========================================================
-   LIVE SIGNAL — RESTORE LAYOUT 2x2
-   Tampilan lama, kartu keempat menjadi Realtime PnL
-   ========================================================= */
-
-#signal-terminal .stats-summary{
-  display:grid !important;
-  grid-template-columns:repeat(4,minmax(0,1fr)) !important;
-  gap:12px !important;
-  width:100% !important;
-}
-
-#signal-terminal .stats-tile{
-  display:flex !important;
-  flex-direction:column !important;
-  align-items:center !important;
-  justify-content:center !important;
-  gap:8px !important;
-  width:100% !important;
-  min-width:0 !important;
-  min-height:150px !important;
-  padding:16px 10px !important;
-  box-sizing:border-box !important;
-  border-radius:18px !important;
-  text-align:center !important;
-}
-
-#signal-terminal .stats-icon{
-  display:grid !important;
-  place-items:center !important;
-  width:30px !important;
-  height:30px !important;
-  margin:0 !important;
-}
-
-#signal-terminal .stats-icon svg{
-  width:19px !important;
-  height:19px !important;
-}
-
-#signal-terminal .stats-value{
-  display:block !important;
-  width:100% !important;
-  margin:0 !important;
-  font-size:27px !important;
-  font-weight:850 !important;
-  line-height:1 !important;
-  text-align:center !important;
-  white-space:nowrap !important;
-  font-variant-numeric:tabular-nums !important;
-}
-
-#signal-terminal .stats-tile.realtime .stats-value{
-  font-size:23px !important;
-}
-
-#signal-terminal .stats-label{
-  display:block !important;
-  width:100% !important;
-  margin:0 !important;
-  color:var(--txt-mute) !important;
-  font-size:9px !important;
-  font-weight:750 !important;
-  line-height:1.2 !important;
-  letter-spacing:.11em !important;
-  text-align:center !important;
-  text-transform:uppercase !important;
-  white-space:nowrap !important;
-}
-
-#signal-terminal .stats-caption{
-  margin-top:18px !important;
-  text-align:center !important;
-  font-size:11px !important;
-  line-height:1.5 !important;
-}
-
-/* Mobile tetap 2x2 seperti desain sebelumnya */
-@media screen and (max-width:640px){
-  #signal-terminal .stats-summary{
-    grid-template-columns:repeat(2,minmax(0,1fr)) !important;
-    gap:10px !important;
-  }
-
-  #signal-terminal .stats-tile{
-    min-height:100px !important;
-    padding:14px 8px !important;
-    border-radius:17px !important;
-  }
-
-  #signal-terminal .stats-value{
-    font-size:21px !important;
-  }
-
-  #signal-terminal .stats-tile.realtime .stats-value{
-    font-size:18px !important;
-  }
-
-  #signal-terminal .stats-label{
-    font-size:8px !important;
-  }
+.pnl-head-badges{
+  padding-right:12px;
 }

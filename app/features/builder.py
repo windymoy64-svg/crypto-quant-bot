@@ -63,6 +63,8 @@ def build_features(candles: list[Candle]) -> dict[str, float | bool]:
     previous_vol_ratio = _safe_ratio(latest.volume, candles[-2].volume, 1.0) if len(candles) > 1 else 1.0
     green_count_5 = sum(1 for candle in recent_5 if candle.close > candle.open)
     green_count_10 = sum(1 for candle in recent_10 if candle.close > candle.open)
+    red_count_5 = sum(1 for candle in recent_5 if candle.close < candle.open)
+    red_count_10 = sum(1 for candle in recent_10 if candle.close < candle.open)    
     up_streak = _streak(price_values, rising=True)
     down_streak = _streak(price_values, rising=False)
     momentum_1 = _percent_change(current_price, previous_price)
@@ -78,6 +80,7 @@ def build_features(candles: list[Candle]) -> dict[str, float | bool]:
     volatility_10 = _safe_ratio(high_10 - low_10, current_price) * 100
     breakout_distance = _percent_change(current_price, recent_high)
     support_distance = _percent_change(current_price, recent_low)
+    breakdown_distance = _percent_change(current_price, recent_low)
 
     return {
         "price": current_price,
@@ -134,6 +137,7 @@ def build_features(candles: list[Candle]) -> dict[str, float | bool]:
         "volume_vs_previous_gt_1_0": previous_vol_ratio >= 1.0,
         "near_breakout": current_price >= recent_high * 0.99,
         "breakout_distance_percent": breakout_distance,
+        "breakdown_distance_percent": breakdown_distance,
         "support_distance_percent": support_distance,
         "near_5_high": current_price >= high_5 * 0.99,
         "near_10_high": current_price >= high_10 * 0.99,
@@ -180,4 +184,62 @@ def build_features(candles: list[Candle]) -> dict[str, float | bool]:
         "volatility_10_percent": volatility_10,
         "volatility_5_below_3_percent": volatility_5 < 3.0,
         "volatility_10_below_5_percent": volatility_10 < 5.0,
+         # Bearish trend
+        "ema_stack_bearish": ema9 < ema20 < ema50,
+        "ema20_lt_ema50": ema20 < ema50,
+        "ema50_lt_ema200": ema50 < ema200,
+        "ema9_lt_ema20": ema9 < ema20,
+        "price_lt_ema9": current_price < ema9,
+        "price_lt_ema20": current_price < ema20,
+        "price_lt_ema50": current_price < ema50,
+        "price_lt_ema200": current_price < ema200,
+        "price_lt_sma20": current_price < sma20,
+        "price_lt_sma50": current_price < sma50,
+        "sma20_lt_sma50": sma20 < sma50,
+
+        # Bearish momentum
+        "macd_bearish": macd_values["line"] < macd_values["signal"],
+        "momentum_1_negative": momentum_1 < 0,
+        "momentum_5_negative": momentum_5 < 0,
+        "momentum_10_negative": momentum_10 < 0,
+        "momentum_20_negative": momentum_20 < 0,
+        "momentum_5_lt_minus_0_5": momentum_5 <= -0.5,
+        "momentum_10_lt_minus_1": momentum_10 <= -1.0,
+        "momentum_20_lt_minus_2": momentum_20 <= -2.0,
+        "down_streak_ge_1": down_streak >= 1,
+        "down_streak_ge_2": down_streak >= 2,
+        "up_streak_le_1": up_streak <= 1,
+
+        # Bearish RSI
+        "rsi_healthy_bearish": 25 <= current_rsi <= 50,
+        "rsi_below_55": current_rsi <= 55,
+        "rsi_below_50": current_rsi <= 50,
+        "rsi_below_45": current_rsi <= 45,
+        "rsi_above_20": current_rsi >= 20,
+        "rsi_above_25": current_rsi >= 25,
+        "rsi_above_30": current_rsi >= 30,
+
+        # Bearish price action
+        "near_support_breakdown": current_price <= recent_low * 1.01,
+        "near_5_low": current_price <= low_5 * 1.01,
+        "near_10_low": current_price <= low_10 * 1.01,
+        "below_5_midpoint": current_price <= (high_5 + low_5) / 2,
+        "below_10_midpoint": current_price <= (high_10 + low_10) / 2,
+        "range_below_mid": range_position <= 0.5,
+        "range_5_below_mid": day_position_5 <= 0.5,
+        "range_10_below_mid": day_position_10 <= 0.5,
+        "range_above_bottom": range_position >= 0.05,
+
+        # Bearish candle structure
+        "red_count_5": float(red_count_5),
+        "red_count_10": float(red_count_10),
+        "red_count_5_ge_3": red_count_5 >= 3,
+        "red_count_10_ge_6": red_count_10 >= 6,
+        "latest_red": latest.close < latest.open,
+        "latest_close_near_low": _safe_ratio(
+            latest.high - latest.close,
+            candle_range,
+            0.5,
+        ) >= 0.65,
+        "latest_upper_wick_gt_lower": upper_wick > lower_wick,   
     }

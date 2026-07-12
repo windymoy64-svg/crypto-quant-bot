@@ -105,12 +105,36 @@ def read_jsonl_file(path: str | Path, limit: int = 100) -> list[dict[str, Any]]:
 class DashboardService:
     def market(self) -> dict[str, Any]:
         latest = read_json_file("logs/latest_signals.json", {})
-        signals = latest.get("signals", []) if isinstance(latest, dict) else []
+
+        signals = (
+            latest.get("signals", [])
+            if isinstance(latest, dict)
+            else []
+        )
+        short_signals = (
+            latest.get("short_signals", [])
+            if isinstance(latest, dict)
+            else []
+        )
+
+        if not isinstance(signals, list):
+            signals = []
+
+        if not isinstance(short_signals, list):
+            short_signals = []
+
         symbols = self.symbols()
+
         return {
-            "timestamp": latest.get("timestamp") if isinstance(latest, dict) else None,
-            "signals": signals if isinstance(signals, list) else [],
-            "count": len(signals) if isinstance(signals, list) else 0,
+            "timestamp": (
+                latest.get("timestamp")
+                if isinstance(latest, dict)
+                else None
+            ),
+            "signals": signals,
+            "count": len(signals),
+            "short_signals": short_signals,
+            "short_count": len(short_signals),
             "symbols": symbols["symbols"],
             "symbol_count": symbols["count"],
             "configured_symbols": symbols["configured_symbols"],

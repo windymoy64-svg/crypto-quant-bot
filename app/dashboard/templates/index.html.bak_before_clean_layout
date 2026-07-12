@@ -179,61 +179,16 @@
             const listCount = document.getElementById("signal-list-count");
 
             const positions = (paper && paper.open_positions) || [];
-            let pWin = 0;
-            let pLoss = 0;
-            let realtimeProfit = 0;
-
-            positions.forEach(position => {
-              const entry = Number(position.entry ?? 0);
-              const last = Number(
-                position.last_price ?? entry
-              );
-              const size = Number(
-                position.remaining_size ??
-                position.size ??
-                0
-              );
-
-              const rawSide = String(
-                position.side || "BUY"
-              ).toUpperCase();
-
-              const isShort =
-                rawSide === "SHORT" ||
-                rawSide === "SELL";
-
-              const calculatedPnl = isShort
-                ? (entry - last) * size
-                : (last - entry) * size;
-
-              const pnl = Number(
-                position.unrealized_pnl ??
-                calculatedPnl
-              );
-
-              if (!Number.isFinite(pnl)) return;
-
-              realtimeProfit += pnl;
-
-              if (pnl > 0) {
-                pWin += 1;
-              } else if (pnl < 0) {
-                pLoss += 1;
-              }
+            let pWin = 0, pLoss = 0;
+            positions.forEach(p => {
+              const entry = Number(p.entry ?? 0);
+              const last = Number(p.last_price ?? entry);
+              const size = Number(p.remaining_size ?? p.size ?? 0);
+              const pnl = Number(p.unrealized_pnl ?? ((last - entry) * size));
+              if (pnl > 0) pWin++; else if (pnl < 0) pLoss++;
             });
-
             const totalOpen = positions.length;
-            const realtimeProfitLabel =
-              (realtimeProfit >= 0 ? "+$" : "-$") +
-              Math.abs(realtimeProfit).toLocaleString("en-US", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              });
-
-            const realtimeProfitClass =
-              realtimeProfit >= 0
-                ? "profit"
-                : "loss";
+            const acc = totalOpen ? (pWin / totalOpen * 100) : 0;
 
             if (summaryBox) {
               if (summaryCount) summaryCount.textContent = totalOpen + " posisi";
@@ -242,18 +197,10 @@
                   <div class="stats-tile open"><div class="stats-icon">${ICON_CLOCK}</div><div class="stats-value">${totalOpen}</div><div class="stats-label">Open</div></div>
                   <div class="stats-tile profit"><div class="stats-icon">${ICON_UP}</div><div class="stats-value">${pWin}</div><div class="stats-label">Profit</div></div>
                   <div class="stats-tile loss"><div class="stats-icon">${ICON_DOWN}</div><div class="stats-value">${pLoss}</div><div class="stats-label">Loss</div></div>
-                  <div class="stats-tile realtime ${realtimeProfitClass}">
-                    <div class="stats-icon">${ICON_CLOCK}</div>
-                    <div class="stats-value">${realtimeProfitLabel}</div>
-                    <div class="stats-label">Profit Realtime</div>
-                  </div>
+                  <div class="stats-tile accuracy"><div class="stats-icon">${ICON_CLOCK}</div><div class="stats-value">${acc.toFixed(0)}%</div><div class="stats-label">Accuracy</div></div>
                 </div>
-                <div class="stats-caption">
-                  ${totalOpen} posisi terbuka ·
-                  ${pWin} profit ·
-                  ${pLoss} loss ·
-                  unrealized ${realtimeProfitLabel}
-                </div>
+                <div class="stats-bar"><div class="stats-bar-fill" style="width:${acc}%"></div></div>
+                <div class="stats-caption">${pWin} profit · ${pLoss} loss · ${totalOpen} posisi terbuka</div>
               `;
             }
 
@@ -365,148 +312,33 @@
           }
 
           // KPI atas — Trade Hari Ini, Profit Hari Ini, Total Profit/Loss/Winrate (dari trade tertutup)
-          function getWibTradingSessionStart(now = new Date()) {
-            /*
-            * Sesi dashboard:
-            * 07.00 WIB hari ini sampai 06.59.59 WIB besok.
-            *
-            * Karena WIB = UTC+7, pukul 07.00 WIB tepat sama dengan
-            * pukul 00.00 UTC. Jadi awal sesi adalah tengah malam UTC.
-            */
-            return new Date(Date.UTC(
-              now.getUTCFullYear(),
-              now.getUTCMonth(),
-              now.getUTCDate(),
-              0,
-              0,
-              0,
-              0
-            ));
-          }
-
-          function renderKpiExtra(paper) {
-            const sourceTrades = Array.isArray(paper?.trades)
-              ? paper.trades
-              : Array.isArray(paper?.fills)
-                ? paper.fills
-                : [];
-
-            const sessionStart = getWibTradingSessionStart();
-            const sessionEnd = new Date(
-              sessionStart.getTime() + (24 * 60 * 60 * 1000)
-            );
-
-            /*
-            * Hanya trade tertutup dalam sesi 07.00 WIB hari ini
-            * sampai sebelum 07.00 WIB besok.
-            */
-            const sessionTrades = sourceTrades.filter(trade => {
-              const timestamp =
-                trade.closed_at ??
-                trade.timestamp ??
-                trade.exit_time ??
-                trade.updated_at;
-
-              if (!timestamp) return false;
-
-              const closedAt = new Date(timestamp);
-
-              return (
-                !Number.isNaN(closedAt.getTime()) &&
-                closedAt >= sessionStart &&
-                closedAt < sessionEnd
-              );
-            });
-
-            let wins = 0;
-            let losses = 0;
-            let sessionProfit = 0;
-
-            sessionTrades.forEach(trade => {
-              const pnl = Number(
-                trade.pnl ??
-                trade.realized_pnl ??
-                trade.net_pnl ??
-                trade.profit ??
-                0
-              );
-
-              if (!Number.isFinite(pnl)) return;
-
-              sessionProfit += pnl;
-
-              if (pnl > 0) {
-                wins += 1;
-              } else if (pnl < 0) {
-                losses += 1;
+          function renderKpiExtra(paper){
+            const trades = (paper && (paper.trades || paper.fills)) || [];
+            const today = new Date().toISOString().slice(0, 10);  // UTC
+            let wins = 0, losses = 0, tradesToday = 0, profitToday = 0;
+            trades.forEach(t => {
+              const pnl = Number(t.pnl ?? t.realized_pnl ?? 0);
+              if (pnl > 0) wins++; else if (pnl < 0) losses++;
+              if (String(t.closed_at || "").slice(0, 10) === today) {
+                tradesToday++;
+                profitToday += pnl;
               }
             });
+            const total = wins + losses;
+            const winrate = total ? (wins / total * 100) : 0;
 
-            const completedTrades = wins + losses;
-            const winrate = completedTrades > 0
-              ? (wins / completedTrades) * 100
-              : 0;
-
-            /*
-            * "Trade" menggunakan jumlah posisi yang selesai.
-            * Trade dengan PnL tepat 0 tetap masuk jumlah trade sesi,
-            * tetapi tidak masuk kategori profit atau loss.
-            */
-            setText(
-              "metric-trades-today",
-              String(sessionTrades.length)
-            );
-
-            setText(
-              "metric-total-wins",
-              String(wins)
-            );
-
-            setText(
-              "metric-total-losses",
-              String(losses)
-            );
-
-            setText(
-              "metric-winrate",
-              winrate.toFixed(1) + "%"
-            );
-
-            const profitElement = document.getElementById(
-              "metric-profit-today"
-            );
-
-            if (profitElement) {
-              const isProfit = sessionProfit >= 0;
-              const sign = isProfit ? "+" : "-";
-
-              profitElement.textContent =
-                sign +
-                "$" +
-                Math.abs(sessionProfit).toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                });
-
-              profitElement.classList.remove(
-                "is-profit",
-                "is-loss"
-              );
-
-              profitElement.classList.add(
-                isProfit ? "is-profit" : "is-loss"
-              );
-
-              profitElement.title =
-                "Periode " +
-                sessionStart.toLocaleString("id-ID", {
-                  timeZone: "Asia/Jakarta",
-                }) +
-                " sampai sebelum " +
-                sessionEnd.toLocaleString("id-ID", {
-                  timeZone: "Asia/Jakarta",
-                });
+            setText("metric-trades-today", tradesToday);
+            const profitEl = document.getElementById("metric-profit-today");
+            if (profitEl) {
+              const sign = profitToday >= 0 ? "+" : "-";
+              profitEl.textContent = sign + "$" + Math.abs(profitToday).toFixed(2);
+              profitEl.classList.remove("is-profit", "is-loss");
+              profitEl.classList.add(profitToday >= 0 ? "is-profit" : "is-loss");
             }
+
+            setText("metric-total-wins", wins);
+            setText("metric-total-losses", losses);
+            setText("metric-winrate", winrate.toFixed(0) + "%");
           }
 
           function renderPnl(paper){

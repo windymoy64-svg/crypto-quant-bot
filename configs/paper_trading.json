@@ -2,12 +2,16 @@
   "enabled": true,
   "starting_balance": 10000,
   "risk_percent": 1,
-  "max_open_positions": 3,
+  "max_open_positions": 4,
   "state_path": "logs/paper_state.json",
   "trades_path": "logs/paper_trades.jsonl",
   "auto_exit": {
     "enabled": true,
-    "tp_fractions": [0.30, 0.30, 0.40],
+    "tp_fractions": [
+      0.3,
+      0.3,
+      0.4
+    ],
     "trailing_activation_atr_multiple": 1.0,
     "trailing_distance_atr_multiple": 1.5
   }
