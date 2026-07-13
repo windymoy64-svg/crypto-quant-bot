@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from app.config.env import get_exchange_credentials
 from app.config.production import production_shutdown, production_startup
 from app.dashboard.routes import analytics, backtest, health, market, paper, portfolio
+from app.dashboard.scheduler import shutdown_scheduler, start_scheduler
 from app.dashboard.services import dashboard_service, read_json_file
 from app.dashboard.websocket import event_hub, router as websocket_router
 
@@ -44,10 +45,12 @@ def require_api_key(
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     production_startup()
+    start_scheduler()
     try:
         yield
     finally:
         await event_hub.shutdown()
+        shutdown_scheduler()
         production_shutdown()
 
 
