@@ -8,6 +8,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.dashboard.services import dashboard_service, utc_now_iso
 from app.events.subscriber import subscribe
+from app.exchange.binance.stream import BinanceStreamCallbacks
+from app.exchange.binance.websocket import BinanceWebSocket
 
 
 router = APIRouter()
@@ -22,7 +24,10 @@ class DashboardEventHub:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._drain_task: asyncio.Task[None] | None = None
         self._snapshot_task: asyncio.Task[None] | None = None
+        self._price_stream_task: asyncio.Task[None] | None = None
         self._subscribed = False
+        self._binance_ws: BinanceWebSocket | None = None
+        self._tracked_symbols: list[str] = []
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -43,6 +48,11 @@ class DashboardEventHub:
             self._drain_task.cancel()
         if self._snapshot_task and not self._snapshot_task.done():
             self._snapshot_task.cancel()
+        if self._price_stream_task and not self._price_stream_task.done():
+            self._price_stream_task.cancel()
+        if self._binance_ws is not None:
+            self._binance_ws.stop()
+            self._binance_ws = None
         for websocket in list(self.connections):
             try:
                 await websocket.close()
@@ -93,6 +103,8 @@ class DashboardEventHub:
             self._drain_task = asyncio.create_task(self._drain())
         if self._snapshot_task is None or self._snapshot_task.done():
             self._snapshot_task = asyncio.create_task(self._broadcast_snapshots())
+        if self._price_stream_task is None or self._price_stream_task.done():
+            self._price_stream_task = asyncio.create_task(self._sync_price_stream())
         if not self._subscribed:
             subscribe("*", self.handle_event)
             self._subscribed = True
@@ -107,7 +119,7 @@ class DashboardEventHub:
             except Exception:
                 logger.exception("Dashboard websocket broadcast failed")
 
-    async def _broadcast_snapshots(self, interval_seconds: int = 15) -> None:
+    async def _broadcast_snapshots(self, interval_seconds: int = 60) -> None:
         while True:
             await asyncio.sleep(interval_seconds)
             if not self.connections:
@@ -119,6 +131,95 @@ class DashboardEventHub:
                 })
             except Exception:
                 logger.exception("Periodic snapshot broadcast failed")
+
+    async def _sync_price_stream(self, interval_seconds: int = 10) -> None:
+        """Periodically check open positions and restart Binance WS if changed."""
+        while True:
+            await asyncio.sleep(interval_seconds)
+            if not self.connections:
+                continue
+            try:
+                symbols = self._open_position_symbols()
+                if symbols != self._tracked_symbols:
+                    self._restart_price_stream(symbols)
+            except Exception:
+                logger.exception("Realtime price stream sync failed")
+
+    def _open_position_symbols(self) -> list[str]:
+        snapshot = dashboard_service.snapshot()
+        paper = snapshot.get("paper", {}) if isinstance(snapshot, dict) else {}
+        positions = paper.get("open_positions", []) if isinstance(paper, dict) else []
+        if not isinstance(positions, list):
+            return []
+        symbols: list[str] = []
+        seen: set[str] = set()
+        for position in positions:
+            if not isinstance(position, dict):
+                continue
+            symbol = str(position.get("symbol") or "").strip().upper().replace("-", "/")
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            symbols.append(symbol)
+        return symbols
+
+    def _restart_price_stream(self, symbols: list[str]) -> None:
+        if self._binance_ws is not None:
+            self._binance_ws.stop()
+            self._binance_ws = None
+        self._tracked_symbols = symbols
+        if not symbols:
+            return
+        callbacks = BinanceStreamCallbacks(on_message=self._handle_price_message)
+        stream = BinanceWebSocket(callbacks=callbacks)
+        stream.subscribe_market_data(
+            symbols,
+            interval="1m",
+            include_kline=False,
+            include_mini_ticker=True,
+            include_book_ticker=True,
+        )
+        stream.start()
+        self._binance_ws = stream
+        logger.info("Started dashboard realtime price stream: %s", ", ".join(symbols))
+
+    def _handle_price_message(self, event: dict[str, Any]) -> None:
+        """Called from Binance WS thread — enqueue price_update for broadcast."""
+        symbol = self._symbol_from_stream_event(event)
+        price = self._price_from_stream_event(event)
+        if not symbol or price <= 0 or not self._loop or not self._queue:
+            return
+        message: dict[str, Any] = {
+            "type": "price_update",
+            "payload": {
+                "symbol": symbol,
+                "price": price,
+                "source": "binance_websocket",
+                "timestamp": utc_now_iso(),
+            },
+        }
+        try:
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+        except RuntimeError:
+            pass
+
+    def _symbol_from_stream_event(self, event: dict[str, Any]) -> str:
+        raw = str(event.get("s") or "").upper()
+        if not raw:
+            return ""
+        by_compact = {s.replace("/", ""): s for s in self._tracked_symbols}
+        return by_compact.get(raw, "")
+
+    def _price_from_stream_event(self, event: dict[str, Any]) -> float:
+        # miniTicker: c = close price; bookTicker: a = best ask, b = best bid
+        for key in ("c", "a", "b"):
+            value = event.get(key)
+            if value is not None:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+        return 0.0
 
 
 event_hub = DashboardEventHub()

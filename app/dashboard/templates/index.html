@@ -136,7 +136,8 @@
         </section>
 
         <section class="workspace view-section" data-view-section="orders">
-          <article id="orders" class="panel xwide"><div class="panel-head"><div><p>Execution</p><h2>Orders</h2></div><button class="ghost" type="button" onclick="sortOrders()">Sort</button></div><div id="live-orders" class="table skeleton-box"></div></article>
+          <article id="active-orders-card" class="panel xwide"><div class="panel-head"><div><p>Posisi Aktif</p><h2>Active Orders</h2></div><span class="pill live-pill">● realtime</span></div><div id="active-orders" class="table skeleton-box"></div></article>
+          <article id="orders" class="panel xwide"><div class="panel-head"><div><p>Execution</p><h2>Order History</h2></div><button class="ghost" type="button" onclick="sortOrders()">Sort</button></div><div id="live-orders" class="table skeleton-box"></div></article>
           <article id="journal" class="panel"><div class="panel-head"><div><p>Journal</p><h2>Trade Journal</h2></div><input id="journal-filter" placeholder="Filter journal" /></div><div id="journal-list" class="table"></div></article>
         </section>
 
@@ -153,13 +154,44 @@
         </section>
       </main>
     </div>
+    
+    <!-- Mobile Bottom Nav: 4 main + hamburger -->
     <nav class="bottom-nav">
       <a href="#overview" data-view-link="overview" class="active"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 10v10h14V10"/></svg><span>Home</span></a>
       <a href="#scanner" data-view-link="scanner"><svg viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4"/></svg><span>Scan</span></a>
-      <a href="#portfolio" data-view-link="portfolio"><svg viewBox="0 0 24 24"><path d="M5 7h14v10H5zM8 7V5h8v2"/></svg><span>Port</span></a>
+      <a href="#orders" data-view-link="orders"><svg viewBox="0 0 24 24"><path d="M6 5h12M6 12h12M6 19h8"/></svg><span>Orders</span></a>
       <a href="#analytics" data-view-link="analytics"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7"/></svg><span>Stats</span></a>
-      <a href="#health" data-view-link="health"><svg viewBox="0 0 24 24"><path d="M4 13h4l2-6 4 12 2-6h4"/></svg><span>Health</span></a>
+      <a href="#menu" class="nav-menu-btn" onclick="toggleMobileMenu(); return false;" aria-label="More menu">
+        <svg viewBox="0 0 24 24"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        <span>Menu</span>
+      </a>
     </nav>
+    
+    <!-- Mobile Menu Overlay -->
+    <div id="mobile-menu" class="mobile-menu" onclick="if(event.target===this) toggleMobileMenu()">
+      <div class="mobile-menu-content">
+        <div class="mobile-menu-header">
+          <h3>Menu</h3>
+          <button class="mobile-menu-close" onclick="toggleMobileMenu()" aria-label="Close menu">
+            <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <nav class="mobile-menu-nav">
+          <a href="#portfolio" data-view-link="portfolio" onclick="toggleMobileMenu()">
+            <svg viewBox="0 0 24 24"><path d="M5 7h14v10H5zM8 7V5h8v2"/></svg>
+            <span>Portfolio</span>
+          </a>
+          <a href="#health" data-view-link="health" onclick="toggleMobileMenu()">
+            <svg viewBox="0 0 24 24"><path d="M4 13h4l2-6 4 12 2-6h4"/></svg>
+            <span>Health</span>
+          </a>
+          <a href="#settings" data-view-link="settings" onclick="toggleMobileMenu()">
+            <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zM4 12h2m12 0h2M12 4v2m0 12v2"/></svg>
+            <span>Settings</span>
+          </a>
+        </nav>
+      </div>
+    </div>
         <script src="/static/dashboard.js"></script>
         <script>
         (function(){
@@ -625,7 +657,7 @@
             }
           }
 
-          document.addEventListener("DOMContentLoaded", ()=>{ tick(); setInterval(tick, 5000); });
+          document.addEventListener("DOMContentLoaded", ()=>{ tick(); });
         })();
         </script>
 

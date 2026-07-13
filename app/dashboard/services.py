@@ -201,15 +201,60 @@ class DashboardService:
         }
         return portfolio_synchronizer.sync_from_lifecycle(base, self.live_orders())
 
+    def _paper_order_history(self) -> list[dict[str, Any]]:
+        """Bangun riwayat order dari aktivitas paper trading.
+
+        Dipakai sebagai fallback untuk panel Order History ketika live order
+        store (`logs/live_orders.json`) belum ada, misalnya saat bot berjalan
+        di mode paper.
+        """
+        events = read_jsonl_file("logs/paper_trades.jsonl", limit=500)
+        history: list[dict[str, Any]] = []
+        for ev in events:
+            etype = ev.get("type")
+            if etype not in ("opened", "partial_close", "closed"):
+                continue
+            position = ev.get("position") if isinstance(ev.get("position"), dict) else {}
+            side = str(position.get("side", ev.get("action", "-")) or "-").upper()
+            if etype == "opened":
+                status = "FILLED"
+                qty = position.get("size", 0)
+            elif etype == "partial_close":
+                status = "PARTIAL"
+                qty = position.get("partial_size_closed", position.get("remaining_size", 0))
+            else:  # closed
+                status = "CLOSED"
+                qty = position.get("final_size_closed", position.get("size", 0))
+            history.append(
+                {
+                    "symbol": ev.get("symbol", "-"),
+                    "side": side,
+                    "status": status,
+                    "quantity": qty,
+                    "price": ev.get("price"),
+                    "reason": ev.get("reason"),
+                    "update_time": ev.get("timestamp"),
+                }
+            )
+        return history
+
     def live_orders(self) -> dict[str, Any]:
         snapshot = read_json_file("logs/live_orders.json", {})
         if not isinstance(snapshot, dict):
             snapshot = {}
+        open_orders = snapshot.get("open_orders", []) if isinstance(snapshot.get("open_orders"), list) else []
+        filled_orders = snapshot.get("filled_orders", []) if isinstance(snapshot.get("filled_orders"), list) else []
+        rejected_orders = snapshot.get("rejected_orders", []) if isinstance(snapshot.get("rejected_orders"), list) else []
+        order_history = snapshot.get("order_history", []) if isinstance(snapshot.get("order_history"), list) else []
+        # Fallback mode paper: kalau live order store kosong, tampilkan riwayat
+        # order dari paper trading agar panel Order History tetap terisi.
+        if not order_history and not open_orders and not filled_orders and not rejected_orders:
+            order_history = self._paper_order_history()
         return {
-            "open_orders": snapshot.get("open_orders", []) if isinstance(snapshot.get("open_orders"), list) else [],
-            "filled_orders": snapshot.get("filled_orders", []) if isinstance(snapshot.get("filled_orders"), list) else [],
-            "rejected_orders": snapshot.get("rejected_orders", []) if isinstance(snapshot.get("rejected_orders"), list) else [],
-            "order_history": snapshot.get("order_history", []) if isinstance(snapshot.get("order_history"), list) else [],
+            "open_orders": open_orders,
+            "filled_orders": filled_orders,
+            "rejected_orders": rejected_orders,
+            "order_history": order_history,
             "read_only": True,
         }
 
