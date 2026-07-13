@@ -12,7 +12,7 @@
       0.3,
       0.4
     ],
-    "trailing_activation_atr_multiple": 1.0,
-    "trailing_distance_atr_multiple": 1.5
+    "trailing_activation_atr_multiple": 1.5,
+    "trailing_distance_atr_multiple": 1.0
   }
 }

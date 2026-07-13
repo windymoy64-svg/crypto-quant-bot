@@ -17,11 +17,12 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
     current_atr = atr(candles)
     decimals = _price_decimals(entry)
     stop_loss = round(entry - (current_atr * 1.5), decimals)
-    take_profit = [round(entry + (current_atr * multiple), decimals) for multiple in (1.5, 2.5, 3.5)]
+    # Hybrid RR 1:2 ATR: TP multiples (2.0, 3.0, 4.5) = RR (1:1.33, 1:2, 1:3)
+    take_profit = [round(entry + (current_atr * multiple), decimals) for multiple in (2.0, 3.0, 4.5)]
     risk_per_unit = entry - stop_loss
     reward_per_unit = take_profit[1] - entry
     risk_reward = round(reward_per_unit / risk_per_unit, 2) if risk_per_unit else 0.0
-    risk = "LOW" if score.confidence >= 90 and risk_reward >= 1.5 else "MEDIUM" if score.confidence >= 80 else "HIGH"
+    risk = "LOW" if score.confidence >= 90 and risk_reward >= 2.0 else "MEDIUM" if score.confidence >= 80 else "HIGH"
 
     # Hitung gate dan failed_gates SEBELUM return
     gates = score.buckets.get("_gates", {}) if isinstance(score.buckets, dict) else {}
@@ -78,9 +79,10 @@ def build_short_signal(
 
     # Target mengikuti risk unit aktual, bukan ATR lama,
     # supaya risk/reward tetap konsisten.
+    # Hybrid RR 1:2 ATR: TP multiples (1.33, 2.0, 2.67) = RR (1:1.33, 1:2, 1:2.67)
     take_profit = [
         round(entry - (stop_distance * multiple), decimals)
-        for multiple in (1.0, 1.67, 2.33)
+        for multiple in (1.33, 2.0, 2.67)
     ]
 
     risk_per_unit = stop_loss - entry
@@ -93,7 +95,7 @@ def build_short_signal(
 
     risk = (
         "LOW"
-        if score.confidence >= 90 and risk_reward >= 1.5
+        if score.confidence >= 90 and risk_reward >= 2.0
         else "MEDIUM"
         if score.confidence >= 80
         else "HIGH"

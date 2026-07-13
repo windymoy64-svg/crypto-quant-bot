@@ -56,12 +56,12 @@ def calculate_position_size(
 
 @dataclass(frozen=True)
 class RiskSettings:
-    risk_per_trade_percent: float = 1.0
+    risk_per_trade_percent: float = 2.0  # Naik dari 1.0% ke 2.0% untuk RR 1:2
     max_position_size_percent: float = 95.0
     max_exposure_percent: float = 95.0
     max_open_positions: int = 1
     max_daily_drawdown_percent: float = 5.0
-    min_risk_reward: float = 1.2
+    min_risk_reward: float = 2.0  # Update dari 1.2 ke 2.0 (RR 1:2)
     min_atr_percent: float = 0.0
     max_atr_percent: float = 25.0
 

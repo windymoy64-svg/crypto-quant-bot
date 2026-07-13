@@ -415,12 +415,15 @@ class RealtimePaperTradingEngine:
             * self.config.auto_exit.trailing_distance_atr_multiple
         )
         previous = position.get("trailing_stop_loss")
+        entry_price = float(position["average_entry_price"])
 
         if self._is_short(position):
             candidate = (
                 float(position["lowest_price"])
                 + trailing_distance
             )
+            # Floor rule SHORT: trailing stop tidak boleh di atas entry (min profit = breakeven)
+            candidate = min(candidate, entry_price)
 
             if previous is None or candidate < float(previous):
                 position["trailing_stop_loss"] = round(
@@ -432,6 +435,8 @@ class RealtimePaperTradingEngine:
                 float(position["highest_price"])
                 - trailing_distance
             )
+            # Floor rule LONG: trailing stop tidak boleh di bawah entry (min profit = breakeven)
+            candidate = max(candidate, entry_price)
 
             if previous is None or candidate > float(previous):
                 position["trailing_stop_loss"] = round(
