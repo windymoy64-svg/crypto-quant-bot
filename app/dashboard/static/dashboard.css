@@ -331,6 +331,10 @@ body.menu-open{overflow:hidden}
 
 /* ---------- Responsive ---------- */
 @media(max-width:1100px){
+  /* Lepas fixed height 100% di mobile supaya dokumen bisa scroll natural.
+     html/body height:100% mengunci tinggi ke viewport (quirk iOS Safari)
+     sehingga konten panjang seperti Order History tidak bisa di-scroll. */
+  html,body{height:auto;min-height:100%}
   .app-shell{grid-template-columns:1fr}
   .sidebar{display:none}
   .workspace{grid-template-columns:1fr}
@@ -1077,6 +1081,179 @@ body.menu-open{overflow:hidden}
   .panel table:not(.ao-table) td:first-child::before {
     font-size: 10px;
   }
+}
+
+/* ===== EXECUTION ORDER HISTORY ===== */
+.order-history-scroll{
+  width:100%;
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
+.order-history-table{
+  width:100%;
+  border-collapse:separate;
+  border-spacing:0;
+  font-size:12px;
+  min-width:640px;
+}
+.order-history-table thead th{
+  padding:12px 14px;
+  text-align:left;
+  font-size:10px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:var(--txt-mute);
+  background:var(--bg-2);
+  border-bottom:1px solid var(--border);
+  white-space:nowrap;
+}
+.order-history-table tbody tr{
+  border-bottom:1px solid var(--border);
+  transition:background .16s ease;
+}
+.order-history-table tbody tr:last-child{border-bottom:0}
+.order-history-table tbody tr:hover{background:var(--bg-2)}
+.order-history-table td{
+  padding:12px 14px;
+  vertical-align:middle;
+  color:var(--txt);
+  white-space:nowrap;
+}
+/* Direction accent bar on the left of each row */
+.order-history-table tr.order-row td:first-child{
+  border-left:3px solid transparent;
+}
+.order-history-table tr.order-long td:first-child{border-left-color:var(--green)}
+.order-history-table tr.order-short td:first-child{border-left-color:var(--red)}
+
+/* Symbol + direction label */
+.order-sym{display:flex;flex-direction:column;gap:3px;line-height:1.1}
+.order-sym>span{font-weight:700;font-size:12.5px;color:var(--txt)}
+.order-dir{
+  font-size:9px;
+  font-weight:700;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  width:fit-content;
+  padding:1px 6px;
+  border-radius:999px;
+}
+.order-dir.order-long{color:var(--green);background:var(--green-bg);border:1px solid var(--green-br)}
+.order-dir.order-short{color:var(--red);background:var(--red-bg);border:1px solid var(--red-br)}
+
+/* Status badge */
+.order-badge{
+  display:inline-block;
+  padding:4px 9px;
+  border-radius:999px;
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+  white-space:nowrap;
+}
+.order-badge.status-filled{color:var(--green);background:var(--green-bg);border:1px solid var(--green-br)}
+.order-badge.status-partial{color:var(--amber);background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.26)}
+.order-badge.status-reject{color:var(--red);background:var(--red-bg);border:1px solid var(--red-br)}
+.order-badge.status-pending{color:var(--blue);background:var(--blue-bg);border:1px solid var(--blue-br)}
+
+/* Numeric columns */
+.order-qty,.order-price{font-variant-numeric:tabular-nums;color:var(--txt-dim)}
+.order-modal{font-variant-numeric:tabular-nums;color:var(--txt);font-weight:600}
+.order-pnl{font-variant-numeric:tabular-nums;font-weight:700}
+.order-pnl .pnl-pos{color:var(--green)}
+.order-pnl .pnl-neg{color:var(--red)}
+
+/* Reason (secondary) */
+.order-reason{color:var(--txt-mute)}
+.order-reason>span{
+  display:inline-block;
+  max-width:180px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  vertical-align:middle;
+}
+
+/* Time: HH:MM:SS with date underneath */
+.order-time{line-height:1.2}
+.order-time>span{display:block;font-variant-numeric:tabular-nums;color:var(--txt-dim);font-size:11.5px}
+.order-time>small{display:block;color:var(--txt-mute);font-size:9.5px}
+
+/* Mobile: turn the order table into clean stacked cards.
+   Scoped under #live-orders so these rules beat the generic
+   `.panel table:not(.ao-table)` mobile rules on specificity. */
+@media (max-width:640px){
+  /* Ikuti pola Active Orders (.ao-scroll) yang sudah bisa di-scroll di mobile:
+     card jadi flex container, wrapper dapat max-height + overflow-y:auto, dan
+     table diubah ke display:block supaya menghormati batas tinggi scroll. */
+  #orders{
+    overflow:visible;
+    display:flex;
+    flex-direction:column;
+  }
+  #live-orders{
+    overflow:visible;
+    flex:1;
+    min-height:0;
+  }
+  #live-orders .order-history-scroll{
+    overflow-x:hidden;
+    overflow-y:auto;
+    max-height:65vh;
+    -webkit-overflow-scrolling:touch;
+  }
+  #live-orders .order-history-scroll::-webkit-scrollbar{width:6px}
+  #live-orders .order-history-scroll::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:999px}
+  #live-orders .order-history-scroll::-webkit-scrollbar-track{background:transparent}
+  #live-orders .order-history-table{min-width:0;width:100%;display:block}
+  #live-orders .order-history-table thead{display:none}
+  #live-orders .order-history-table tbody{display:flex;flex-direction:column;gap:12px}
+  #live-orders .order-history-table tr.order-row{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:10px 12px;
+    padding:14px;
+    border:1px solid var(--border);
+    border-left-width:4px;
+    border-radius:14px;
+    background:var(--bg-2);
+    box-shadow:0 2px 6px rgba(0,0,0,.08);
+  }
+  #live-orders .order-history-table tr.order-long{border-left-color:var(--green)}
+  #live-orders .order-history-table tr.order-short{border-left-color:var(--red)}
+  #live-orders .order-history-table td{
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+    padding:0;
+    border:0;
+    white-space:normal;
+  }
+  #live-orders .order-history-table tr.order-row td:first-child{border-left:0}
+  #live-orders .order-history-table td::before{
+    content:attr(data-label);
+    font-size:9px;
+    font-weight:700;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    color:var(--txt-mute);
+  }
+  /* Symbol spans full width for emphasis */
+  #live-orders .order-history-table td.order-sym{grid-column:1 / -1}
+  #live-orders .order-history-table td.order-reason{grid-column:1 / -1}
+  #live-orders .order-history-table .order-reason>span{max-width:none;white-space:normal}
+  /* Urutan kartu di mobile: Reason diletakkan tepat di bawah Modal
+     agar lebih rapi (Symbol > Status/Qty > Price/Modal > Reason > PnL/Time). */
+  #live-orders .order-history-table td.order-sym{order:0}
+  #live-orders .order-history-table td.order-status{order:1}
+  #live-orders .order-history-table td.order-qty{order:2}
+  #live-orders .order-history-table td.order-price{order:3}
+  #live-orders .order-history-table td.order-modal{order:4}
+  #live-orders .order-history-table td.order-reason{order:5}
+  #live-orders .order-history-table td.order-pnl{order:6}
+  #live-orders .order-history-table td.order-time{order:7}
 }
 
 #pnl-stream .pnl-card.down{

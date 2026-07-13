@@ -212,19 +212,34 @@ class DashboardService:
         history: list[dict[str, Any]] = []
         for ev in events:
             etype = ev.get("type")
-            if etype not in ("opened", "partial_close", "closed"):
+            # Order History hanya berisi eksekusi yang menutup/mengurangi posisi
+            # (punya realized PnL). Event entry ("opened") tidak dimasukkan karena
+            # posisi yang masih aktif sudah tampil di panel "Active Orders", dan
+            # signal yang gagal entry ("ignored") memang bukan order tereksekusi.
+            if etype not in ("partial_close", "closed"):
                 continue
             position = ev.get("position") if isinstance(ev.get("position"), dict) else {}
             side = str(position.get("side", ev.get("action", "-")) or "-").upper()
-            if etype == "opened":
-                status = "FILLED"
-                qty = position.get("size", 0)
-            elif etype == "partial_close":
+            pnl: float | None = None
+            if etype == "partial_close":
                 status = "PARTIAL"
                 qty = position.get("partial_size_closed", position.get("remaining_size", 0))
+                # PnL terealisasi dari partial exit ini.
+                pnl = position.get("partial_realized_pnl", position.get("realized_pnl_partial"))
             else:  # closed
                 status = "CLOSED"
                 qty = position.get("final_size_closed", position.get("size", 0))
+                # PnL total posisi saat ditutup (mencakup semua partial + final).
+                pnl = position.get("realized_pnl", position.get("final_realized_pnl"))
+            # Modal = kapital saat entry (harga entry x ukuran posisi awal).
+            entry_price = position.get("entry")
+            entry_size = position.get("size")
+            modal: float | None = None
+            try:
+                if entry_price is not None and entry_size is not None:
+                    modal = float(entry_price) * float(entry_size)
+            except (TypeError, ValueError):
+                modal = None
             history.append(
                 {
                     "symbol": ev.get("symbol", "-"),
@@ -232,6 +247,9 @@ class DashboardService:
                     "status": status,
                     "quantity": qty,
                     "price": ev.get("price"),
+                    "entry": entry_price,
+                    "modal": modal,
+                    "pnl": pnl,
                     "reason": ev.get("reason"),
                     "update_time": ev.get("timestamp"),
                 }
