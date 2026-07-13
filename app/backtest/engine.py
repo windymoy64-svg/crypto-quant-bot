@@ -36,6 +36,7 @@ class BacktestConfig:
     max_fill_ratio: float = 1.0
     min_fill_ratio: float = 0.25
     risk_per_trade_percent: float = 2.0  # Update dari 1.0% ke 2.0%
+    max_position_size_percent: float = 15.0  # Satu posisi max 15% balance — aggressive setting
     max_exposure_percent: float = 95.0
     max_open_positions: int = 1
     max_daily_drawdown_percent: float = 5.0

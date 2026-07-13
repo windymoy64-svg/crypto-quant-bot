@@ -46,6 +46,7 @@ class PaperTradingConfig:
     max_open_positions: int
     state_path: str
     trades_path: str
+    max_position_size_percent: float = 15.0  # Tambah field: satu posisi max 15% balance
     auto_exit: AutoExitConfig = field(default_factory=AutoExitConfig)
 
     @classmethod
@@ -73,6 +74,9 @@ class PaperTradingConfig:
             ),
             trades_path=str(
                 data.get("trades_path", "logs/paper_trades.jsonl")
+            ),
+            max_position_size_percent=float(
+                data.get("max_position_size_percent", 15.0)
             ),
             auto_exit=AutoExitConfig.from_dict(auto_exit_data),
         )
@@ -201,6 +205,7 @@ class RealtimePaperTradingEngine:
             risk_percent=self.config.risk_percent,
             entry=entry,
             stop_loss=stop_loss,
+            max_position_percent=self.config.max_position_size_percent,
         )
 
         if size <= 0:
