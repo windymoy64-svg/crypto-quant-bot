@@ -181,8 +181,23 @@ class RealtimePaperTradingEngine:
                 signal,
             )
 
+        # Calculate available balance (total balance - used capital from open positions)
+        used_capital = sum(
+            float(pos.get("entry", 0)) * float(pos.get("remaining_size", 0))
+            for pos in open_positions.values()
+        )
+        available = float(state["balance"]) - used_capital
+        
+        if available <= 0:
+            return self._event(
+                "ignored",
+                symbol,
+                "no_available_balance",
+                signal,
+            )
+
         size = calculate_position_size(
-            account_balance=float(state["balance"]),
+            account_balance=available,
             risk_percent=self.config.risk_percent,
             entry=entry,
             stop_loss=stop_loss,
@@ -560,7 +575,7 @@ class RealtimePaperTradingEngine:
             **position,
             "partial_exit_price": exit_price,
             "partial_size_closed": round(size_to_close, 8),
-            "partial_realized_pnl": round(pnl_partial, 2),
+            "partial_realized_pnl": round(pnl_partial, 8),
             "partial_reason": reason,
         }
 
@@ -611,8 +626,8 @@ class RealtimePaperTradingEngine:
             "exit": exit_price,
             "closed_at": self._now(),
             "final_size_closed": round(remaining, 8),
-            "final_realized_pnl": round(pnl_final, 2),
-            "realized_pnl": total_pnl,
+            "final_realized_pnl": round(pnl_final, 8),
+            "realized_pnl": round(total_pnl, 8),
             "close_reason": reason,
         }
 

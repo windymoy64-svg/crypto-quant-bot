@@ -66,26 +66,29 @@ def reset_daily_data() -> None:
 def start_scheduler() -> None:
     """Start background scheduler dengan daily reset job jam 00:00 UTC (07:00 WIB)."""
     global _scheduler
-    
-    if _scheduler is not None:
-        logger.warning("Scheduler already running, skipping start")
-        return
-    
-    _scheduler = BackgroundScheduler(timezone="UTC")
-    
-    # Job daily reset jam 00:00 UTC = 07:00 WIB
-    # Karena WIB = UTC+7, maka 07:00 WIB = 00:00 UTC
-    trigger = CronTrigger(hour=0, minute=0, second=0, timezone="UTC")
-    _scheduler.add_job(
-        reset_daily_data,
-        trigger=trigger,
-        id="daily_reset_wib",
-        name="Daily Reset 07:00 WIB",
-        replace_existing=True,
-    )
-    
-    _scheduler.start()
-    logger.info("Scheduler started with daily reset job at 00:00 UTC (07:00 WIB)")
+
+    try:
+        if _scheduler is not None:
+            logger.warning("Scheduler already running, skipping start")
+            return
+
+        logger.info("Starting daily reset scheduler...")
+        _scheduler = BackgroundScheduler(timezone="UTC")
+
+        trigger = CronTrigger(hour=0, minute=0, second=0, timezone="UTC")
+        _scheduler.add_job(
+            reset_daily_data,
+            trigger=trigger,
+            id="daily_reset_wib",
+            name="Daily Reset 07:00 WIB",
+            replace_existing=True,
+        )
+
+        _scheduler.start()
+        logger.info("Scheduler started: daily reset at 00:00 UTC (07:00 WIB)")
+    except Exception:
+        logger.exception("Scheduler start failed")
+        _scheduler = None
 
 
 def shutdown_scheduler() -> None:
