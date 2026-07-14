@@ -119,7 +119,7 @@ class DashboardEventHub:
             except Exception:
                 logger.exception("Dashboard websocket broadcast failed")
 
-    async def _broadcast_snapshots(self, interval_seconds: int = 60) -> None:
+    async def _broadcast_snapshots(self, interval_seconds: int = 5) -> None:
         while True:
             await asyncio.sleep(interval_seconds)
             if not self.connections:

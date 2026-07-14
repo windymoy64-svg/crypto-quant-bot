@@ -531,6 +531,10 @@ class RealtimePaperTradingEngine:
                 hits[index] = True
                 position["tp_hit"] = hits
                 position["trailing_active"] = True
+                # After TP1 hit: move SL to breakeven for "free ride"
+                if index == 0:
+                    entry_price = float(position["entry"])
+                    position["static_stop_loss"] = round(entry_price, 8)
 
         return events
 

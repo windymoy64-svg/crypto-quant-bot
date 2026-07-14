@@ -2,6 +2,12 @@
 
 from app.core.models import Candle, ScoreResult, TradingSignal
 from app.indicators.technical import atr
+from app.indicators.structure import (
+    find_nearest_resistance,
+    find_nearest_support,
+    find_swing_high,
+    find_swing_low,
+)
 
 def _price_decimals(price: float) -> int:
     """Pembulatan adaptif berdasarkan magnitudo harga."""
@@ -16,14 +22,35 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
     entry = candles[-1].close
     current_atr = atr(candles)
     decimals = _price_decimals(entry)
-    # ponytail: use minimum 0.3% stop when ATR too small, upgrade to adaptive ATR bands when volatility regime detection added
-    minimum_stop_distance = entry * 0.003
-    stop_distance = max(current_atr * 3.0, minimum_stop_distance)
-    stop_loss = round(entry - stop_distance, decimals)
-    # Hybrid RR 1:2 ATR: TP multiples (2.0, 3.0, 4.5) = RR (1:1.33, 1:2, 1:3)
-    take_profit = [round(entry + (current_atr * multiple), decimals) for multiple in (2.0, 3.0, 4.5)]
+    
+    # SL: Structure-based with ATR buffer
+    swing_low = find_swing_low(candles, lookback=10)
+    if swing_low and swing_low < entry:
+        # Place SL below swing low with 0.5×ATR buffer
+        stop_loss = round(swing_low - (current_atr * 0.5), decimals)
+    else:
+        # Fallback: ATR-based if no structure found
+        minimum_stop_distance = entry * 0.003
+        stop_distance = max(current_atr * 1.5, minimum_stop_distance)
+        stop_loss = round(entry - stop_distance, decimals)
+    
+    # TP: Resistance-based with ATR fallback, RR minimum 1:2
     risk_per_unit = entry - stop_loss
-    reward_per_unit = take_profit[1] - entry
+    min_tp1_distance = risk_per_unit * 2.0  # Force 1:2 RR minimum
+    
+    # TP1: Nearest resistance or 2R
+    resistance = find_nearest_resistance(candles, entry, lookback=30)
+    if resistance and resistance >= entry + min_tp1_distance:
+        tp1 = round(resistance, decimals)
+    else:
+        tp1 = round(entry + min_tp1_distance, decimals)
+    
+    # TP2 & TP3: ATR extensions from TP1
+    tp2 = round(tp1 + (current_atr * 1.5), decimals)
+    tp3 = round(tp1 + (current_atr * 3.0), decimals)
+    
+    take_profit = [tp1, tp2, tp3]
+    reward_per_unit = take_profit[0] - entry  # Use TP1 for RR calc
     risk_reward = round(reward_per_unit / risk_per_unit, 2) if risk_per_unit else 0.0
     risk = "LOW" if score.confidence >= 90 and risk_reward >= 2.0 else "MEDIUM" if score.confidence >= 80 else "HIGH"
 
@@ -60,37 +87,40 @@ def build_short_signal(
     candles: list[Candle],
     score: ScoreResult,
 ) -> TradingSignal:
-    """Membangun kandidat SHORT tanpa mengubah builder LONG."""
+    """Build SHORT signal with structure-based SL/TP."""
 
     entry = candles[-1].close
     current_atr = atr(candles)
     decimals = _price_decimals(entry)
 
-    # SHORT: SL di atas entry, TP di bawah entry.
-    # Jarak risiko minimal 0,3% agar lolos proteksi sizing (turun dari 0.51%).
-    # ponytail: 0.3% allows more trades in low volatility, add regime filter when needed
-    atr_stop_distance = current_atr * 1.5
-    minimum_stop_distance = entry * 0.003
-    stop_distance = max(
-        atr_stop_distance,
-        minimum_stop_distance,
-    )
-
-    stop_loss = round(
-        entry + stop_distance,
-        decimals,
-    )
-
-    # Target mengikuti risk unit aktual, bukan ATR lama,
-    # supaya risk/reward tetap konsisten.
-    # Hybrid RR 1:2 ATR: TP multiples (1.33, 2.0, 2.67) = RR (1:1.33, 1:2, 1:2.67)
-    take_profit = [
-        round(entry - (stop_distance * multiple), decimals)
-        for multiple in (1.33, 2.0, 2.67)
-    ]
-
+    # SL: Structure-based with ATR buffer
+    swing_high = find_swing_high(candles, lookback=10)
+    if swing_high and swing_high > entry:
+        # Place SL above swing high with 0.5×ATR buffer
+        stop_loss = round(swing_high + (current_atr * 0.5), decimals)
+    else:
+        # Fallback: ATR-based if no structure found
+        minimum_stop_distance = entry * 0.003
+        stop_distance = max(current_atr * 1.5, minimum_stop_distance)
+        stop_loss = round(entry + stop_distance, decimals)
+    
+    # TP: Support-based with ATR fallback, RR minimum 1:2
     risk_per_unit = stop_loss - entry
-    reward_per_unit = entry - take_profit[1]
+    min_tp1_distance = risk_per_unit * 2.0  # Force 1:2 RR minimum
+    
+    # TP1: Nearest support or 2R
+    support = find_nearest_support(candles, entry, lookback=30)
+    if support and support <= entry - min_tp1_distance:
+        tp1 = round(support, decimals)
+    else:
+        tp1 = round(entry - min_tp1_distance, decimals)
+    
+    # TP2 & TP3: ATR extensions from TP1
+    tp2 = round(tp1 - (current_atr * 1.5), decimals)
+    tp3 = round(tp1 - (current_atr * 3.0), decimals)
+    
+    take_profit = [tp1, tp2, tp3]
+    reward_per_unit = entry - take_profit[0]  # Use TP1 for RR calc
     risk_reward = (
         round(reward_per_unit / risk_per_unit, 2)
         if risk_per_unit > 0
