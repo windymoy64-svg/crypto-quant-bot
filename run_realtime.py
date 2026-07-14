@@ -464,10 +464,20 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
     )
     paper_config: PaperTradingConfig | None = None
     open_position_symbols: list[str] = []
+    telegram_notifier = None
     if paper_enabled:
         paper_config = PaperTradingConfig.from_dict(
             load_json(paper_config_path)
         )
+        open_position_symbols = load_open_position_symbols(
+            paper_config.state_path
+        )
+        
+        # Initialize telegram notifier for trade reports
+        telegram_enabled = bool(runtime_config.get("telegram_enabled", False))
+        if telegram_enabled:
+            from app.telegram import TelegramNotifier
+            telegram_notifier = TelegramNotifier(enabled=True)
         open_position_symbols = load_open_position_symbols(
             paper_config.state_path
         )
@@ -525,7 +535,8 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
         )
 
         paper = RealtimePaperTradingEngine(
-            paper_config
+            paper_config,
+            telegram_notifier
         ).process_signals(paper_signals)
 
     live_decisions: list[dict[str, object]] = []

@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from app.risk.manager import calculate_position_size
 
@@ -83,8 +84,9 @@ class PaperTradingConfig:
 
 
 class RealtimePaperTradingEngine:
-    def __init__(self, config: PaperTradingConfig) -> None:
+    def __init__(self, config: PaperTradingConfig, telegram_notifier: Any = None) -> None:
         self.config = config
+        self.telegram_notifier = telegram_notifier
 
     def process_signals(
         self,
@@ -106,6 +108,13 @@ class RealtimePaperTradingEngine:
 
         for event in events:
             self._append_trade_event(event)
+            # Pass signal for detailed reasoning in telegram report
+            for sig in signals:
+                if sig.get("symbol") == event.get("symbol"):
+                    self._send_telegram_report(event, sig)
+                    break
+            else:
+                self._send_telegram_report(event, None)
 
         return {
             "enabled": self.config.enabled,
@@ -799,6 +808,19 @@ class RealtimePaperTradingEngine:
             "confidence": signal.get("confidence"),
             "position": position,
         }
+
+    def _send_telegram_report(self, event: dict[str, object], signal: dict[str, object] | None = None) -> None:
+        """Send trade report to Telegram if notifier is configured"""
+        if self.telegram_notifier is None:
+            return
+        
+        from app.telegram.trade_reporter import send_trade_report
+        
+        try:
+            event_with_signal = {**event, "signal": signal}
+            send_trade_report(self.telegram_notifier, event_with_signal)
+        except Exception:
+            pass  # Silently skip if reporting fails
 
     def _now(self) -> str:
         return datetime.now(tz=UTC).isoformat()
