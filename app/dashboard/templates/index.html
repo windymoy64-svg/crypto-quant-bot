@@ -662,9 +662,13 @@
 
           document.addEventListener("DOMContentLoaded", ()=>{ 
             tick(); 
-            // Auto-refresh KPI dan PnL setiap 30 detik
-            setInterval(tick, 30000);
+            // Auto-refresh KPI dan PnL setiap 5 detik (sinkron dengan WebSocket snapshot)
+            setInterval(tick, 5000);
           });
+
+          // Expose renderPnl agar dashboard.js bisa memanggilnya pada setiap
+          // price_update WebSocket -> P&L Stream ikut update sub-detik seperti Active Orders.
+          window.renderPnl = renderPnl;
         })();
         </script>
 
