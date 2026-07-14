@@ -46,11 +46,6 @@ def calculate_position_size(
     # Ambil yang lebih kecil — mana yang lebih ketat
     size = min(size_by_risk, size_by_notional)
 
-    # Batas 3: SL terlalu dekat (< 0.5% dari entry) → tolak
-    sl_distance_pct = (risk_per_unit / entry) * 100
-    if sl_distance_pct < 0.5:
-        return 0.0
-
     return round(size, 8)
 
 

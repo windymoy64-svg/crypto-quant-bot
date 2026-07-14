@@ -171,20 +171,6 @@ class RealtimePaperTradingEngine:
                 signal,
             )
 
-        sl_distance_pct = (
-            abs(entry - stop_loss) / entry * 100
-            if entry > 0
-            else 0.0
-        )
-
-        if sl_distance_pct < 0.5:
-            return self._event(
-                "ignored",
-                symbol,
-                "stop_distance_below_0_5_percent",
-                signal,
-            )
-
         # Calculate available balance (total balance - used capital from open positions)
         used_capital = sum(
             float(pos.get("entry", 0)) * float(pos.get("remaining_size", 0))

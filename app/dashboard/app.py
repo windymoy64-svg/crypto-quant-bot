@@ -146,6 +146,17 @@ def _register_compat_routes(dashboard: FastAPI) -> None:
 
     @dashboard.get("/", response_class=HTMLResponse)
     def index(request: Request) -> HTMLResponse:
+        api_key = os.getenv("BOT_API_KEY")
+        # Cache-busting: pakai mtime file statis supaya browser fetch ulang
+        # setiap deploy. Nginx boleh cache aman dengan header immutable.
+        static_dir = Path(__file__).parent / "static"
+        try:
+            asset_version = str(int(max(
+                (static_dir / "dashboard.js").stat().st_mtime,
+                (static_dir / "dashboard.css").stat().st_mtime,
+            )))
+        except OSError:
+            asset_version = "0"
         response = templates.TemplateResponse(
             request=request,
             name="index.html",
@@ -154,9 +165,17 @@ def _register_compat_routes(dashboard: FastAPI) -> None:
                 "app_name": "Crypto Quant Bot",
                 "release": "v1.0",
                 "read_only": True,
+                # Diserahkan ke <meta name="dashboard-token"> agar JS bisa
+                # melampirkan token ke query WebSocket. Cookie httponly di
+                # bawah tetap dipertahankan untuk request HTTP.
+                "api_key": api_key or "",
+                "asset_version": asset_version,
             },
         )
-        api_key = os.getenv("BOT_API_KEY")
+        # Force fresh HTML setiap load supaya token dan versi asset ikut
+        # keluar terbaru; asset .css/.js tetap aman di-cache karena URL-nya
+        # sudah di-versionkan.
+        response.headers["Cache-Control"] = "no-store"
         cookie_secure = os.getenv("DASHBOARD_COOKIE_SECURE", "false").lower() in {
             "1",
             "true",

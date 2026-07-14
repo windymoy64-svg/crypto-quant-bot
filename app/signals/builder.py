@@ -16,7 +16,7 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
     entry = candles[-1].close
     current_atr = atr(candles)
     decimals = _price_decimals(entry)
-    stop_loss = round(entry - (current_atr * 1.5), decimals)
+    stop_loss = round(entry - (current_atr * 3.0), decimals)
     # Hybrid RR 1:2 ATR: TP multiples (2.0, 3.0, 4.5) = RR (1:1.33, 1:2, 1:3)
     take_profit = [round(entry + (current_atr * multiple), decimals) for multiple in (2.0, 3.0, 4.5)]
     risk_per_unit = entry - stop_loss

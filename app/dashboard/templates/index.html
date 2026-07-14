@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="dashboard-token" content="{{ api_key }}" />
     <title>{{ app_name }} {{ release }}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -11,7 +12,7 @@
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-    <link rel="stylesheet" href="/static/dashboard.css" />
+    <link rel="stylesheet" href="/static/dashboard.css?v={{ asset_version }}" />
   </head>
   <body>
     <div class="app-shell">
@@ -192,7 +193,7 @@
         </nav>
       </div>
     </div>
-        <script src="/static/dashboard.js"></script>
+        <script src="/static/dashboard.js?v={{ asset_version }}"></script>
         <script>
         (function(){
           const pct = n => (n>=0?"▲ +":"▼ ") + Math.abs(Number(n||0)).toFixed(2) + "%";

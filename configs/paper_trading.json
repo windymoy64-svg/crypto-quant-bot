@@ -4,8 +4,8 @@
   "risk_percent": 2,
   "max_open_positions": 20,
   "max_position_size_percent": 15.0,
-  "state_path": "/tmp/paper_state.json",
-  "trades_path": "/tmp/paper_trades.jsonl",
+  "state_path": "logs/paper_state.json",
+  "trades_path": "logs/paper_trades.jsonl",
   "auto_exit": {
     "enabled": true,
     "tp_fractions": [

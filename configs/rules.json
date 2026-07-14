@@ -2,11 +2,11 @@
   "buy_confidence": 85,
   "watch_confidence": 75,
   "quality_gates": {
-    "trend":        { "min_score": 33, "max_score": 55 },
-    "momentum":     { "min_score": 28, "max_score": 51 },
-    "price_action": { "min_score": 22, "max_score": 41 },
-    "volume":       { "min_score": 10, "max_score": 19 },
-    "volatility":   { "min_score": 10, "max_score": 23 }
+    "trend":        { "min_score": 20, "max_score": 100 },
+    "momentum":     { "min_score": 15, "max_score": 100 },
+    "price_action": { "min_score": 10, "max_score": 100 },
+    "volume":       { "min_score": 0,  "max_score": 100 },
+    "volatility":   { "min_score": 0,  "max_score": 100 }
   },
   "rules": [
     {

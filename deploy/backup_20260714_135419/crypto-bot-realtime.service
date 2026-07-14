@@ -1,0 +1,26 @@
+[Unit]
+Description=Crypto Quant Bot - Realtime Paper Trading
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/crypto-quant-bot
+ExecStart=/opt/crypto-quant-bot/.venv/bin/python /opt/crypto-quant-bot/run_realtime.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/tmp/bot_realtime.log
+StandardError=append:/tmp/bot_realtime.log
+
+# Prevent duplicate processes
+PIDFile=/var/run/crypto-bot-realtime.pid
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=1G
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

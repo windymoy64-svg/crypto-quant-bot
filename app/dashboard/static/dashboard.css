@@ -827,6 +827,12 @@ body.menu-open{overflow:hidden}
   animation: pulse-warn 0.8s infinite;
 }
 
+.ao-tp.tp-near {
+  color: var(--amber);
+  font-weight: 700;
+  animation: pulse-warn 0.8s infinite;
+}
+
 .ao-trail.trail-active {
   color: var(--green);
   font-weight: 700;
