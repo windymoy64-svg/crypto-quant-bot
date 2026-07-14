@@ -5,6 +5,6 @@
   "paper_trading_enabled": true,
   "live_execution_enabled": false,
   "interval_seconds": 60,
-  "latest_output": "logs/latest_signals.json",
-  "history_output": "logs/signals.jsonl"
+  "latest_output": "/tmp/latest_signals.json",
+  "history_output": "/tmp/signals.jsonl"
 }

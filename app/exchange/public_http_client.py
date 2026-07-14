@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import socket
 from datetime import UTC, datetime
+from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -13,6 +15,7 @@ class PublicHttpExchangeClient(ExchangeClient):
     def __init__(self, exchange_id: str = "binance", timeout_seconds: int = 10) -> None:
         self.exchange_id = exchange_id.lower()
         self.timeout_seconds = timeout_seconds
+        socket.setdefaulttimeout(timeout_seconds)
 
     def fetch_candles(self, symbol: str, timeframe: str = "1m", limit: int = 100) -> list[Candle]:
         if self.exchange_id == "binance":
@@ -167,8 +170,13 @@ class PublicHttpExchangeClient(ExchangeClient):
     def _get_json(self, url: str, params: dict[str, str | int]) -> object:
         query = urlencode(params)
         full_url = f"{url}?{query}" if query else url
-        with urlopen(full_url, timeout=self.timeout_seconds) as response:
-            return json.loads(response.read().decode("utf-8"))
+        try:
+            with urlopen(full_url, timeout=self.timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except (socket.timeout, URLError) as exc:
+            # Return empty dict on timeout - caller handles it
+            print(f"API timeout/error {url}: {exc}", flush=True)
+            return {}
 
     def _format_timestamp(self, value: int | float | str) -> str:
         return datetime.fromtimestamp(float(value) / 1000, tz=UTC).isoformat()

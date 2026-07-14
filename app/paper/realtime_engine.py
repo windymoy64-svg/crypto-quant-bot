@@ -420,7 +420,7 @@ class RealtimePaperTradingEngine:
             * self.config.auto_exit.trailing_distance_atr_multiple
         )
         previous = position.get("trailing_stop_loss")
-        entry_price = float(position["average_entry_price"])
+        entry_price = float(position["entry"])
 
         if self._is_short(position):
             candidate = (
