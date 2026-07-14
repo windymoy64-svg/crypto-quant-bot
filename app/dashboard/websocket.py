@@ -234,7 +234,8 @@ async def dashboard_ws(websocket: WebSocket) -> None:
         or websocket.cookies.get("dashboard_token")
     )
     if expected and token != expected:
-        await websocket.close(code=1008)
+        await websocket.accept()
+        await websocket.close(code=1008, reason="Unauthorized")
         return
     await event_hub.connect(websocket)
     try:

@@ -16,7 +16,10 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
     entry = candles[-1].close
     current_atr = atr(candles)
     decimals = _price_decimals(entry)
-    stop_loss = round(entry - (current_atr * 3.0), decimals)
+    # ponytail: use minimum 0.3% stop when ATR too small, upgrade to adaptive ATR bands when volatility regime detection added
+    minimum_stop_distance = entry * 0.003
+    stop_distance = max(current_atr * 3.0, minimum_stop_distance)
+    stop_loss = round(entry - stop_distance, decimals)
     # Hybrid RR 1:2 ATR: TP multiples (2.0, 3.0, 4.5) = RR (1:1.33, 1:2, 1:3)
     take_profit = [round(entry + (current_atr * multiple), decimals) for multiple in (2.0, 3.0, 4.5)]
     risk_per_unit = entry - stop_loss
@@ -64,9 +67,10 @@ def build_short_signal(
     decimals = _price_decimals(entry)
 
     # SHORT: SL di atas entry, TP di bawah entry.
-    # Jarak risiko wajib minimal 0,5% agar lolos proteksi sizing.
+    # Jarak risiko minimal 0,3% agar lolos proteksi sizing (turun dari 0.51%).
+    # ponytail: 0.3% allows more trades in low volatility, add regime filter when needed
     atr_stop_distance = current_atr * 1.5
-    minimum_stop_distance = entry * 0.0051
+    minimum_stop_distance = entry * 0.003
     stop_distance = max(
         atr_stop_distance,
         minimum_stop_distance,
