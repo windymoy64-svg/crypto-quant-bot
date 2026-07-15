@@ -2,7 +2,7 @@
   "exchange": "binance",
   "timeframe": "1m",
   "limit": 100,
-  "symbol_mode": "static",
+  "symbol_mode": "top_volume",
   "quote_asset": "USDT",
   "prefilter_top_n": 100,
   "top_n": 20,

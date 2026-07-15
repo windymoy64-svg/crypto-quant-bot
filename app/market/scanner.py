@@ -32,6 +32,8 @@ class ScanItem:
     short_stop_loss: float
     short_take_profit: list[float]
     short_risk_reward: float
+    meta: dict[str, object] = field(default_factory=dict)
+    short_meta: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -174,6 +176,11 @@ def scan_symbol_rankings(
             if short_score_result is not None
             else None
         )
+        short_meta = (
+            getattr(short_signal, "meta", {}) or {}
+            if short_signal is not None
+            else {}
+        )
 
         if short_score_result is None:
             short_action = "DISABLED"
@@ -234,6 +241,8 @@ def scan_symbol_rankings(
                     if short_signal is not None
                     else 0.0
                 ),
+                meta=long_meta,
+                short_meta=short_meta,
             )
         )
 

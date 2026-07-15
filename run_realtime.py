@@ -477,7 +477,7 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
         telegram_enabled = bool(runtime_config.get("telegram_enabled", False))
         if telegram_enabled:
             from app.telegram import TelegramNotifier
-            telegram_notifier = TelegramNotifier(enabled=True)
+            telegram_notifier = TelegramNotifier(enabled=True, live=True)
         open_position_symbols = load_open_position_symbols(
             paper_config.state_path
         )

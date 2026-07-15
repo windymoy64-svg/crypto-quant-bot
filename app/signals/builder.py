@@ -66,6 +66,7 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
         "risk_fails": score.buckets.get("_risk_fails"),
         "passed_rules": [rule.rule_id for rule in score.rules if rule.passed],
         "failed_rules": [rule.rule_id for rule in score.rules if not rule.passed],
+        "passed_rule_names": [rule.rule_name for rule in score.rules if rule.passed],
     }
 
     return TradingSignal(
@@ -163,6 +164,9 @@ def build_short_signal(
         ],
         "failed_rules": [
             rule.rule_id for rule in score.rules if not rule.passed
+        ],
+        "passed_rule_names": [
+            rule.rule_name for rule in score.rules if rule.passed
         ],
     }
 

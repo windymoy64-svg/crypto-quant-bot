@@ -85,7 +85,16 @@ class TradeReporter:
                     top_rules = rules[:2]  # Show top 2 rules
                     reason_parts.append(f"Rules: {', '.join(top_rules)}")
 
-        reason_text = " | ".join(reason_parts) if reason_parts else "Signal BUY detected"
+        # Prefer the precomputed entry reason stored on the position by the
+        # engine (score, RR, and passed rule names). Fall back to any meta the
+        # signal happens to carry, then to a generic label.
+        entry_reason = str(position.get("entry_reason", "")).strip()
+        if entry_reason:
+            reason_text = entry_reason
+        elif reason_parts:
+            reason_text = " | ".join(reason_parts)
+        else:
+            reason_text = "Signal BUY detected"
 
         msg = f"""🟢 ENTRY POSITION
 
@@ -132,6 +141,7 @@ Reason:
         pnl_pct = (pnl / modal * 100) if modal > 0 else 0
         
         reason = position.get("close_reason", position.get("reason", "unknown"))
+        entry_reason = str(position.get("entry_reason", "")).strip()
         
         # Determine reason label
         reason_map = {
@@ -170,6 +180,7 @@ Trailing Active: {'Yes' if trailing_active else 'No'}
 
 Realized P&L: ${pnl:,.2f} ({pnl_pct:+.2f}%)
 Close Reason: {reason_label}
+Entry Reason: {entry_reason or "-"}
 """
         return msg.strip()
 

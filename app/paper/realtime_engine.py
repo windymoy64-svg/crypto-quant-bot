@@ -233,6 +233,7 @@ class RealtimePaperTradingEngine:
             "last_price": entry,
             "unrealized_pnl": 0.0,
             "confidence": float(signal["confidence"]),
+            "entry_reason": self._build_entry_reason(signal, side),
         }
 
         open_positions[symbol] = position
@@ -812,6 +813,45 @@ class RealtimePaperTradingEngine:
             "confidence": signal.get("confidence"),
             "position": position,
         }
+
+    def _build_entry_reason(self, signal: dict[str, object], side: str) -> str:
+        """Susun ringkasan alasan teknis entry dari meta signal.
+
+        SHORT memakai short_meta bila tersedia, LONG memakai meta biasa.
+        Menampilkan skor, RR, dan rule teknis yang lolos (maks 5).
+        """
+        meta = signal.get("meta") or {}
+        if side == "SHORT":
+            short_meta = signal.get("short_meta") or {}
+            if isinstance(short_meta, dict) and short_meta:
+                meta = short_meta
+
+        parts: list[str] = []
+        score = signal.get("score")
+        if score is not None:
+            parts.append(f"Score {float(score):.0f}")
+
+        rr = signal.get("risk_reward")
+        if rr:
+            parts.append(f"RR {float(rr):.1f}:1")
+
+        rule_names: list[str] = []
+        if isinstance(meta, dict):
+            names = meta.get("passed_rule_names")
+            if isinstance(names, list):
+                rule_names = [str(name) for name in names if str(name).strip()]
+
+        if rule_names:
+            shown = ", ".join(rule_names[:5])
+            extra = len(rule_names) - 5
+            if extra > 0:
+                shown += f" (+{extra} lainnya)"
+            parts.append(f"Rules: {shown}")
+
+        if not parts:
+            return "Sinyal " + ("SHORT" if side == "SHORT" else "BUY") + " terdeteksi"
+
+        return " | ".join(parts)
 
     def _send_telegram_report(self, event: dict[str, object], signal: dict[str, object] | None = None) -> None:
         """Send trade report to Telegram if notifier is configured"""
