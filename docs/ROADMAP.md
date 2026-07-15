@@ -37,11 +37,15 @@ Dokumen ini menjadi pegangan sprint berikutnya. Status saat ini: Sprint 23 (Stra
 22. Sprint 22 - order lifecycle store, portfolio reconciliation, portfolio sync, telegram control center read-only, monitoring health.
 23. Final Release - hardening production (Dockerfile, docker-compose, nginx, logging, `.env`, guide `docs/PRODUCTION_READY.md`, audit `docs/PRODUCTION_AUDIT.md`).
 24. Sprint 23 - strategy validation research layer (`app/research/*`, `run_research.py`, laporan JSON/HTML/CSV, dokumentasi `docs/STRATEGY_VALIDATION.md`, checkpoint `docs/CHECKPOINT_SPRINT_23_RESEARCH.md`).
+25. Sprint 24 - dokumen spesifikasi strategi Liquidity + S/R + Trend + Multi-Timeframe (`docs/strategy_liquidity_sr_mtf.md`, checkpoint `docs/CHECKPOINT_SPRINT_24_STRATEGY_DOC.md`). Dokumen saja, tidak ada perubahan kode.
+26. Sprint 25 - indikator baru untuk strategi Liquidity + S/R + Trend + MTF (`app/indicators/liquidity_structure.py`): `swing_points`, `structure_state`, `sr_zones`, `liquidity_pools`, `sweep_events`. Fungsi pure, deterministic, JSON-serializable. 18 unit test baru di `tests/test_liquidity_structure.py`. Backward compatibility `app/indicators/structure.py` dan `technical.py` dijaga. Checkpoint `docs/CHECKPOINT_SPRINT_25_INDICATORS.md`.
+27. Sprint 26 - strategi baru `app/strategies/liquidity_sr_mtf.py` yang mengonsumsi indikator Sprint 25 melalui `MTFContext` (big/mid/small) dan mengemit `StrategyDecision` (BUY / SELL / HOLD) beserta anchor, entry, SL, TP1, TP2, alasan deterministic, dan MTF alignment. Hard-gate untuk anchor S/R, fresh liquidity, sweep terkonfirmasi, dan konfirmasi small TF di-early-return HOLD dengan `meta.veto`. 12 unit test baru di `tests/test_liquidity_sr_mtf_strategy.py`. Tidak menyentuh rule engine, MTF scanner, atau signal builder lama. Checkpoint `docs/CHECKPOINT_SPRINT_26_STRATEGY.md`.
 
 ## Baseline Verifikasi Terkini
 
-- `python -m compileall app tests` bersih.
-- `python -m pytest` hijau, 66/66.
+- `./.venv/bin/python -m compileall app tests` bersih.
+- `./.venv/bin/python -m pytest --ignore=tests/test_klines_api.py` hijau, 99/99 (termasuk 18 test Sprint 25 dan 12 test Sprint 26).
+- `tests/test_klines_api.py` gagal collect karena environment VPS kekurangan `httpx2` (dependency starlette TestClient); pre-existing, bukan regresi Sprint 25/26.
 - Live trading tetap terkunci; research layer bersifat read-only.
 
 ## Kandidat Sprint Berikutnya
@@ -103,6 +107,29 @@ Kriteria selesai:
 
 - Dokumentasi `docs/DEPENDENCY_LOCK.md` menjelaskan cara refresh lock.
 - Tidak ada perubahan versi dependency runtime yang belum diuji manual.
+
+### Kandidat E - Implementasi Strategi Liquidity + S/R + Trend + MTF
+
+Spesifikasi lengkap di `docs/strategy_liquidity_sr_mtf.md`. Dipecah menjadi
+empat sprint terpisah agar tiap sprint hanya menyelesaikan satu area.
+
+- Sprint 25 - Indikator baru: `swing_points`, `structure_state`, `sr_zones`,
+  `liquidity_pools`, `sweep_events` di `app/indicators/`. Fungsi pure,
+  deterministic, JSON-serializable. Unit test lengkap.
+- Sprint 26 - Strategi baru: `app/strategies/liquidity_sr_mtf.py` yang
+  mengemit `StrategyDecision` sesuai kontrak 7.2 dokumen strategi.
+  Konsumen: `MultiTimeframeScanner`. Tidak mengubah strategi lama.
+- Sprint 27 - Rule scoring: tambah rule di `configs/rules.json`, dukungan
+  veto di `ScoreEngine` (hard-gate untuk anchor S/R dan fresh liquidity),
+  profil bobot baru di `configs/rule_weights.json`. Backward compatibility
+  rule dan profil lama wajib dijaga.
+- Sprint 28 - Integrasi realtime: sambungkan strategi ke `run_realtime.py`;
+  simpan hasil ke `logs/latest_signals.json` dan `logs/signals.jsonl`
+  dengan payload backward-compatible. Tidak menyentuh live execution.
+
+Kriteria selesai umum tiap sprint: `./.venv/bin/python -m compileall app tests`
+bersih, `./.venv/bin/python -m pytest` hijau, dan checkpoint sprint tersendiri
+di `docs/`.
 
 ## Backlog
 
