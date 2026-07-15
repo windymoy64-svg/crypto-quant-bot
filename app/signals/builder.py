@@ -29,16 +29,16 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
         # Place SL below swing low with 0.5×ATR buffer
         stop_loss = round(swing_low - (current_atr * 0.5), decimals)
     else:
-        # Fallback: ATR-based if no structure found
-        minimum_stop_distance = entry * 0.003
-        stop_distance = max(current_atr * 1.5, minimum_stop_distance)
+        # FIXED: Fallback: ATR-based dengan minimum 1% + 2x ATR
+        minimum_stop_distance = entry * 0.01  # 1% minimum
+        stop_distance = max(current_atr * 2.0, minimum_stop_distance)
         stop_loss = round(entry - stop_distance, decimals)
     
-    # TP: Resistance-based with ATR fallback, RR minimum 1:2
+    # TP: Resistance-based with ATR fallback, RR minimum 1:1.5
     risk_per_unit = entry - stop_loss
-    min_tp1_distance = risk_per_unit * 2.0  # Force 1:2 RR minimum
+    min_tp1_distance = risk_per_unit * 1.5  # FIXED: 1:1.5 RR
     
-    # TP1: Nearest resistance or 2R
+    # TP1: Nearest resistance or 1.5R
     resistance = find_nearest_resistance(candles, entry, lookback=30)
     if resistance and resistance >= entry + min_tp1_distance:
         tp1 = round(resistance, decimals)
@@ -46,13 +46,14 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
         tp1 = round(entry + min_tp1_distance, decimals)
     
     # TP2 & TP3: ATR extensions from TP1
-    tp2 = round(tp1 + (current_atr * 1.5), decimals)
-    tp3 = round(tp1 + (current_atr * 3.0), decimals)
+    tp2 = round(tp1 + (current_atr * 1.0), decimals)
+    tp3 = round(tp1 + (current_atr * 2.0), decimals)
     
     take_profit = [tp1, tp2, tp3]
     reward_per_unit = take_profit[0] - entry  # Use TP1 for RR calc
     risk_reward = round(reward_per_unit / risk_per_unit, 2) if risk_per_unit else 0.0
-    risk = "LOW" if score.confidence >= 90 and risk_reward >= 2.0 else "MEDIUM" if score.confidence >= 80 else "HIGH"
+    # FIXED: Adjust risk classification untuk RR baru
+    risk = "LOW" if score.confidence >= 90 and risk_reward >= 1.5 else "MEDIUM" if score.confidence >= 85 else "HIGH"
 
     # Hitung gate dan failed_gates SEBELUM return
     gates = score.buckets.get("_gates", {}) if isinstance(score.buckets, dict) else {}
@@ -101,24 +102,25 @@ def build_short_signal(
         stop_loss = round(swing_high + (current_atr * 0.5), decimals)
     else:
         # Fallback: ATR-based if no structure found
-        minimum_stop_distance = entry * 0.003
-        stop_distance = max(current_atr * 1.5, minimum_stop_distance)
+        # FIXED: Minimum 1% untuk avoid noise
+        minimum_stop_distance = entry * 0.01  # 1% minimum
+        stop_distance = max(current_atr * 2.0, minimum_stop_distance)  # 2x ATR
         stop_loss = round(entry + stop_distance, decimals)
     
-    # TP: Support-based with ATR fallback, RR minimum 1:2
+    # TP: Support-based with ATR fallback, RR minimum 1:1.5
     risk_per_unit = stop_loss - entry
-    min_tp1_distance = risk_per_unit * 2.0  # Force 1:2 RR minimum
+    min_tp1_distance = risk_per_unit * 1.5  # FIXED: 1:1.5 RR
     
-    # TP1: Nearest support or 2R
+    # TP1: Nearest support or 1.5R
     support = find_nearest_support(candles, entry, lookback=30)
     if support and support <= entry - min_tp1_distance:
         tp1 = round(support, decimals)
     else:
         tp1 = round(entry - min_tp1_distance, decimals)
     
-    # TP2 & TP3: ATR extensions from TP1
-    tp2 = round(tp1 - (current_atr * 1.5), decimals)
-    tp3 = round(tp1 - (current_atr * 3.0), decimals)
+    # TP2 & TP3: ATR extensions from TP1 (FIXED: jarak lebih dekat)
+    tp2 = round(tp1 - (current_atr * 1.0), decimals)  # 1x ATR
+    tp3 = round(tp1 - (current_atr * 2.0), decimals)  # 2x ATR (bukan 3x)
     
     take_profit = [tp1, tp2, tp3]
     reward_per_unit = entry - take_profit[0]  # Use TP1 for RR calc
@@ -128,11 +130,12 @@ def build_short_signal(
         else 0.0
     )
 
+    # FIXED: Sinkronisasi risk classification dengan LONG
     risk = (
         "LOW"
-        if score.confidence >= 90 and risk_reward >= 2.0
+        if score.confidence >= 90 and risk_reward >= 1.5
         else "MEDIUM"
-        if score.confidence >= 80
+        if score.confidence >= 85
         else "HIGH"
     )
 

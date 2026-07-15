@@ -13,8 +13,9 @@ from app.risk.manager import calculate_position_size
 class AutoExitConfig:
     enabled: bool = True
     tp_fractions: tuple[float, ...] = (0.30, 0.30, 0.40)
-    trailing_activation_atr_multiple: float = 1.0
-    trailing_distance_atr_multiple: float = 1.5
+    # FIXED: Aktif lebih cepat (0.5 ATR) dan jarak lebih ketat (1.0 ATR)
+    trailing_activation_atr_multiple: float = 0.5
+    trailing_distance_atr_multiple: float = 1.0
 
     @classmethod
     def from_dict(
@@ -31,10 +32,10 @@ class AutoExitConfig:
             enabled=bool(data.get("enabled", True)),
             tp_fractions=tuple(float(value) for value in fractions),
             trailing_activation_atr_multiple=float(
-                data.get("trailing_activation_atr_multiple", 1.0)
+                data.get("trailing_activation_atr_multiple", 0.5)
             ),
             trailing_distance_atr_multiple=float(
-                data.get("trailing_distance_atr_multiple", 1.5)
+                data.get("trailing_distance_atr_multiple", 1.0)
             ),
         )
 
