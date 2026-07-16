@@ -695,6 +695,10 @@
             return r.json();
           }
 
+          // Cache payload terakhir supaya panel LIVE SIGNAL bisa di-render ulang
+          // pada setiap price_update WebSocket tanpa perlu fetch API lagi.
+          const liveCache = { market: {}, paper: {}, analytics: {} };
+
           async function tick(){
             try {
               const [market, paper, analytics] = await Promise.all([
@@ -702,6 +706,9 @@
                 getJSON("/api/paper").catch(()=>({})),
                 getJSON("/api/analytics").catch(()=>({})),
               ]);
+              liveCache.market = market || {};
+              liveCache.paper = paper || {};
+              liveCache.analytics = analytics || {};
               renderStats(market, paper, analytics);
               renderPnl(paper);
               renderKpiExtra(paper);
@@ -719,6 +726,16 @@
           // Expose renderPnl agar dashboard.js bisa memanggilnya pada setiap
           // price_update WebSocket -> P&L Stream ikut update sub-detik seperti Active Orders.
           window.renderPnl = renderPnl;
+
+          // Expose renderStats juga agar panel LIVE SIGNAL (Open/Profit/Loss/Unrealized)
+          // ikut realtime tiap price_update WebSocket. Kita override paper dengan data
+          // terbaru yang last_price/unrealized_pnl-nya sudah dihitung oleh handlePriceUpdate,
+          // sementara market/analytics tetap pakai cache terakhir.
+          window.renderStats = function(paper){
+            const nextPaper = paper || liveCache.paper || {};
+            liveCache.paper = nextPaper;
+            renderStats(liveCache.market || {}, nextPaper, liveCache.analytics || {});
+          };
         })();
         </script>
 
