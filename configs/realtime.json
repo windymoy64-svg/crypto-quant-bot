@@ -7,5 +7,16 @@
   "live_execution_enabled": false,
   "interval_seconds": 60,
   "latest_output": "logs/latest_signals.json",
-  "history_output": "logs/signals.jsonl"
+  "history_output": "logs/signals.jsonl",
+  "acr_enrichment": {
+    "enabled": true,
+    "htf_timeframe": "15m",
+    "ltf_timeframe": "1m",
+    "htf_limit": 60,
+    "ltf_limit": 60,
+    "min_rr": 2.0,
+    "veto_on_conflict": true,
+    "veto_on_neutral": false,
+    "inject_ltf_candles": true
+  }
 }

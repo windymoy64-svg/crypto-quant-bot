@@ -14,6 +14,8 @@
       0.4
     ],
     "trailing_activation_atr_multiple": 1.5,
-    "trailing_distance_atr_multiple": 1.0
+    "trailing_distance_atr_multiple": 1.0,
+    "use_acr_position_manager": true,
+    "acr_trail_buffer_pct": 0.002
   }
 }

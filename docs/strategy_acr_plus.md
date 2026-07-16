@@ -123,6 +123,64 @@ state = update.next_state
 
 Semua **35 test lulus** dan tidak break test suite lain.
 
+## Integrasi Opsi C (Filter/Konfirmasi)
+
+Modul ACR+ **berjalan paralel** dengan strategi existing (weighted rule engine
++ liquidity_sr_mtf) sebagai **filter/konfirmator** terakhir. Tidak
+menggantikan, tapi menambah validasi confluence.
+
+### Modul Bridge
+
+| File | Fungsi |
+| --- | --- |
+| `app/strategies/acr_confirmation.py` | `confirm_signal()` & `enrich_trading_signal()` — bungkus sinyal dari engine lama dengan konfirmasi ACR+ (align / neutral / conflict + veto). |
+| `app/strategies/acr_engine_bridge.py` | `apply_acr_breakeven()`, `apply_acr_trailing()`, `check_acr_invalidation()` — helper untuk position dict di `RealtimePaperTradingEngine`. |
+
+### Cara Aktivasi di Paper Engine
+
+Tambahkan flag di `configs/paper_trading.json`:
+
+```json
+{
+  "auto_exit": {
+    "enabled": true,
+    "use_acr_position_manager": true,
+    "acr_trail_buffer_pct": 0.002
+  }
+}
+```
+
+Signal yang dikirim ke engine harus menyertakan key `ltf_candles` (list of dict
+`{open, high, low, close, timestamp, volume}`) agar bridge bisa menghitung
+swing trailing. Bila tidak ada, engine otomatis fallback ke ATR-based logic.
+
+### Cara Enrich Signal Sebelum Eksekusi
+
+```python
+from app.signals.builder import build_signal
+from app.strategies.acr_confirmation import enrich_trading_signal
+
+signal = build_signal(symbol, ltf_candles, score)   # engine lama
+enriched, confirmation = enrich_trading_signal(
+    signal,
+    htf_candles=htf_candles,
+    ltf_candles=ltf_candles,
+    veto_on_conflict=True,     # sinyal lawan arah ACR+ jadi SKIP
+    veto_on_neutral=False,     # sinyal ACR+ HOLD tetap lolos
+)
+if enriched.action == "SKIP":
+    return  # veto oleh ACR+
+# lanjut kirim `enriched` ke RiskManager -> executor
+```
+
+**Semantic Alignment:**
+
+| Alignment | Kondisi | Efek |
+|-----------|---------|------|
+| `align` | ACR+ hasil searah sinyal (BUY-BUY / SELL-SELL) | Confidence ×1.15, tidak veto |
+| `neutral` | ACR+ HOLD (gate ACR+ belum lengkap) | Confidence ×0.85, tidak veto (default) |
+| `conflict` | ACR+ lawan arah | Confidence ×0.0 dan `action → SKIP` |
+
 ## Referensi PDF (docs/pdf/)
 
 - `ACR - Auden Candle Range (1).pdf` — Candle 1-2-3-4.

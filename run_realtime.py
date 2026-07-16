@@ -8,10 +8,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from app.market.scanner import scan_symbol_rankings
+from app.market.data_service import MarketDataService
 from app.paper.realtime_engine import PaperTradingConfig, RealtimePaperTradingEngine
 from app.execution.live_executor import LiveExecutor, LiveTradingSettings
 from app.config.production import production_shutdown, production_startup
 from app.logger import setup_production_logging
+from app.strategies.acr_realtime_enrichment import (
+    ACREnrichmentConfig,
+    enrich_realtime_signals,
+)
 
 def load_json(path: str) -> dict[str, object]:
     with Path(path).open(encoding="utf-8-sig") as file:
@@ -527,6 +532,7 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
             )
 
     paper: dict[str, object] | None = None
+    acr_stats: dict[str, object] | None = None
     if paper_enabled and paper_config is not None:
         paper_signals = prepare_paper_signals(
             [*results, *confirmed_short_results],
@@ -534,10 +540,35 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
             open_position_symbols,
         )
 
+        # --- ACR+ Enrichment (Opsi C) ---
+        # Fetch HTF candles + inject ltf_candles ke signal dict + apply
+        # konfirmasi ACR+ (align / neutral / conflict + optional veto).
+        acr_config = ACREnrichmentConfig.from_dict(
+            runtime_config.get("acr_enrichment") if isinstance(
+                runtime_config.get("acr_enrichment"), dict
+            ) else None
+        )
+        if acr_config.enabled:
+            exchange = str(scan_config.get("exchange", "binance"))
+            fallback = bool(scan_config.get("fallback_to_sample_data", False))
+            acr_market_data = MarketDataService(
+                exchange=exchange,
+                fallback_to_sample_data=fallback,
+            )
+            paper_signals, stats_obj = enrich_realtime_signals(
+                paper_signals,
+                market_data=acr_market_data,
+                config=acr_config,
+            )
+            acr_stats = stats_obj.to_dict()
+
         paper = RealtimePaperTradingEngine(
             paper_config,
             telegram_notifier
         ).process_signals(paper_signals)
+
+        if acr_stats is not None and isinstance(paper, dict):
+            paper["acr_enrichment"] = acr_stats
 
     live_decisions: list[dict[str, object]] = []
     if bool(runtime_config.get("live_execution_enabled", False)):

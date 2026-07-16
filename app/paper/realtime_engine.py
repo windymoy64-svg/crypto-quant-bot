@@ -16,6 +16,12 @@ class AutoExitConfig:
     # FIXED: Aktif lebih cepat (0.5 ATR) dan jarak lebih ketat (1.0 ATR)
     trailing_activation_atr_multiple: float = 0.5
     trailing_distance_atr_multiple: float = 1.0
+    # ACR+ bridge (Opsi C - filter/enhancement). Bila True, engine memanggil
+    # apply_acr_breakeven/apply_acr_trailing/check_acr_invalidation dari
+    # ``app.strategies.acr_engine_bridge`` bila signal menyediakan
+    # ``ltf_candles``. Fallback ke ATR-based logic bila candles tidak ada.
+    use_acr_position_manager: bool = False
+    acr_trail_buffer_pct: float = 0.002
 
     @classmethod
     def from_dict(
@@ -36,6 +42,12 @@ class AutoExitConfig:
             ),
             trailing_distance_atr_multiple=float(
                 data.get("trailing_distance_atr_multiple", 1.0)
+            ),
+            use_acr_position_manager=bool(
+                data.get("use_acr_position_manager", False)
+            ),
+            acr_trail_buffer_pct=float(
+                data.get("acr_trail_buffer_pct", 0.002)
             ),
         )
 
@@ -307,6 +319,28 @@ class RealtimePaperTradingEngine:
             atr_value,
         )
         self._update_trailing_stop(position, atr_value)
+
+        # --- ACR+ bridge (Opsi C, opsional behind flag) ---
+        # Bila flag aktif dan signal menyediakan ``ltf_candles``, upgrade
+        # trailing/breakeven ke swing-based dan cek invalidation.
+        if self.config.auto_exit.use_acr_position_manager:
+            ltf_candles = self._extract_ltf_candles(signal)
+            if ltf_candles:
+                self._apply_acr_management(position, ltf_candles)
+                invalidation = self._check_acr_invalidation(
+                    position, ltf_candles
+                )
+                if invalidation is not None:
+                    return [
+                        self._close_position_full(
+                            state,
+                            symbol,
+                            current_price,
+                            f"acr_invalidation_{invalidation}",
+                            signal,
+                        )
+                    ]
+
         self._update_effective_stop(position)
 
         if self._is_stop_hit(position, current_price):
@@ -869,3 +903,71 @@ class RealtimePaperTradingEngine:
 
     def _now(self) -> str:
         return datetime.now(tz=UTC).isoformat()
+
+    # ------------------------------------------------------------------
+    # ACR+ bridge helpers (Opsi C - opsional, behind use_acr_position_manager)
+    # ------------------------------------------------------------------
+
+    def _extract_ltf_candles(
+        self, signal: dict[str, object]
+    ) -> list[Any]:
+        """Ambil LTF candles dari signal (opsional).
+
+        Signal boleh menyediakan key ``ltf_candles`` berisi list of dict
+        dengan minimal ``open, high, low, close, timestamp, volume``, atau
+        list of ``Candle`` langsung. Return list ``Candle`` atau ``[]`` bila
+        tidak tersedia / tidak valid.
+        """
+        raw = signal.get("ltf_candles")
+        if not raw or not isinstance(raw, list):
+            return []
+        try:
+            from app.core.models import Candle as _Candle
+        except Exception:
+            return []
+        result: list[Any] = []
+        symbol = str(signal.get("symbol", "UNKNOWN"))
+        for item in raw:
+            if isinstance(item, _Candle):
+                result.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            try:
+                result.append(_Candle(
+                    symbol=str(item.get("symbol", symbol)),
+                    timestamp=str(item.get("timestamp", "")),
+                    open=float(item["open"]),
+                    high=float(item["high"]),
+                    low=float(item["low"]),
+                    close=float(item["close"]),
+                    volume=float(item.get("volume", 0.0)),
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return result
+
+    def _apply_acr_management(
+        self, position: dict[str, object], ltf_candles: list[Any]
+    ) -> None:
+        """Terapkan break-even + trailing swing-based bila TP1 sudah hit."""
+        try:
+            from app.strategies.acr_engine_bridge import (
+                apply_acr_breakeven,
+                apply_acr_trailing,
+            )
+        except Exception:
+            return
+        buffer_pct = float(self.config.auto_exit.acr_trail_buffer_pct)
+        apply_acr_breakeven(position)
+        apply_acr_trailing(position, ltf_candles, buffer_pct=buffer_pct)
+
+    def _check_acr_invalidation(
+        self, position: dict[str, object], ltf_candles: list[Any]
+    ) -> str | None:
+        """Cek invalidation (CISD/pattern lawan arah). Return alasan atau None."""
+        try:
+            from app.strategies.acr_engine_bridge import check_acr_invalidation
+        except Exception:
+            return None
+        return check_acr_invalidation(position, ltf_candles)
