@@ -418,56 +418,81 @@
           }
 
           function renderKpiExtra(paper) {
-            const sourceTrades = Array.isArray(paper?.trades)
+            /*
+             * KPI atas dibagi 3 sumber:
+             * 1. `paper.opened_trades` → event entry (type="opened").
+             *    Dipakai untuk KPI "Trade Today" = jumlah posisi yang
+             *    DIBUKA dalam sesi WIB, bukan yang ditutup.
+             * 2. `paper.trades` → event posisi tertutup penuh (closed).
+             *    Dipakai untuk Trade Profit / Trade Loss / Winrate karena
+             *    hasil menang/kalah hanya diketahui setelah posisi selesai.
+             * 3. `paper.realized_exits` → closed + partial_close.
+             *    Dipakai untuk "Profit Today" agar mencerminkan seluruh
+             *    realized PnL sesi WIB (partial exits ikut dihitung).
+             */
+            const openedTrades = Array.isArray(paper?.opened_trades)
+              ? paper.opened_trades
+              : [];
+
+            const closedTrades = Array.isArray(paper?.trades)
               ? paper.trades
               : Array.isArray(paper?.fills)
                 ? paper.fills
                 : [];
+
+            const realizedExits = Array.isArray(paper?.realized_exits)
+              ? paper.realized_exits
+              : closedTrades;
 
             const sessionStart = getWibTradingSessionStart();
             const sessionEnd = new Date(
               sessionStart.getTime() + (24 * 60 * 60 * 1000)
             );
 
-            /*
-            * Hanya trade tertutup dalam sesi 07.00 WIB hari ini
-            * sampai sebelum 07.00 WIB besok.
-            */
-            const sessionTrades = sourceTrades.filter(trade => {
+            function inSession(item) {
               const timestamp =
-                trade.closed_at ??
-                trade.timestamp ??
-                trade.exit_time ??
-                trade.updated_at;
+                item.opened_at ??
+                item.closed_at ??
+                item.timestamp ??
+                item.exit_time ??
+                item.entry_time ??
+                item.updated_at;
 
               if (!timestamp) return false;
 
-              const closedAt = new Date(timestamp);
+              const eventAt = new Date(timestamp);
 
               return (
-                !Number.isNaN(closedAt.getTime()) &&
-                closedAt >= sessionStart &&
-                closedAt < sessionEnd
+                !Number.isNaN(eventAt.getTime()) &&
+                eventAt >= sessionStart &&
+                eventAt < sessionEnd
               );
-            });
+            }
+
+            function toPnl(item) {
+              return Number(
+                item.pnl ??
+                item.realized_pnl ??
+                item.net_pnl ??
+                item.partial_realized_pnl ??
+                item.profit ??
+                0
+              );
+            }
+
+            /*
+             * Wins/losses/breakeven: hanya dari posisi yang tertutup penuh
+             * (butuh hasil PnL final untuk klasifikasi).
+             */
+            const sessionClosed = closedTrades.filter(inSession);
 
             let wins = 0;
             let losses = 0;
             let breakeven = 0;
-            let sessionProfit = 0;
 
-            sessionTrades.forEach(trade => {
-              const pnl = Number(
-                trade.pnl ??
-                trade.realized_pnl ??
-                trade.net_pnl ??
-                trade.profit ??
-                0
-              );
-
+            sessionClosed.forEach(trade => {
+              const pnl = toPnl(trade);
               if (!Number.isFinite(pnl)) return;
-
-              sessionProfit += pnl;
 
               if (pnl > 0) {
                 wins += 1;
@@ -478,14 +503,39 @@
               }
             });
 
-            const totalTrades = wins + losses + breakeven;
-            const winrate = totalTrades > 0
-              ? (wins / totalTrades) * 100
+            /*
+             * Trade Today = jumlah posisi yang DIBUKA (entry) dalam sesi WIB.
+             * Fallback ke jumlah posisi tertutup jika `opened_trades` kosong
+             * (mis. server versi lama belum mengirim field ini).
+             */
+            const sessionOpens = openedTrades.filter(inSession);
+            const totalTrades = sessionOpens.length > 0
+              ? sessionOpens.length
+              : (wins + losses + breakeven);
+
+            /*
+             * Profit Today: seluruh realized PnL dalam sesi WIB, termasuk
+             * partial_close. Ini mencerminkan perubahan balance dari
+             * aktivitas exit hari ini.
+             */
+            let sessionProfit = 0;
+            realizedExits.forEach(exit => {
+              if (!inSession(exit)) return;
+              const pnl = toPnl(exit);
+              if (!Number.isFinite(pnl)) return;
+              sessionProfit += pnl;
+            });
+
+            const closedTotal = wins + losses + breakeven;
+            const winrate = closedTotal > 0
+              ? (wins / closedTotal) * 100
               : 0;
 
             /*
-            * Total trade = wins + losses + breakeven (semua posisi tertutup).
-            * Winrate = wins / total (bukan wins / (wins+losses)).
+            * Trade Today   → jumlah entry (opened) dalam sesi WIB.
+            * Trade Profit  → jumlah closed dengan PnL > 0.
+            * Trade Loss    → jumlah closed dengan PnL < 0.
+            * Winrate       → wins / total closed (bukan wins / opened).
             */
             setText(
               "metric-trades-today",

@@ -87,7 +87,14 @@ def read_json_file(path: str | Path, default: Any) -> Any:
         return default
 
 
-def read_jsonl_file(path: str | Path, limit: int = 100) -> list[dict[str, Any]]:
+def read_jsonl_file(path: str | Path, limit: int | None = 100) -> list[dict[str, Any]]:
+    """Baca file JSONL sebagai list of dict.
+
+    Jika ``limit`` bernilai ``None`` atau ``<= 0``, semua baris dikembalikan
+    tanpa dipotong. Ini dipakai untuk data yang harus utuh (mis. seluruh
+    trade paper dalam 1 sesi WIB untuk KPI "Trade Hari Ini").
+    """
+
     target = Path(path)
     if not target.exists():
         return []
@@ -99,6 +106,8 @@ def read_jsonl_file(path: str | Path, limit: int = 100) -> list[dict[str, Any]]:
             continue
         if isinstance(item, dict):
             rows.append(item)
+    if limit is None or limit <= 0:
+        return rows
     return rows[-limit:]
 
 
@@ -286,12 +295,31 @@ class DashboardService:
         account = state.get("account", {}) if isinstance(state.get("account"), dict) else {}
         balance = state.get("balance", account.get("cash", 0.0))
 
-        # Baca trade tertutup dari paper_trades.jsonl (ditulis oleh auto-exit engine)
-        trade_events = read_jsonl_file("logs/paper_trades.jsonl", limit=500)
+        # Baca trade tertutup dari paper_trades.jsonl (ditulis oleh auto-exit engine).
+        # Tanpa batas (limit=None) supaya KPI "Trade Hari Ini / Trade Profit /
+        # Trade Loss / Winrate" benar-benar merefleksikan seluruh trade yang
+        # tertutup dalam sesi WIB berjalan. File paper_trades.jsonl di-rotate
+        # harian oleh scheduler (app/dashboard/scheduler.py) sehingga ukurannya
+        # tetap terkendali per sesi.
+        trade_events = read_jsonl_file("logs/paper_trades.jsonl", limit=None)
         closed_trades: list[dict[str, Any]] = []
         all_exits: list[dict[str, Any]] = []
+        opened_trades: list[dict[str, Any]] = []
         for ev in trade_events:
             t = ev.get("type")
+            if t == "opened":
+                # Event entry: dipakai untuk KPI "Trade Today" (jumlah posisi
+                # yang dibuka dalam sesi WIB berjalan).
+                pos = ev.get("position") or {}
+                opened_trades.append({
+                    "symbol": ev.get("symbol"),
+                    "side": pos.get("side") or ev.get("action"),
+                    "entry": pos.get("entry"),
+                    "confidence": ev.get("confidence"),
+                    "opened_at": ev.get("timestamp"),
+                    "type": t,
+                })
+                continue
             if t not in ("closed", "partial_close"):
                 continue
             pos = ev.get("position") or {}
@@ -320,8 +348,24 @@ class DashboardService:
             "account": account,
             "open_positions": positions,
             "orders": orders[-100:],
-            "fills": effective_fills[-100:],
-            "trades": closed_trades[-100:],
+            # `fills` dan `trades` dipakai frontend untuk menghitung KPI
+            # "Trade Hari Ini / Trade Profit / Trade Loss / Winrate" dalam
+            # 1 sesi WIB. TIDAK di-cap supaya KPI selalu utuh, berapa pun
+            # volume trade harian. Data lama otomatis dirotasi harian oleh
+            # scheduler (lihat app/dashboard/scheduler.py) sehingga file
+            # sumber tetap ringan per sesi.
+            "fills": effective_fills,
+            "trades": closed_trades,
+            # `realized_exits` berisi closed + partial_close dan dipakai
+            # frontend untuk menghitung "Profit Today" (realized PnL sesi
+            # WIB). Perhitungan berbeda dengan `trades` (yang hanya event
+            # posisi tertutup penuh untuk KPI Trade Profit / Trade Loss /
+            # Winrate).
+            "realized_exits": all_exits,
+            # `opened_trades` berisi seluruh event entry (type="opened").
+            # Frontend memakainya untuk KPI "Trade Today" = jumlah posisi
+            # yang dibuka dalam sesi WIB berjalan (bukan yang ditutup).
+            "opened_trades": opened_trades,
             "events": read_jsonl_file("logs/paper_events.jsonl", limit=100),
             "read_only": True,
         }
