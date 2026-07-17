@@ -123,7 +123,24 @@ def production_startup() -> None:
     load_dotenv_file()
     validate_environment()
     log_startup_info()
+    _bootstrap_futures_if_enabled()
     atexit.register(sqlite_checkpoint)
+
+
+def _bootstrap_futures_if_enabled() -> None:
+    """Best-effort hook: apply futures config at startup, never raise."""
+
+    try:
+        from app.exchange.binance_futures.lifecycle import (
+            bootstrap_futures_if_enabled,
+        )
+    except Exception:  # pragma: no cover - defensive import
+        logger.debug("Futures lifecycle module unavailable", exc_info=True)
+        return
+    try:
+        bootstrap_futures_if_enabled()
+    except Exception:  # pragma: no cover - lifecycle already swallows errors
+        logger.warning("Unexpected futures bootstrap failure", exc_info=True)
 
 
 def production_shutdown() -> None:

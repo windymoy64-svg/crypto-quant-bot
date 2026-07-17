@@ -151,7 +151,118 @@
         </section>
 
         <section class="workspace view-section" data-view-section="settings">
-          <article id="settings" class="panel xwide"><div class="panel-head"><div><p>Settings</p><h2>Safety Mode</h2></div><span class="pill">safe mode</span></div><div class="settings-grid"><div>Read only</div><strong>{{ read_only }}</strong><div>Release</div><strong>{{ release }}</strong><div>Controls</div><strong>No BUY/SELL buttons</strong></div></article>
+          <article id="settings" class="panel xwide">
+            <div class="panel-head">
+              <div><p>Settings</p><h2>Safety Mode</h2></div>
+              <span class="pill">safe mode</span>
+            </div>
+            <div class="settings-grid">
+              <div>Read only</div><strong>{{ read_only }}</strong>
+              <div>Release</div><strong>{{ release }}</strong>
+              <div>Controls</div><strong>No BUY/SELL buttons</strong>
+            </div>
+          </article>
+
+          <article id="settings-futures" class="panel xwide">
+            <div class="panel-head">
+              <div><p>Futures</p><h2>USDⓈ-M Leverage</h2></div>
+              <span id="futures-status" class="pill">loading</span>
+            </div>
+            <p style="color:var(--txt-mute);font-size:12px;margin:6px 0 12px">
+              Konfigurasi endpoint futures (<code>fapi.binance.com</code>). Bootstrap idempoten: menerapkan position mode, margin type, dan leverage per simbol. Butuh API key dengan permission <strong>FUTURES</strong>.
+            </p>
+            <div id="futures-current" class="settings-grid" style="margin-bottom:14px">
+              <div>Enabled</div><strong id="futures-cur-enabled">-</strong>
+              <div>Network</div><strong id="futures-cur-network">-</strong>
+              <div>Position mode</div><strong id="futures-cur-mode">-</strong>
+              <div>Margin type</div><strong id="futures-cur-margin">-</strong>
+              <div>Default leverage</div><strong id="futures-cur-leverage">-</strong>
+              <div>Multi-assets margin</div><strong id="futures-cur-multi">-</strong>
+              <div>Symbols</div><strong id="futures-cur-symbols">-</strong>
+              <div>Credentials</div><strong id="futures-cur-creds">-</strong>
+            </div>
+            <form id="futures-form" class="settings-form" autocomplete="off" onsubmit="return submitFuturesSettings(event)">
+              <label class="checkbox">
+                <input type="checkbox" id="futures-enabled" />
+                <span>Enable futures venue (applies at next bootstrap)</span>
+              </label>
+              <label>Network
+                <select id="futures-network">
+                  <option value="testnet">testnet (testnet.binancefuture.com)</option>
+                  <option value="mainnet">mainnet (fapi.binance.com)</option>
+                </select>
+              </label>
+              <label>Position mode
+                <select id="futures-position-mode">
+                  <option value="one_way">one-way</option>
+                  <option value="hedge">hedge</option>
+                </select>
+              </label>
+              <label>Margin type
+                <select id="futures-margin-type">
+                  <option value="ISOLATED">ISOLATED</option>
+                  <option value="CROSSED">CROSSED</option>
+                </select>
+              </label>
+              <label>Default leverage
+                <input type="number" id="futures-default-leverage" min="1" max="125" step="1" value="3" />
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" id="futures-multi-assets" />
+                <span>Multi-assets margin (collateral in multiple assets)</span>
+              </label>
+              <label>Symbols (one per line: <code>SYMBOL:leverage</code>)
+                <textarea id="futures-symbols" rows="4" placeholder="BTCUSDT:5&#10;ETHUSDT:3" spellcheck="false" style="background:var(--panel-2);border:1px solid var(--border);border-radius:8px;color:var(--txt);padding:9px 12px;font-family:ui-monospace,monospace;font-size:12px;resize:vertical"></textarea>
+              </label>
+              <div class="settings-actions">
+                <button type="submit" class="primary">Save</button>
+                <button type="button" class="ghost" onclick="triggerFuturesBootstrap()">Run Bootstrap</button>
+                <button type="button" class="ghost" onclick="loadFuturesAccount()">Fetch Account</button>
+              </div>
+              <div id="futures-result" class="settings-result" hidden></div>
+            </form>
+          </article>
+
+          <article id="settings-exchange" class="panel xwide">
+            <div class="panel-head">
+              <div><p>Exchange</p><h2 id="settings-exchange-heading">Binance API Credentials</h2></div>
+              <span id="settings-status" class="pill">loading</span>
+            </div>
+            <p style="color:var(--txt-mute);font-size:12px;margin:6px 0 12px">
+              Kredensial dienkripsi (Fernet) dan disimpan di <code>data/bot.db</code>. Nilai plaintext tidak pernah dikirim balik ke browser setelah disimpan.
+            </p>
+            <div id="settings-current" class="settings-grid" style="margin-bottom:14px">
+              <div>Status</div><strong id="settings-cur-status">-</strong>
+              <div>API Key</div><strong id="settings-cur-key">-</strong>
+              <div>Network</div><strong id="settings-cur-net">-</strong>
+              <div>Updated</div><strong id="settings-cur-updated">-</strong>
+            </div>
+            <form id="settings-form" class="settings-form" autocomplete="off" onsubmit="return submitExchangeSettings(event)">
+              <label>Exchange
+                <select id="settings-exchange" onchange="onExchangeSelectChange()">
+                  <option value="binance">Binance (Spot + USDⓈ-M Futures)</option>
+                  <option value="bitunix">Bitunix (USDⓈ-M Futures)</option>
+                </select>
+              </label>
+              <label>API Key
+                <input type="text" id="settings-api-key" placeholder="paste new API key" autocomplete="off" spellcheck="false" />
+              </label>
+              <label>API Secret
+                <input type="password" id="settings-api-secret" placeholder="paste new API secret" autocomplete="new-password" spellcheck="false" />
+              </label>
+              <label class="checkbox" id="settings-testnet-row">
+                <input type="checkbox" id="settings-testnet" />
+                <span>Use Binance testnet (<code>testnet.binance.vision</code>)</span>
+              </label>
+              <p id="settings-testnet-hint" style="color:var(--txt-mute);font-size:11px;margin:-6px 0 6px"></p>
+              <div class="settings-actions">
+                <button type="submit" class="primary">Save</button>
+                <button type="button" class="ghost" onclick="testExchangeSettings()">Test Connection</button>
+                <button type="button" class="ghost danger" onclick="clearExchangeSettings()">Clear</button>
+              </div>
+              <div id="settings-result" class="settings-result" hidden></div>
+            </form>
+          </article>
         </section>
       </main>
     </div>

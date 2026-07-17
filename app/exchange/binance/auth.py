@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.exchange.binance.exceptions import BinanceConfigurationError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -23,11 +26,36 @@ class BinanceAuth:
 
     def credentials(self, *, required: bool = False) -> BinanceCredentials:
         env = self._read_env_file()
-        api_key = os.getenv("BINANCE_API_KEY") or env.get("BINANCE_API_KEY") or os.getenv("EXCHANGE_API_KEY") or env.get("EXCHANGE_API_KEY") or ""
-        api_secret = os.getenv("BINANCE_API_SECRET") or env.get("BINANCE_API_SECRET") or os.getenv("EXCHANGE_SECRET") or env.get("EXCHANGE_SECRET") or ""
-        credentials = BinanceCredentials(api_key=api_key.strip(), api_secret=api_secret.strip())
+        api_key = (
+            os.getenv("BINANCE_API_KEY")
+            or env.get("BINANCE_API_KEY")
+            or os.getenv("EXCHANGE_API_KEY")
+            or env.get("EXCHANGE_API_KEY")
+            or ""
+        )
+        api_secret = (
+            os.getenv("BINANCE_API_SECRET")
+            or env.get("BINANCE_API_SECRET")
+            or os.getenv("EXCHANGE_SECRET")
+            or env.get("EXCHANGE_SECRET")
+            or ""
+        )
+
+        # Fallback to the encrypted secrets store populated via the dashboard
+        # Settings panel. Env vars still win to preserve deployment overrides.
+        if not (api_key and api_secret):
+            stored = self._load_from_secrets_store()
+            if stored is not None:
+                api_key = api_key or stored.api_key
+                api_secret = api_secret or stored.api_secret
+
+        credentials = BinanceCredentials(
+            api_key=api_key.strip(), api_secret=api_secret.strip()
+        )
         if required and not credentials.is_configured:
-            raise BinanceConfigurationError("Binance API credentials are required for private read-only endpoints")
+            raise BinanceConfigurationError(
+                "Binance API credentials are required for private read-only endpoints"
+            )
         return credentials
 
     def _read_env_file(self) -> dict[str, str]:
@@ -41,3 +69,28 @@ class BinanceAuth:
             key, value = line.split("=", 1)
             result[key.strip()] = value.strip().strip('"').strip("'")
         return result
+
+    @staticmethod
+    def _load_from_secrets_store() -> "BinanceCredentials | None":
+        try:
+            from app.settings.exchange_credentials import load_exchange_credentials
+        except Exception:  # pragma: no cover - defensive: cryptography missing
+            logger.debug(
+                "Secrets store unavailable; skipping stored credentials lookup",
+                exc_info=True,
+            )
+            return None
+        try:
+            record = load_exchange_credentials()
+        except Exception:  # pragma: no cover - defensive: DB / key errors
+            logger.warning(
+                "Failed to load Binance credentials from secrets store",
+                exc_info=True,
+            )
+            return None
+        if record is None or not record.is_configured:
+            return None
+        return BinanceCredentials(
+            api_key=record.api_key,
+            api_secret=record.api_secret,
+        )

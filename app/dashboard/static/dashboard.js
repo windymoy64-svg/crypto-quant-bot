@@ -82,4 +82,249 @@ function connectWs(){ const protocol=location.protocol==="https:"?"wss":"ws"; se
 document.addEventListener("change",e=>{ if(e.target?.id==="market-filter") render(state.lastPayload); });
 document.addEventListener("input",debounce(e=>{ if(["journal-filter","symbol-filter","search"].includes(e.target?.id)) render(state.lastPayload); },180));
 function handleError(err){ console.error(err); setLoading(false); showToast(err.message); render(clone(DEFAULT_PAYLOAD)); }
-initUi(); loadAll().catch(handleError); connectWs();
+
+// Global helper used across dashboard.js and templates.
+function setText(id, val){ const n = document.getElementById(id); if(n) n.textContent = val; }
+
+// ---------- Settings: Exchange API credentials ----------
+async function apiFetch(path, options={}){
+  const opts = { cache: "no-store", credentials: "same-origin", ...options };
+  opts.headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let data; try { data = text ? JSON.parse(text) : {}; } catch(_) { data = { raw: text }; }
+  if(!r.ok) throw new Error(data.detail || data.error || `${path} ${r.status}`);
+  return data;
+}
+function currentExchange(){
+  const sel = byId("settings-exchange");
+  return (sel && sel.value) ? sel.value : "binance";
+}
+function exchangeLabel(name){
+  const n = String(name || "").toLowerCase();
+  if(n === "bitunix") return "Bitunix";
+  return "Binance";
+}
+function setSettingsStatus(state, label){
+  const badge = byId("settings-status");
+  if(!badge) return;
+  badge.classList.remove("ok","warn","err");
+  if(state) badge.classList.add(state);
+  badge.textContent = label;
+}
+function renderSettingsSummary(s){
+  const configured = !!(s && s.configured);
+  setText("settings-cur-status", configured ? "Configured" : "Not configured");
+  setText("settings-cur-key", configured ? (s.api_key_masked || "-") : "-");
+  setText("settings-cur-net", configured ? (s.testnet ? "Testnet" : "Mainnet") : "-");
+  setText("settings-cur-updated", configured ? (s.updated_at || "-") : "-");
+  const testnetBox = byId("settings-testnet");
+  if(testnetBox && configured) testnetBox.checked = !!s.testnet;
+  setSettingsStatus(configured ? "ok" : "warn", configured ? "configured" : "not configured");
+}
+function renderSettingsResult(payload, ok){
+  const box = byId("settings-result");
+  if(!box) return;
+  box.hidden = false;
+  box.classList.remove("ok","err");
+  box.classList.add(ok ? "ok" : "err");
+  box.textContent = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+}
+function applyExchangeUiHints(){
+  const ex = currentExchange();
+  const heading = byId("settings-exchange-heading");
+  if(heading) heading.textContent = `${exchangeLabel(ex)} API Credentials`;
+  const testnetRow = byId("settings-testnet-row");
+  if(testnetRow) testnetRow.style.display = (ex === "bitunix") ? "none" : "";
+  const testnetHint = byId("settings-testnet-hint");
+  if(testnetHint) testnetHint.textContent = (ex === "bitunix")
+    ? "Bitunix does not provide a public testnet; requests use production endpoints."
+    : "";
+}
+async function loadExchangeSettings(){
+  applyExchangeUiHints();
+  try {
+    const ex = currentExchange();
+    const data = await apiFetch(`/api/settings/exchange?exchange=${encodeURIComponent(ex)}`);
+    renderSettingsSummary(data);
+  } catch(err) {
+    setSettingsStatus("err", "load failed");
+    renderSettingsResult(err.message, false);
+  }
+}
+async function submitExchangeSettings(event){
+  event.preventDefault();
+  const exchange = currentExchange();
+  const apiKey = byId("settings-api-key")?.value.trim();
+  const apiSecret = byId("settings-api-secret")?.value.trim();
+  const testnet = !!byId("settings-testnet")?.checked;
+  if(!apiKey || !apiSecret){
+    renderSettingsResult("api_key and api_secret required", false);
+    return false;
+  }
+  setSettingsStatus("warn", "saving...");
+  try {
+    const data = await apiFetch("/api/settings/exchange", {
+      method: "PUT",
+      body: JSON.stringify({ exchange, api_key: apiKey, api_secret: apiSecret, testnet }),
+    });
+    renderSettingsSummary(data);
+    renderSettingsResult("Credentials saved. Run Test Connection to verify.", true);
+    byId("settings-api-key").value = "";
+    byId("settings-api-secret").value = "";
+    showToast(`${exchangeLabel(exchange)} API credentials saved`);
+  } catch(err){
+    setSettingsStatus("err", "save failed");
+    renderSettingsResult(err.message, false);
+  }
+  return false;
+}
+async function testExchangeSettings(){
+  const exchange = currentExchange();
+  const apiKey = byId("settings-api-key")?.value.trim();
+  const apiSecret = byId("settings-api-secret")?.value.trim();
+  const testnet = !!byId("settings-testnet")?.checked;
+  const body = { exchange };
+  if(apiKey && apiSecret){
+    body.api_key = apiKey;
+    body.api_secret = apiSecret;
+    body.testnet = testnet;
+  }
+  setSettingsStatus("warn", "testing...");
+  try {
+    const data = await apiFetch("/api/settings/exchange/test", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const ok = !!data.ok;
+    setSettingsStatus(ok ? "ok" : "err", ok ? "connected" : "test failed");
+    renderSettingsResult(data, ok);
+  } catch(err){
+    setSettingsStatus("err", "test failed");
+    renderSettingsResult(err.message, false);
+  }
+}
+async function clearExchangeSettings(){
+  const exchange = currentExchange();
+  if(!confirm(`Hapus API key ${exchangeLabel(exchange)} yang tersimpan?`)) return;
+  try {
+    const data = await apiFetch(`/api/settings/exchange?exchange=${encodeURIComponent(exchange)}`, { method: "DELETE" });
+    renderSettingsSummary(data);
+    renderSettingsResult("Credentials cleared.", true);
+    showToast("Credentials cleared");
+  } catch(err){
+    setSettingsStatus("err", "clear failed");
+    renderSettingsResult(err.message, false);
+  }
+}
+function onExchangeSelectChange(){ loadExchangeSettings(); }
+
+
+// ---------- Settings: Futures (USDⓈ-M) ----------
+function setFuturesStatus(state, label){
+  const badge = byId("futures-status");
+  if(!badge) return;
+  badge.classList.remove("ok","warn","err");
+  if(state) badge.classList.add(state);
+  badge.textContent = label;
+}
+function renderFuturesResult(payload, ok){
+  const box = byId("futures-result");
+  if(!box) return;
+  box.hidden = false;
+  box.classList.remove("ok","err");
+  box.classList.add(ok ? "ok" : "err");
+  box.textContent = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+}
+function renderFuturesSummary(data){
+  setText("futures-cur-enabled", data.enabled ? "Yes" : "No");
+  setText("futures-cur-network", data.network || "-");
+  setText("futures-cur-mode", data.position_mode || "-");
+  setText("futures-cur-margin", data.margin_type || "-");
+  setText("futures-cur-leverage", String(data.default_leverage ?? "-"));
+  setText("futures-cur-multi", data.multi_assets_margin ? "Yes" : "No");
+  setText("futures-cur-symbols", (data.symbols || []).map(s => `${s.symbol}×${s.leverage}`).join(", ") || "none");
+  setText("futures-cur-creds", data.credentials_configured ? "configured" : "missing");
+  const en = byId("futures-enabled"); if(en) en.checked = !!data.enabled;
+  const net = byId("futures-network"); if(net && data.network) net.value = data.network;
+  const pm = byId("futures-position-mode"); if(pm && data.position_mode) pm.value = data.position_mode;
+  const mt = byId("futures-margin-type"); if(mt && data.margin_type) mt.value = data.margin_type;
+  const dl = byId("futures-default-leverage"); if(dl && data.default_leverage) dl.value = data.default_leverage;
+  const ma = byId("futures-multi-assets"); if(ma) ma.checked = !!data.multi_assets_margin;
+  const syms = byId("futures-symbols");
+  if(syms) syms.value = (data.symbols || []).map(s => `${s.symbol}:${s.leverage}`).join("\n");
+  setFuturesStatus(data.enabled ? "ok" : "warn", data.enabled ? "enabled" : "disabled");
+}
+function parseSymbolsTextarea(text){
+  const out = {};
+  (text || "").split(/[\n,]/).forEach(line => {
+    const trimmed = line.trim();
+    if(!trimmed) return;
+    const [symbol, leverage] = trimmed.split(":").map(s => s.trim());
+    if(!symbol || !leverage) return;
+    const lev = parseInt(leverage, 10);
+    if(!Number.isFinite(lev) || lev < 1 || lev > 125) return;
+    out[symbol.toUpperCase()] = { leverage: lev };
+  });
+  return out;
+}
+async function loadFuturesSettings(){
+  try {
+    const data = await apiFetch("/api/settings/futures");
+    renderFuturesSummary(data);
+  } catch(err){
+    setFuturesStatus("err", "load failed");
+    renderFuturesResult(err.message, false);
+  }
+}
+async function submitFuturesSettings(event){
+  event.preventDefault();
+  const payload = {
+    enabled: !!byId("futures-enabled")?.checked,
+    network: byId("futures-network")?.value || "testnet",
+    position_mode: byId("futures-position-mode")?.value || "one_way",
+    margin_type: byId("futures-margin-type")?.value || "ISOLATED",
+    default_leverage: parseInt(byId("futures-default-leverage")?.value || "3", 10),
+    multi_assets_margin: !!byId("futures-multi-assets")?.checked,
+    symbols: parseSymbolsTextarea(byId("futures-symbols")?.value),
+  };
+  setFuturesStatus("warn", "saving...");
+  try {
+    const data = await apiFetch("/api/settings/futures", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    renderFuturesSummary(data);
+    renderFuturesResult("Futures config saved. Run Bootstrap to apply on Binance.", true);
+    showToast("Futures config saved");
+  } catch(err){
+    setFuturesStatus("err", "save failed");
+    renderFuturesResult(err.message, false);
+  }
+  return false;
+}
+async function triggerFuturesBootstrap(){
+  setFuturesStatus("warn", "bootstrapping...");
+  try {
+    const data = await apiFetch("/api/settings/futures/bootstrap", { method: "POST", body: "{}" });
+    const ok = !!data.ok;
+    setFuturesStatus(ok ? "ok" : "err", ok ? "bootstrap ok" : "bootstrap errors");
+    renderFuturesResult(data, ok);
+  } catch(err){
+    setFuturesStatus("err", "bootstrap failed");
+    renderFuturesResult(err.message, false);
+  }
+}
+async function loadFuturesAccount(){
+  setFuturesStatus("warn", "fetching account...");
+  try {
+    const data = await apiFetch("/api/futures/account");
+    setFuturesStatus("ok", "account ok");
+    renderFuturesResult(data, true);
+  } catch(err){
+    setFuturesStatus("err", "account failed");
+    renderFuturesResult(err.message, false);
+  }
+}
+
+initUi(); loadAll().catch(handleError); connectWs(); loadExchangeSettings(); loadFuturesSettings();

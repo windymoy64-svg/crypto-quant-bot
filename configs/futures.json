@@ -1,0 +1,11 @@
+{
+  "default_leverage": 25,
+  "enabled": true,
+  "margin_type": "ISOLATED",
+  "multi_assets_margin": false,
+  "network": "mainnet",
+  "position_mode": "hedge",
+  "recv_window": 5000,
+  "symbols": {},
+  "venue": "usdm_futures"
+}
