@@ -34,6 +34,7 @@
           <a href="#orders" data-view-link="orders"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 5h12M6 12h12M6 19h8" /></svg></span><span>Orders</span></a>
           <a href="#analytics" data-view-link="analytics"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7" /></svg></span><span>Analytics</span></a>
           <a href="#health" data-view-link="health"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 13h4l2-6 4 12 2-6h4" /></svg></span><span>Health</span></a>
+          <a href="#agents" data-view-link="agents"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3l7 4v6l-7 4-7-4V7l7-4zm0 4v6" /></svg></span><span>Agents</span></a>
           <a href="#settings" data-view-link="settings"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zM4 12h2m12 0h2M12 4v2m0 12v2" /></svg></span><span>Settings</span></a>
         </nav>
       </aside>
@@ -148,6 +149,35 @@
 
         <section class="workspace view-section" data-view-section="health">
           <article id="health" class="panel xwide"><div class="panel-head"><div><p>Monitoring</p><h2>System Health</h2></div><span class="pill">live</span></div><pre id="health-json" class="code-panel"></pre></article>
+        </section>
+
+        <section class="workspace view-section" data-view-section="agents">
+          <article id="agent-pipeline" class="panel xwide">
+            <div class="panel-head">
+              <div><p>Multi-Agent</p><h2>Pipeline Snapshot</h2></div>
+              <span id="agent-pipeline-status" class="pill">loading</span>
+            </div>
+            <div id="agent-pipeline-summary" class="summary-grid"></div>
+            <div id="agent-pipeline-entries" class="table"></div>
+            <div id="agent-pipeline-monitor" class="table"></div>
+          </article>
+
+          <article id="agent-learning" class="panel xwide">
+            <div class="panel-head">
+              <div><p>Learning Agent</p><h2>Insight &amp; Kalibrasi</h2></div>
+              <span id="agent-learning-status" class="pill">loading</span>
+            </div>
+            <div id="agent-learning-summary" class="summary-grid"></div>
+            <div id="agent-learning-detail" class="settings-grid"></div>
+          </article>
+
+          <article id="agent-observations" class="panel xwide">
+            <div class="panel-head">
+              <div><p>Chart Agent</p><h2>Recent Observations</h2></div>
+              <span id="agent-observations-status" class="pill">loading</span>
+            </div>
+            <div id="agent-observations-list" class="table"></div>
+          </article>
         </section>
 
         <section class="workspace view-section" data-view-section="settings">

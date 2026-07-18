@@ -404,4 +404,152 @@ async function loadFuturesAccount(){
   }
 }
 
-initUi(); loadAll().catch(handleError); connectWs(); loadExchangeSettings(); loadFuturesSettings();
+async function loadAgentPanels(){
+  try {
+    const [pipeline, learning, obs] = await Promise.allSettled([
+      getJson("/api/agent/pipeline"),
+      getJson("/api/agent/learning"),
+      getJson("/api/agent/observations?limit=20"),
+    ]);
+    renderAgentPipeline(pipeline.status === "fulfilled" ? pipeline.value : null);
+    renderAgentLearning(learning.status === "fulfilled" ? learning.value : null);
+    renderAgentObservations(obs.status === "fulfilled" ? obs.value : null);
+  } catch (err) {
+    console.warn("agent panels failed", err);
+  }
+}
+
+function kpiCard(label, value){
+  return `<article class="kpi-card"><span>${esc(label)}</span><strong>${esc(String(value))}</strong></article>`;
+}
+
+function renderAgentPipeline(payload){
+  const status = byId("agent-pipeline-status");
+  const summary = byId("agent-pipeline-summary");
+  const entries = byId("agent-pipeline-entries");
+  const monitor = byId("agent-pipeline-monitor");
+  if (!status || !summary || !entries || !monitor) return;
+
+  if (!payload || payload.available === false) {
+    status.textContent = "not running";
+    status.className = "pill";
+    summary.innerHTML = emptyState("Pipeline belum aktif", "Aktifkan agent_pipeline di configs/realtime.json.");
+    entries.innerHTML = "";
+    monitor.innerHTML = "";
+    return;
+  }
+
+  status.textContent = payload.execute_decisions ? "advisory + execute" : "advisory only";
+  status.className = "pill " + (payload.execute_decisions ? "warning" : "success");
+  summary.innerHTML = [
+    kpiCard("Entries", (payload.entries || []).length),
+    kpiCard("Monitored", (payload.monitor || []).length),
+    kpiCard("Generated", esc(payload.generated_at || "-")),
+    kpiCard("Execute", payload.execute_decisions ? "ON" : "OFF"),
+  ].join("");
+
+  entries.innerHTML = renderAgentEntries(payload.entries || []);
+  monitor.innerHTML = renderAgentMonitor(payload.monitor || []);
+}
+
+function renderAgentEntries(items){
+  if (!items.length) return emptyState("Belum ada kandidat entry", "Chart Agent akan mengevaluasi kandidat scanner dengan confidence >= 90.");
+  const rows = items.map(item => {
+    const symbol = esc(item.symbol || "-");
+    const conf = fmt(Number(item.scanner_confidence ?? 0));
+    const res = item.result || {};
+    const decision = res.decision || {};
+    const eligibility = esc(res.eligibility_reason || "-");
+    const action = esc(decision.action || (res.eligible ? "-" : "SKIP"));
+    const bias = esc(decision.regime || "-");
+    const score = fmt(Number(decision.confidence_score ?? 0));
+    return `<tr><td>${symbol}</td><td>${conf}</td><td>${badge(action)}</td><td>${score}</td><td>${bias}</td><td><small>${eligibility}</small></td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th>Symbol</th><th>Scanner Conf</th><th>Decision</th><th>Score</th><th>Regime</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderAgentMonitor(items){
+  if (!items.length) return emptyState("Tidak ada posisi dipantau", "Setiap posisi terbuka akan dievaluasi Decision Agent tiap cycle.");
+  const rows = items.map(item => {
+    const symbol = esc(item.symbol || "-");
+    const res = item.result || {};
+    const decision = res.decision || {};
+    const action = esc(decision.action || "-");
+    const reasons = list(decision.reasons).slice(0, 2).join(", ");
+    return `<tr><td>${symbol}</td><td>${badge(action)}</td><td><small>${esc(reasons || "-")}</small></td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th>Symbol</th><th>Decision</th><th>Reasons</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderAgentLearning(payload){
+  const status = byId("agent-learning-status");
+  const summary = byId("agent-learning-summary");
+  const detail = byId("agent-learning-detail");
+  if (!status || !summary || !detail) return;
+
+  if (!payload || payload.available === false) {
+    status.textContent = "no data";
+    status.className = "pill";
+    summary.innerHTML = emptyState("Belum ada trade history", "Learning Agent akan menghasilkan insight setelah trade recorder menulis TradeRecord.");
+    detail.innerHTML = "";
+    return;
+  }
+
+  status.textContent = `${payload.total_trades || 0} trades`;
+  status.className = "pill success";
+  summary.innerHTML = [
+    kpiCard("Trades", payload.total_trades || 0),
+    kpiCard("Winrate", `${fmt(Number(payload.overall_winrate ?? 0))}%`),
+    kpiCard("Profit Factor", fmt(Number(payload.overall_profit_factor ?? 0))),
+    kpiCard("Min Confluence", fmt(Number(payload.min_confluence_recommended ?? 0))),
+  ].join("");
+
+  const hot = list(payload.hot_patterns).slice(0, 5).join(", ") || "-";
+  const cold = list(payload.cold_patterns).slice(0, 5).join(", ") || "-";
+  detail.innerHTML = `
+    <div>Best regime</div><strong>${esc(payload.best_regime || "-")}</strong>
+    <div>Worst regime</div><strong>${esc(payload.worst_regime || "-")}</strong>
+    <div>Hot patterns</div><strong>${esc(hot)}</strong>
+    <div>Cold patterns</div><strong>${esc(cold)}</strong>
+    <div>Avg confluence (winners)</div><strong>${fmt(Number(payload.avg_confluence_winners ?? 0))}</strong>
+    <div>Avg confluence (losers)</div><strong>${fmt(Number(payload.avg_confluence_losers ?? 0))}</strong>
+  `;
+}
+
+function renderAgentObservations(payload){
+  const status = byId("agent-observations-status");
+  const listEl = byId("agent-observations-list");
+  if (!status || !listEl) return;
+
+  if (!payload || payload.available === false) {
+    status.textContent = "no data";
+    status.className = "pill";
+    listEl.innerHTML = emptyState("Belum ada observation", "Chart Agent akan menulis observation setiap kali membaca chart.");
+    return;
+  }
+
+  const observations = list(payload.observations);
+  status.textContent = `${payload.count || 0} / ${payload.total_stored || 0}`;
+  status.className = "pill info";
+
+  if (!observations.length) {
+    listEl.innerHTML = emptyState("Belum ada observation", "Chart Agent akan menulis observation setiap kali membaca chart.");
+    return;
+  }
+
+  const rows = observations.slice().reverse().map(obs => {
+    const reading = obs.chart_reading || {};
+    const decision = obs.decision || {};
+    const symbol = esc(obs.symbol || "-");
+    const stage = esc(obs.stage || "-");
+    const bias = esc(reading.bias || "-");
+    const confluence = fmt(Number(reading.confluence_score ?? 0));
+    const action = esc(decision.action || "-");
+    const ts = String(obs.timestamp || "").slice(0, 19);
+    return `<tr><td>${esc(ts)}</td><td>${symbol}</td><td>${stage}</td><td>${badge(bias)}</td><td>${confluence}</td><td>${badge(action)}</td></tr>`;
+  }).join("");
+  listEl.innerHTML = `<table><thead><tr><th>Time</th><th>Symbol</th><th>Stage</th><th>Bias</th><th>Confluence</th><th>Decision</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+initUi(); loadAll().catch(handleError); connectWs(); loadExchangeSettings(); loadFuturesSettings(); loadAgentPanels().catch(console.warn);
+setInterval(() => { loadAgentPanels().catch(console.warn); }, 30000);
