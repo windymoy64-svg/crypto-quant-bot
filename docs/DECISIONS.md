@@ -136,3 +136,30 @@ Konsekuensi:
 
 - Verifikasi kode tidak dilakukan pada task dokumentasi ini sesuai instruksi terbaru.
 - Sprint 09 belum dimulai otomatis.
+
+## ADR-008 - Multi-Agent Pipeline Sebagai Advisory Layer
+
+Status: accepted (Sprint 27).
+
+Keputusan:
+
+- Chart Agent, Learning Agent, Decision Agent, dan Executor Agent dibangun sebagai layer terpisah dari rule engine, scoring, dan paper/live engine existing.
+- Chart Agent hanya menerbitkan `ChartReading`; tidak boleh mengeluarkan action.
+- Learning Agent hanya menghitung statistik dari trade history + observation; tidak boleh mengeluarkan action.
+- Decision Agent adalah satu-satunya agent yang boleh output `ENTRY_BUY/ENTRY_SELL/HOLD/EXIT/SKIP`.
+- Executor Agent default dry-run; live mode wajib exchange adapter dan tidak boleh fallback ke simulasi.
+- Semua fitur pipeline default `enabled=false` di config sehingga perilaku existing tidak berubah.
+
+Alasan:
+
+- Pemisahan tanggung jawab memudahkan audit: setiap output punya satu owner yang jelas.
+- Learning Agent baru berkembang seiring waktu tanpa mengubah kontrak rule engine deterministic.
+- Advisory layer bisa diuji di paper trading sebelum diaktifkan sebagai enforcement.
+- Pipeline berdampingan (bukan menggantikan) sehingga rollback cukup dengan mematikan flag di config.
+
+Konsekuensi:
+
+- Setiap agent baru harus tetap deterministic dan `to_dict()`-serializable untuk audit trail.
+- `logs/agent_pipeline.json` dan `data/learning_journal.jsonl` menjadi artifact yang diaudit.
+- Live enforcement pipeline memerlukan tiga toggle eksplisit: `agent_pipeline.enabled`, `agent_pipeline.execute_decisions`, dan adapter live dengan safety gate 3-toggle yang sudah ada.
+- Binance Futures safety gate (`FuturesLiveSafetyGate` dengan `enabled` + `dry_run` + `confirm_live`) tetap satu-satunya jalur untuk live order; adapter tidak boleh melewatinya.

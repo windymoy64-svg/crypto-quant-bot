@@ -19,6 +19,14 @@ from app.strategies.acr_realtime_enrichment import (
     enrich_realtime_signals,
 )
 from app.settings.trading_preferences import load_trading_preferences
+from app.agent_pipeline.bridge import (
+    AgentPipelineRuntimeConfig,
+    run_pipeline_bridge,
+)
+from app.learning_agent.runtime import (
+    LearningRecorderConfig,
+    build_recorder_if_enabled,
+)
 
 
 def release_unused_memory() -> None:
@@ -641,6 +649,71 @@ def run_once(
         tracked_results=tracked_results,
     )
 
+    # --- Multi-agent pipeline bridge (advisory, off by default) ---
+    # Runs Chart → Learning → Decision on qualified scanner candidates and
+    # open positions. Never mutates paper/live state unless
+    # ``execute_decisions=true`` is set explicitly.
+    agent_pipeline_payload: dict[str, object] | None = None
+    agent_pipeline_config = AgentPipelineRuntimeConfig.from_dict(
+        runtime_config.get("agent_pipeline") if isinstance(
+            runtime_config.get("agent_pipeline"), dict
+        ) else None
+    )
+    if agent_pipeline_config.enabled:
+        open_positions_map: dict[str, dict[str, object]] = {}
+        if paper is not None:
+            for pos in paper.get("open_positions", []) or []:
+                if isinstance(pos, dict) and pos.get("symbol"):
+                    open_positions_map[str(pos["symbol"])] = pos
+        try:
+            agent_pipeline_payload = run_pipeline_bridge(
+                config=agent_pipeline_config,
+                scanner_results=results,
+                open_positions=open_positions_map,
+                market_data=market_data,
+            )
+        except Exception as exc:  # noqa: BLE001
+            agent_pipeline_payload = {
+                "enabled": True,
+                "error": f"pipeline_bridge_failed: {exc}",
+            }
+
+    # --- Learning recorder (advisory, off by default) ---
+    # Reads new closures from paper_trades.jsonl and records them into the
+    # Learning Agent journal. Idempotent via checkpoint file.
+    learning_recorder_summary: dict[str, object] | None = None
+    learning_recorder_config = LearningRecorderConfig.from_dict(
+        runtime_config.get("learning_recorder") if isinstance(
+            runtime_config.get("learning_recorder"), dict
+        ) else None
+    )
+    if learning_recorder_config.enabled:
+        paper_trades_path: str | None = None
+        if paper_config is not None:
+            paper_trades_path = paper_config.trades_path
+        recorder = build_recorder_if_enabled(
+            learning_recorder_config,
+            paper_trades_path=paper_trades_path,
+        )
+        if recorder is not None:
+            try:
+                new_ids = recorder.process_new_closures()
+                learning_recorder_summary = {
+                    "enabled": True,
+                    "recorded_count": len(new_ids),
+                    "recorded_ids": new_ids,
+                }
+            except Exception as exc:  # noqa: BLE001
+                learning_recorder_summary = {
+                    "enabled": True,
+                    "error": f"recorder_failed: {exc}",
+                }
+        else:
+            learning_recorder_summary = {
+                "enabled": True,
+                "skipped": "no_trades_path_or_file",
+            }
+
     return {
         "latest_output": latest_output,
         "history_output": history_output,
@@ -650,6 +723,8 @@ def run_once(
         "confirmed_short_signals": confirmed_short_results,
         "paper": paper,
         "live_decisions": live_decisions,
+        "agent_pipeline": agent_pipeline_payload,
+        "learning_recorder": learning_recorder_summary,
     }
 
 

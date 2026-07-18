@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from app.config.env import get_exchange_credentials
 from app.config.production import production_shutdown, production_startup
 from app.dashboard.routes import (
+    agent,
     analytics,
     backtest,
     futures,
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
         health,
         settings,
         futures,
+        agent,
     ):
         _include_http_router(
             dashboard,

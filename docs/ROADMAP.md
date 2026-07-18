@@ -40,13 +40,14 @@ Dokumen ini menjadi pegangan sprint berikutnya. Status saat ini: Sprint 23 (Stra
 25. Sprint 24 - dokumen spesifikasi strategi Liquidity + S/R + Trend + Multi-Timeframe (`docs/strategy_liquidity_sr_mtf.md`, checkpoint `docs/CHECKPOINT_SPRINT_24_STRATEGY_DOC.md`). Dokumen saja, tidak ada perubahan kode.
 26. Sprint 25 - indikator baru untuk strategi Liquidity + S/R + Trend + MTF (`app/indicators/liquidity_structure.py`): `swing_points`, `structure_state`, `sr_zones`, `liquidity_pools`, `sweep_events`. Fungsi pure, deterministic, JSON-serializable. 18 unit test baru di `tests/test_liquidity_structure.py`. Backward compatibility `app/indicators/structure.py` dan `technical.py` dijaga. Checkpoint `docs/CHECKPOINT_SPRINT_25_INDICATORS.md`.
 27. Sprint 26 - strategi baru `app/strategies/liquidity_sr_mtf.py` yang mengonsumsi indikator Sprint 25 melalui `MTFContext` (big/mid/small) dan mengemit `StrategyDecision` (BUY / SELL / HOLD) beserta anchor, entry, SL, TP1, TP2, alasan deterministic, dan MTF alignment. Hard-gate untuk anchor S/R, fresh liquidity, sweep terkonfirmasi, dan konfirmasi small TF di-early-return HOLD dengan `meta.veto`. 12 unit test baru di `tests/test_liquidity_sr_mtf_strategy.py`. Tidak menyentuh rule engine, MTF scanner, atau signal builder lama. Checkpoint `docs/CHECKPOINT_SPRINT_26_STRATEGY.md`.
+28. Sprint 27 - multi-agent trading pipeline sebagai advisory layer di samping paper/live engine existing. Empat specialist agent (`app/chart_agent`, `app/learning_agent`, `app/decision_agent`, `app/executor_agent`) plus coordinator (`app/agent_pipeline`) dan Binance Futures adapter (`app/executor_agent/binance_futures_adapter.py`). Chart Agent membaca 7 teknik (regime, momentum, structure, ACR+, 22 candle pattern, liquidity S/R MTF, liquidity pools) menjadi `ChartReading`. Learning Agent menyimpan observation + trade record ke JSONL dan memproduksi `LearningInsight` (hot/cold pattern, best/worst regime, kalibrasi confluence). Decision Agent memutuskan `ENTRY_BUY/ENTRY_SELL/HOLD/EXIT/SKIP` berdasarkan ChartReading + LearningInsight. Executor Agent default dry-run; live mode wajib adapter, tidak pernah fallback ke simulate. Bridge di `run_realtime.py` dan trade feedback recorder default `enabled=false`. Tiga endpoint dashboard read-only (`/api/agent/pipeline`, `/api/agent/learning`, `/api/agent/observations`). 100 test baru di 10 file. Tidak menyentuh scoring engine, signal builder, paper engine, atau safety gate Binance Futures existing. Checkpoint `docs/CHECKPOINT_SPRINT_27_MULTI_AGENT.md`.
 
 ## Baseline Verifikasi Terkini
 
 - `./.venv/bin/python -m compileall app tests` bersih.
-- `./.venv/bin/python -m pytest --ignore=tests/test_klines_api.py` hijau, 99/99 (termasuk 18 test Sprint 25 dan 12 test Sprint 26).
-- `tests/test_klines_api.py` gagal collect karena environment VPS kekurangan `httpx2` (dependency starlette TestClient); pre-existing, bukan regresi Sprint 25/26.
-- Live trading tetap terkunci; research layer bersifat read-only.
+- `./.venv/bin/python -m pytest --ignore=tests/test_dashboard_futures_route.py --ignore=tests/test_klines_api.py --ignore=tests/test_settings_api.py` hijau, 372/372 (termasuk 100 test Sprint 27).
+- 3 file test di-ignore karena environment VPS kekurangan `httpx2` (dependency starlette TestClient); pre-existing, bukan regresi Sprint 27.
+- Live trading tetap terkunci; multi-agent pipeline bersifat advisory (`agent_pipeline.enabled=false` di config default).
 
 ## Kandidat Sprint Berikutnya
 
