@@ -15,6 +15,7 @@
 .settings-form label.checkbox{flex-direction:row;align-items:center;gap:8px;color:var(--txt-dim);cursor:pointer}
 .settings-form input[type="text"],
 .settings-form input[type="password"],
+.settings-form input[type="number"],
 .settings-form select{
   background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
   color:var(--txt);padding:9px 12px;font-family:inherit;font-size:13px;
@@ -22,9 +23,17 @@
 }
 .settings-form input[type="text"]:focus,
 .settings-form input[type="password"]:focus,
+.settings-form input[type="number"]:focus,
 .settings-form select:focus{outline:none;border-color:var(--green)}
 .settings-form select option{background:var(--panel-2);color:var(--txt)}
 .settings-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.settings-divider{height:1px;background:var(--border);margin:18px 0 14px}
+.settings-section-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px}
+.settings-section-head strong{font-size:13px;color:var(--txt)}
+.settings-section-head span,.settings-field-hint{font-size:11px;color:var(--txt-mute)}
+.settings-fields-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px}
+.settings-field-hint{margin:-4px 0 12px}
+@media (max-width:640px){.settings-fields-grid{grid-template-columns:1fr}.settings-section-head{align-items:flex-start;flex-direction:column;gap:4px}}
 .settings-actions button{
   padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;
   border:1px solid var(--border);background:var(--panel-2);color:var(--txt);

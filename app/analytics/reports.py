@@ -231,7 +231,8 @@ class AnalyticsEventCollector:
 def _read_json_object(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
-    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    with path.open(encoding="utf-8-sig") as file:
+        data = json.load(file)
     return data if isinstance(data, dict) else {}
 
 
@@ -239,11 +240,12 @@ def _read_paper_event_fills(path: Path) -> list[dict[str, object]]:
     if not path.exists():
         return []
     fills: list[dict[str, object]] = []
-    for line in path.read_text(encoding="utf-8-sig").splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("type") == "fill" and isinstance(event.get("payload"), dict):
-            fills.append(event["payload"])
+    with path.open(encoding="utf-8-sig") as file:
+        for line in file:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "fill" and isinstance(event.get("payload"), dict):
+                fills.append(event["payload"])
     return fills

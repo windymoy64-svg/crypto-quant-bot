@@ -29,6 +29,11 @@ from app.settings.exchange_credentials import (
     mask_secret,
     save_exchange_credentials,
 )
+from app.settings.trading_preferences import (
+    leverage_options,
+    load_trading_preferences,
+    save_trading_preferences,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -109,6 +114,66 @@ def list_exchange_settings() -> dict[str, Any]:
     return out
 
 
+def _optional_number(payload: dict[str, Any], key: str) -> float | None:
+    value = payload.get(key)
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def _trading_summary(exchange: str) -> dict[str, Any]:
+    preferences = load_trading_preferences(exchange=exchange)
+    options = leverage_options(exchange)
+    return {
+        "exchange": exchange,
+        "take_profit_percent": preferences.take_profit_percent,
+        "stop_loss_percent": preferences.stop_loss_percent,
+        "trailing_stop_percent": preferences.trailing_stop_percent,
+        "leverage": preferences.leverage,
+        "leverage_min": options[0],
+        "leverage_max": options[-1],
+        "leverage_options": options,
+        "updated_at": preferences.updated_at,
+    }
+
+
+@router.get("/settings/trading")
+def get_trading_settings(
+    exchange: str = Query(default=DEFAULT_EXCHANGE),
+) -> dict[str, Any]:
+    exchange = _normalize_exchange_or_400(exchange)
+    try:
+        return _trading_summary(exchange)
+    except Exception as exc:
+        logger.exception("Failed to load %s trading preferences", exchange)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.put("/settings/trading")
+def update_trading_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    exchange = _normalize_exchange_or_400(payload.get("exchange"))
+    try:
+        leverage_raw = payload.get("leverage")
+        leverage = (
+            None
+            if leverage_raw is None or leverage_raw == ""
+            else int(leverage_raw)
+        )
+        save_trading_preferences(
+            exchange=exchange,
+            take_profit_percent=_optional_number(payload, "take_profit_percent"),
+            stop_loss_percent=_optional_number(payload, "stop_loss_percent"),
+            trailing_stop_percent=_optional_number(payload, "trailing_stop_percent"),
+            leverage=leverage,
+        )
+        return _trading_summary(exchange)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to save %s trading preferences", exchange)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.put("/settings/exchange")
 def update_exchange_settings(payload: dict[str, Any]) -> dict[str, Any]:
     """Store new credentials for the given exchange.
@@ -119,7 +184,9 @@ def update_exchange_settings(payload: dict[str, Any]) -> dict[str, Any]:
     exchange = _normalize_exchange_or_400(payload.get("exchange"))
     api_key = str(payload.get("api_key", "")).strip()
     api_secret = str(payload.get("api_secret", "")).strip()
-    testnet = bool(payload.get("testnet", False))
+    # Bitunix has no public testnet. Never persist a stale Binance checkbox
+    # value under the Bitunix credential namespace.
+    testnet = bool(payload.get("testnet", False)) if exchange == "binance" else False
 
     if not api_key or not api_secret:
         raise HTTPException(
@@ -161,6 +228,12 @@ def test_exchange_settings(payload: dict[str, Any] | None = None) -> dict[str, A
     api_secret = str(payload.get("api_secret", "")).strip()
     testnet_override = payload.get("testnet")
 
+    if bool(api_key) != bool(api_secret):
+        raise HTTPException(
+            status_code=400,
+            detail="api_key and api_secret must be provided together",
+        )
+
     if not (api_key and api_secret):
         record = load_exchange_credentials(exchange=exchange)
         if record is None or not record.is_configured:
@@ -179,7 +252,7 @@ def test_exchange_settings(payload: dict[str, Any] | None = None) -> dict[str, A
     if exchange == "binance":
         return _perform_binance_test(api_key, api_secret, testnet=testnet)
     if exchange == "bitunix":
-        return _perform_bitunix_test(api_key, api_secret, testnet=testnet)
+        return _perform_bitunix_test(api_key, api_secret, testnet=False)
 
     # Should be unreachable because _normalize_exchange_or_400 gates the input.
     raise HTTPException(status_code=400, detail=f"unsupported exchange {exchange!r}")

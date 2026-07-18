@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 
 
 class DashboardEventHub:
-    def __init__(self, max_events: int = 200) -> None:
+    def __init__(self, max_events: int = 200, max_pending_events: int = 500) -> None:
         self.connections: set[WebSocket] = set()
         self.live_events: deque[dict[str, Any]] = deque(maxlen=max_events)
+        self._max_pending_events = max(1, max_pending_events)
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._drain_task: asyncio.Task[None] | None = None
@@ -83,9 +84,31 @@ class DashboardEventHub:
         self.live_events.append(message)
         if self._loop and self._queue:
             try:
-                self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+                self._loop.call_soon_threadsafe(self._enqueue_latest, message)
             except RuntimeError:
                 logger.exception("Dashboard websocket event loop is unavailable")
+
+    def _enqueue_latest(self, message: dict[str, Any]) -> None:
+        """Enqueue tanpa membiarkan producer cepat menghabiskan RAM.
+
+        Event dashboard bersifat realtime dan selalu dilengkapi snapshot
+        periodik. Saat consumer tertinggal, event paling lama lebih aman
+        dibuang daripada menumbuhkan antrean tanpa batas.
+        """
+
+        if self._queue is None:
+            return
+        if self._queue.full():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            self._queue.put_nowait(message)
+        except asyncio.QueueFull:
+            # Hanya mungkin bila ada enqueue lain di loop yang sama di antara
+            # pemeriksaan dan put; snapshot berikutnya tetap menyegarkan state.
+            pass
 
     def _ensure_runtime(self) -> None:
         loop = asyncio.get_running_loop()
@@ -96,7 +119,7 @@ class DashboardEventHub:
             self._snapshot_task.cancel()
         if self._queue is None or loop_changed:
             self._loop = loop
-            self._queue = asyncio.Queue()
+            self._queue = asyncio.Queue(maxsize=self._max_pending_events)
             self._drain_task = None
             self._snapshot_task = None
         if self._drain_task is None or self._drain_task.done():
@@ -199,7 +222,7 @@ class DashboardEventHub:
             },
         }
         try:
-            self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+            self._loop.call_soon_threadsafe(self._enqueue_latest, message)
         except RuntimeError:
             pass
 

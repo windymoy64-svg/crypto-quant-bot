@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.dashboard.app import create_app
 from app.settings import exchange_credentials as ec_module
 from app.settings import store as store_module
+from app.settings import trading_preferences as tp_module
 from app.settings.store import SecretsStore
 
 
@@ -21,6 +22,7 @@ def isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SecretsSt
     )
     monkeypatch.setattr(store_module, "get_secrets_store", lambda: store)
     monkeypatch.setattr(ec_module, "get_secrets_store", lambda: store)
+    monkeypatch.setattr(tp_module, "get_secrets_store", lambda: store)
     return store
 
 
@@ -173,3 +175,63 @@ def test_test_exchange_bitunix_sends_custom_user_agent(
     assert ua == settings_route.BITUNIX_USER_AGENT
     assert "Python-urllib" not in (ua or "")
     assert "fapi.bitunix.com" in str(captured["url"])
+
+
+def test_trading_settings_are_isolated_per_exchange(client: TestClient) -> None:
+    response = client.put(
+        "/api/settings/trading",
+        json={
+            "exchange": "bitunix",
+            "take_profit_percent": 4.5,
+            "stop_loss_percent": 1.25,
+            "trailing_stop_percent": 0.8,
+            "leverage": 20,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["leverage"] == 20
+    assert response.json()["take_profit_percent"] == 4.5
+
+    binance = client.get("/api/settings/trading?exchange=binance").json()
+    assert binance["leverage"] is None
+    assert binance["take_profit_percent"] is None
+
+
+def test_trading_settings_blank_values_restore_defaults(client: TestClient) -> None:
+    client.put(
+        "/api/settings/trading",
+        json={"exchange": "binance", "stop_loss_percent": 2, "leverage": 5},
+    )
+
+    response = client.put(
+        "/api/settings/trading",
+        json={
+            "exchange": "binance",
+            "take_profit_percent": None,
+            "stop_loss_percent": None,
+            "trailing_stop_percent": None,
+            "leverage": None,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stop_loss_percent"] is None
+    assert body["leverage"] is None
+
+
+def test_trading_settings_reject_invalid_percent_and_leverage(
+    client: TestClient,
+) -> None:
+    percent = client.put(
+        "/api/settings/trading",
+        json={"exchange": "bitunix", "take_profit_percent": 0},
+    )
+    leverage = client.put(
+        "/api/settings/trading",
+        json={"exchange": "bitunix", "leverage": 126},
+    )
+
+    assert percent.status_code == 400
+    assert leverage.status_code == 400

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import signal
 import time
@@ -17,6 +18,30 @@ from app.strategies.acr_realtime_enrichment import (
     ACREnrichmentConfig,
     enrich_realtime_signals,
 )
+from app.settings.trading_preferences import load_trading_preferences
+
+
+def release_unused_memory() -> None:
+    """Best-effort: kembalikan heap siklus scan yang sudah bebas ke OS.
+
+    CPython/glibc sering mempertahankan arena dari parsing response exchange
+    meski semua object sudah tidak direferensikan. ``malloc_trim`` hanya
+    melepas halaman heap yang memang kosong; object aktif tidak disentuh.
+    Runtime non-glibc tetap aman karena kegagalan diabaikan.
+    """
+
+    gc.collect()
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None)
+        malloc_trim = getattr(libc, "malloc_trim", None)
+        if malloc_trim is not None:
+            malloc_trim.argtypes = [ctypes.c_size_t]
+            malloc_trim.restype = ctypes.c_int
+            malloc_trim(0)
+    except (AttributeError, OSError):
+        pass
 
 def load_json(path: str) -> dict[str, object]:
     with Path(path).open(encoding="utf-8-sig") as file:
@@ -126,15 +151,16 @@ def write_scan_outputs(
 
     latest_path = Path(latest_output)
     latest_path.parent.mkdir(parents=True, exist_ok=True)
-    latest_path.write_text(
-        json.dumps(payload, indent=2),
-        encoding="utf-8",
-    )
+    # json.dump menulis bertahap sehingga payload scan tidak diduplikasi menjadi
+    # satu string besar tambahan di RAM sebelum ditulis.
+    with latest_path.open("w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2)
 
     history_path = Path(history_output)
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with history_path.open("a", encoding="utf-8") as file:
-        file.write(json.dumps(payload) + "\n")
+        json.dump(payload, file, separators=(",", ":"))
+        file.write("\n")
 
 def prepare_confirmed_short_signals(
     long_results: list[dict[str, object]],
@@ -455,7 +481,10 @@ def prepare_confirmed_short_signals(
 
     return confirmed
 
-def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
+def run_once(
+    runtime_config: dict[str, object],
+    market_data_cache: dict[tuple[str, bool], MarketDataService] | None = None,
+) -> dict[str, object]:
     scan_config_path = str(runtime_config.get("scan_config", "configs/market_scan.json"))
     paper_config_path = str(runtime_config.get("paper_config", "configs/paper_trading.json"))
     live_config_path = str(runtime_config.get("live_config", "configs/live_trading.json"))
@@ -463,6 +492,25 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
     history_output = str(runtime_config.get("history_output", "logs/signals.jsonl"))
 
     scan_config = load_json(scan_config_path)
+    exchange = str(scan_config.get("exchange", "binance"))
+    fallback = bool(scan_config.get("fallback_to_sample_data", True))
+    market_data_key = (exchange.lower(), fallback)
+    if market_data_cache is None:
+        market_data = MarketDataService(
+            exchange=exchange,
+            fallback_to_sample_data=fallback,
+        )
+    else:
+        market_data = market_data_cache.get(market_data_key)
+        if market_data is None:
+            # Konfigurasi exchange jarang berubah. Simpan hanya service aktif
+            # agar metadata ccxt lama tidak tertahan setelah hot reload config.
+            market_data_cache.clear()
+            market_data = MarketDataService(
+                exchange=exchange,
+                fallback_to_sample_data=fallback,
+            )
+            market_data_cache[market_data_key] = market_data
 
     paper_enabled = bool(
         runtime_config.get("paper_trading_enabled", True)
@@ -471,8 +519,22 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
     open_position_symbols: list[str] = []
     telegram_notifier = None
     if paper_enabled:
+        paper_data = load_json(paper_config_path)
+        selected_exchange = str(scan_config.get("exchange", "binance")).lower()
+        try:
+            preferences = load_trading_preferences(exchange=selected_exchange)
+        except Exception:
+            preferences = None
+        if preferences is not None:
+            paper_data = {
+                **paper_data,
+                "take_profit_percent": preferences.take_profit_percent,
+                "stop_loss_percent": preferences.stop_loss_percent,
+                "trailing_stop_percent": preferences.trailing_stop_percent,
+                "leverage": preferences.leverage,
+            }
         paper_config = PaperTradingConfig.from_dict(
-            load_json(paper_config_path)
+            paper_data
         )
         open_position_symbols = load_open_position_symbols(
             paper_config.state_path
@@ -502,7 +564,7 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
             ),
         }
 
-    rankings = scan_symbol_rankings(scan_config)
+    rankings = scan_symbol_rankings(scan_config, market_data=market_data)
 
     # Hanya LONG yang dikirim ke paper/live executor.
     results = [item.to_dict() for item in rankings.long]
@@ -549,15 +611,9 @@ def run_once(runtime_config: dict[str, object]) -> dict[str, object]:
             ) else None
         )
         if acr_config.enabled:
-            exchange = str(scan_config.get("exchange", "binance"))
-            fallback = bool(scan_config.get("fallback_to_sample_data", False))
-            acr_market_data = MarketDataService(
-                exchange=exchange,
-                fallback_to_sample_data=fallback,
-            )
             paper_signals, stats_obj = enrich_realtime_signals(
                 paper_signals,
-                market_data=acr_market_data,
+                market_data=market_data,
                 config=acr_config,
             )
             acr_stats = stats_obj.to_dict()
@@ -607,6 +663,7 @@ def main() -> None:
 
     runtime_config = load_json(args.config)
     interval_seconds = int(runtime_config.get("interval_seconds", 60))
+    market_data_cache: dict[tuple[str, bool], MarketDataService] = {}
     stop_requested = False
 
     def request_stop(signum: int, frame: object) -> None:
@@ -617,7 +674,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, request_stop)
 
     while not stop_requested:
-        result = run_once(runtime_config)
+        result = run_once(runtime_config, market_data_cache=market_data_cache)
         summary = [
             f"{item['symbol']}={item['action']}({item['confidence']})/{item['data_source']}"
             for item in result["signals"]
@@ -653,6 +710,12 @@ def main() -> None:
             ),
             flush=True,
         )
+
+        # Jangan pertahankan seluruh payload hasil scan selama interval idle.
+        # State penting sudah tersimpan ke file; loop berikutnya akan membuat
+        # snapshot baru. Ini hanya melepas referensi, tidak mengubah keputusan.
+        del result
+        release_unused_memory()
 
         if args.once:
             break

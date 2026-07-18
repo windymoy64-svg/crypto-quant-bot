@@ -28,6 +28,21 @@ class MarketDataService:
         self.exchange = exchange
         self.fallback_to_sample_data = fallback_to_sample_data
         self.history_loader = HistoryLoader(HistoricalMarketDataEngine(exchange=exchange))
+        # Satu exchange ccxt memuat metadata market yang cukup besar. Reuse
+        # dalam satu lifecycle service agar scan banyak simbol tidak membuat
+        # ulang metadata dan session HTTP untuk setiap simbol.
+        self._ccxt_client: CcxtExchangeClient | None = None
+        self._binance_client: BinanceConnector | None = None
+
+    def _get_binance_client(self) -> BinanceConnector:
+        if self._binance_client is None:
+            self._binance_client = BinanceConnector()
+        return self._binance_client
+
+    def _get_ccxt_client(self) -> CcxtExchangeClient:
+        if self._ccxt_client is None:
+            self._ccxt_client = CcxtExchangeClient(self.exchange)
+        return self._ccxt_client
 
     def fetch_ohlcv(
         self,
@@ -73,17 +88,16 @@ class MarketDataService:
     ) -> MarketDataResult:
         errors = errors if errors is not None else []
 
-        try:
-            candles = CcxtExchangeClient(self.exchange).fetch_candles(symbol, timeframe=timeframe, limit=limit)
-            if not candles:
-                raise RuntimeError("ccxt returned no candles")
-            return MarketDataResult(symbol=symbol, timeframe=timeframe, candles=candles, source="ccxt")
-        except Exception as exc:
-            errors.append(f"ccxt: {exc}")
-
+        # BinanceConnector memakai endpoint klines publik yang sama tanpa
+        # memuat metadata seluruh market seperti ccxt. Prioritaskan jalur
+        # ringan untuk Binance; ccxt tetap dipertahankan sebagai fallback.
         if self.exchange.lower() == "binance":
             try:
-                candles = BinanceConnector().fetch_candles(symbol, timeframe=timeframe, limit=limit)
+                candles = self._get_binance_client().fetch_candles(
+                    symbol,
+                    timeframe=timeframe,
+                    limit=limit,
+                )
                 if not candles:
                     raise RuntimeError("binance connector returned no candles")
                 return MarketDataResult(
@@ -95,6 +109,18 @@ class MarketDataService:
                 )
             except Exception as exc:
                 errors.append(f"binance_connector: {exc}")
+
+        try:
+            candles = self._get_ccxt_client().fetch_candles(
+                symbol,
+                timeframe=timeframe,
+                limit=limit,
+            )
+            if not candles:
+                raise RuntimeError("ccxt returned no candles")
+            return MarketDataResult(symbol=symbol, timeframe=timeframe, candles=candles, source="ccxt")
+        except Exception as exc:
+            errors.append(f"ccxt: {exc}")
 
         try:
             candles = PublicHttpExchangeClient(self.exchange).fetch_candles(
@@ -128,20 +154,20 @@ class MarketDataService:
     def fetch_ticker(self, symbol: str) -> dict[str, float | str]:
         errors: list[str] = []
 
-        try:
-            ticker = CcxtExchangeClient(self.exchange).fetch_ticker(symbol)
-            self._publish_price_update(symbol, ticker, "ccxt")
-            return ticker
-        except Exception as exc:
-            errors.append(f"ccxt: {exc}")
-
         if self.exchange.lower() == "binance":
             try:
-                ticker = BinanceConnector().fetch_ticker(symbol)
+                ticker = self._get_binance_client().fetch_ticker(symbol)
                 self._publish_price_update(symbol, ticker, "binance_connector")
                 return ticker
             except Exception as exc:
                 errors.append(f"binance_connector: {exc}")
+
+        try:
+            ticker = self._get_ccxt_client().fetch_ticker(symbol)
+            self._publish_price_update(symbol, ticker, "ccxt")
+            return ticker
+        except Exception as exc:
+            errors.append(f"ccxt: {exc}")
 
         try:
             ticker = PublicHttpExchangeClient(self.exchange).fetch_ticker(symbol)

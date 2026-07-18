@@ -1,7 +1,8 @@
 import json
+from collections import deque
 
 with open("logs/signals.jsonl", "rb") as f:
-    lines = f.readlines()[-4:]
+    lines = deque(f, maxlen=4)
 
 # Current open positions from paper state
 ps = json.load(open("logs/paper_state.json"))

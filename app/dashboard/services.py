@@ -2,6 +2,8 @@
 
 import json
 import logging
+from collections import deque
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -82,9 +84,29 @@ def read_json_file(path: str | Path, default: Any) -> Any:
     if not target.exists():
         return default
     try:
-        return json.loads(target.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError:
+        with target.open(encoding="utf-8-sig") as file:
+            return json.load(file)
+    except (OSError, json.JSONDecodeError):
         return default
+
+
+def iter_jsonl_file(path: str | Path) -> Iterator[dict[str, Any]]:
+    """Yield object JSONL satu per satu tanpa menahan seluruh file di RAM."""
+
+    target = Path(path)
+    if not target.exists():
+        return
+    try:
+        with target.open(encoding="utf-8-sig") as file:
+            for line in file:
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    yield item
+    except OSError:
+        return
 
 
 def read_jsonl_file(path: str | Path, limit: int | None = 100) -> list[dict[str, Any]]:
@@ -95,20 +117,16 @@ def read_jsonl_file(path: str | Path, limit: int | None = 100) -> list[dict[str,
     trade paper dalam 1 sesi WIB untuk KPI "Trade Hari Ini").
     """
 
-    target = Path(path)
-    if not target.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in target.read_text(encoding="utf-8-sig").splitlines():
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(item, dict):
-            rows.append(item)
-    if limit is None or limit <= 0:
-        return rows
-    return rows[-limit:]
+    # Jangan gunakan read_text().splitlines(): file log yang besar akan dibuat
+    # menjadi satu string besar lalu diduplikasi lagi menjadi list baris. Untuk
+    # request dashboard yang hanya memerlukan data terbaru, deque menjaga
+    # jumlah object di RAM tetap sebesar ``limit`` terlepas dari ukuran file.
+    bounded = limit is not None and limit > 0
+    rows: list[dict[str, Any]] | deque[dict[str, Any]] = (
+        deque(maxlen=limit) if bounded else []
+    )
+    rows.extend(iter_jsonl_file(path))
+    return list(rows)
 
 
 class DashboardService:
@@ -301,11 +319,10 @@ class DashboardService:
         # tertutup dalam sesi WIB berjalan. File paper_trades.jsonl di-rotate
         # harian oleh scheduler (app/dashboard/scheduler.py) sehingga ukurannya
         # tetap terkendali per sesi.
-        trade_events = read_jsonl_file("logs/paper_trades.jsonl", limit=None)
         closed_trades: list[dict[str, Any]] = []
         all_exits: list[dict[str, Any]] = []
         opened_trades: list[dict[str, Any]] = []
-        for ev in trade_events:
+        for ev in iter_jsonl_file("logs/paper_trades.jsonl"):
             t = ev.get("type")
             if t == "opened":
                 # Event entry: dipakai untuk KPI "Trade Today" (jumlah posisi

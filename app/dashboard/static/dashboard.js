@@ -97,8 +97,9 @@ async function apiFetch(path, options={}){
   return data;
 }
 function currentExchange(){
-  const sel = byId("settings-exchange");
-  return (sel && sel.value) ? sel.value : "binance";
+  const sel = byId("settings-exchange-select");
+  const value = String(sel?.value || "").toLowerCase();
+  return value === "bitunix" ? "bitunix" : "binance";
 }
 function exchangeLabel(name){
   const n = String(name || "").toLowerCase();
@@ -119,7 +120,7 @@ function renderSettingsSummary(s){
   setText("settings-cur-net", configured ? (s.testnet ? "Testnet" : "Mainnet") : "-");
   setText("settings-cur-updated", configured ? (s.updated_at || "-") : "-");
   const testnetBox = byId("settings-testnet");
-  if(testnetBox && configured) testnetBox.checked = !!s.testnet;
+  if(testnetBox) testnetBox.checked = configured ? !!s.testnet : false;
   setSettingsStatus(configured ? "ok" : "warn", configured ? "configured" : "not configured");
 }
 function renderSettingsResult(payload, ok){
@@ -140,15 +141,76 @@ function applyExchangeUiHints(){
   if(testnetHint) testnetHint.textContent = (ex === "bitunix")
     ? "Bitunix does not provide a public testnet; requests use production endpoints."
     : "";
+  const leverageHint = byId("settings-leverage-hint");
+  if(leverageHint) leverageHint.textContent = ex === "bitunix"
+    ? "Bitunix leverage limit follows the selected symbol and position tier; the exchange may cap a saved value below 125x."
+    : "Binance leverage limit follows the selected symbol and notional bracket; the exchange may cap a saved value below 125x.";
+}
+function setOptionalNumber(id, value){
+  const input = byId(id);
+  if(input) input.value = value === null || value === undefined ? "" : String(value);
+}
+function optionalNumberValue(id){
+  const raw = byId(id)?.value.trim();
+  if(!raw) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+function renderTradingSettings(data){
+  setOptionalNumber("settings-tp-percent", data.take_profit_percent);
+  setOptionalNumber("settings-sl-percent", data.stop_loss_percent);
+  setOptionalNumber("settings-trailing-percent", data.trailing_stop_percent);
+  const select = byId("settings-leverage");
+  if(select){
+    const selected = data.leverage === null || data.leverage === undefined ? "" : String(data.leverage);
+    select.innerHTML = '<option value="">Default existing</option>' +
+      (data.leverage_options || []).map(value => `<option value="${value}">${value}x</option>`).join("");
+    select.value = selected;
+  }
 }
 async function loadExchangeSettings(){
   applyExchangeUiHints();
   try {
     const ex = currentExchange();
-    const data = await apiFetch(`/api/settings/exchange?exchange=${encodeURIComponent(ex)}`);
-    renderSettingsSummary(data);
+    const [credentials, trading] = await Promise.all([
+      apiFetch(`/api/settings/exchange?exchange=${encodeURIComponent(ex)}`),
+      apiFetch(`/api/settings/trading?exchange=${encodeURIComponent(ex)}`),
+    ]);
+    renderSettingsSummary(credentials);
+    renderTradingSettings(trading);
   } catch(err) {
     setSettingsStatus("err", "load failed");
+    renderSettingsResult(err.message, false);
+  }
+}
+async function saveTradingSettings(){
+  const exchange = currentExchange();
+  const payload = {
+    exchange,
+    take_profit_percent: optionalNumberValue("settings-tp-percent"),
+    stop_loss_percent: optionalNumberValue("settings-sl-percent"),
+    trailing_stop_percent: optionalNumberValue("settings-trailing-percent"),
+    leverage: byId("settings-leverage")?.value || null,
+  };
+  setSettingsStatus("warn", "saving defaults...");
+  try {
+    const data = await apiFetch("/api/settings/trading", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    renderTradingSettings(data);
+    setSettingsStatus("ok", "defaults saved");
+    renderSettingsResult({
+      ok: true,
+      exchange: data.exchange,
+      take_profit_percent: data.take_profit_percent,
+      stop_loss_percent: data.stop_loss_percent,
+      trailing_stop_percent: data.trailing_stop_percent,
+      leverage: data.leverage,
+    }, true);
+    showToast(`${exchangeLabel(exchange)} trading defaults saved`);
+  } catch(err){
+    setSettingsStatus("err", "save failed");
     renderSettingsResult(err.message, false);
   }
 }
@@ -166,7 +228,12 @@ async function submitExchangeSettings(event){
   try {
     const data = await apiFetch("/api/settings/exchange", {
       method: "PUT",
-      body: JSON.stringify({ exchange, api_key: apiKey, api_secret: apiSecret, testnet }),
+      body: JSON.stringify({
+        exchange,
+        api_key: apiKey,
+        api_secret: apiSecret,
+        testnet: exchange === "binance" ? testnet : false,
+      }),
     });
     renderSettingsSummary(data);
     renderSettingsResult("Credentials saved. Run Test Connection to verify.", true);
@@ -185,10 +252,15 @@ async function testExchangeSettings(){
   const apiSecret = byId("settings-api-secret")?.value.trim();
   const testnet = !!byId("settings-testnet")?.checked;
   const body = { exchange };
+  if(Boolean(apiKey) !== Boolean(apiSecret)){
+    setSettingsStatus("err", "test failed");
+    renderSettingsResult("API Key and API Secret must be provided together.", false);
+    return;
+  }
   if(apiKey && apiSecret){
     body.api_key = apiKey;
     body.api_secret = apiSecret;
-    body.testnet = testnet;
+    if(exchange === "binance") body.testnet = testnet;
   }
   setSettingsStatus("warn", "testing...");
   try {
@@ -217,7 +289,12 @@ async function clearExchangeSettings(){
     renderSettingsResult(err.message, false);
   }
 }
-function onExchangeSelectChange(){ loadExchangeSettings(); }
+function onExchangeSelectChange(){
+  const key = byId("settings-api-key"); if(key) key.value = "";
+  const secret = byId("settings-api-secret"); if(secret) secret.value = "";
+  const result = byId("settings-result"); if(result) result.hidden = true;
+  loadExchangeSettings();
+}
 
 
 // ---------- Settings: Futures (USDⓈ-M) ----------

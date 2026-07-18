@@ -95,6 +95,7 @@ def _failed_gates(buckets: object) -> list[str]:
 def scan_symbol_rankings(
     config: dict[str, object],
     rules_path: str = "configs/rules.json",
+    market_data: MarketDataService | None = None,
 ) -> ScanRankings:
     exchange = str(config.get("exchange", "binance"))
     timeframe = str(config.get("timeframe", "1m"))
@@ -115,7 +116,7 @@ def scan_symbol_rankings(
             seen_symbols.add(symbol)
     fallback = bool(config.get("fallback_to_sample_data", True))
 
-    market_data = MarketDataService(
+    market_data = market_data or MarketDataService(
         exchange=exchange,
         fallback_to_sample_data=fallback,
     )

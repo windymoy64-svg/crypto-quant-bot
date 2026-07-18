@@ -110,20 +110,22 @@ def _read_json(path: Path) -> Any:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
+        with path.open(encoding="utf-8-sig") as file:
+            return json.load(file)
     except json.JSONDecodeError:
         return None
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8-sig").splitlines():
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(item, dict):
-            rows.append(item)
+    with path.open(encoding="utf-8-sig") as file:
+        for line in file:
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                rows.append(item)
     return rows
 
 

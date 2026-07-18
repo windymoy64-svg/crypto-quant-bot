@@ -9,6 +9,24 @@ from typing import Any
 from app.risk.manager import calculate_position_size
 
 
+def _optional_positive_float(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    parsed = float(value)
+    if parsed <= 0:
+        raise ValueError("percentage overrides must be positive")
+    return parsed
+
+
+def _optional_positive_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError("leverage must be positive")
+    return parsed
+
+
 @dataclass(frozen=True)
 class AutoExitConfig:
     enabled: bool = True
@@ -62,6 +80,10 @@ class PaperTradingConfig:
     trades_path: str
     max_position_size_percent: float = 15.0  # Tambah field: satu posisi max 15% balance
     auto_exit: AutoExitConfig = field(default_factory=AutoExitConfig)
+    take_profit_percent: float | None = None
+    stop_loss_percent: float | None = None
+    trailing_stop_percent: float | None = None
+    leverage: int | None = None
 
     @classmethod
     def from_dict(
@@ -93,6 +115,16 @@ class PaperTradingConfig:
                 data.get("max_position_size_percent", 15.0)
             ),
             auto_exit=AutoExitConfig.from_dict(auto_exit_data),
+            take_profit_percent=_optional_positive_float(
+                data.get("take_profit_percent")
+            ),
+            stop_loss_percent=_optional_positive_float(
+                data.get("stop_loss_percent")
+            ),
+            trailing_stop_percent=_optional_positive_float(
+                data.get("trailing_stop_percent")
+            ),
+            leverage=_optional_positive_int(data.get("leverage")),
         )
 
 
@@ -175,7 +207,8 @@ class RealtimePaperTradingEngine:
             )
 
         entry = float(signal["entry"])
-        stop_loss = float(signal["stop_loss"])
+        stop_loss = self._entry_stop_loss(signal, side, entry)
+        take_profit = self._entry_take_profit(signal, side, entry)
 
         if side == "BUY" and entry <= stop_loss:
             return self._event(
@@ -193,9 +226,14 @@ class RealtimePaperTradingEngine:
                 signal,
             )
 
-        # Calculate available balance (total balance - used capital from open positions)
+        # Calculate available balance (total balance - margin committed by
+        # open positions). Existing positions without leverage remain 1x.
         used_capital = sum(
-            float(pos.get("entry", 0)) * float(pos.get("remaining_size", 0))
+            (
+                float(pos.get("entry", 0))
+                * float(pos.get("remaining_size", 0))
+                / max(float(pos.get("leverage", 1) or 1), 1.0)
+            )
             for pos in open_positions.values()
         )
         available = float(state["balance"]) - used_capital
@@ -208,12 +246,17 @@ class RealtimePaperTradingEngine:
                 signal,
             )
 
+        leverage = self.config.leverage or 1
         size = calculate_position_size(
             account_balance=available,
             risk_percent=self.config.risk_percent,
             entry=entry,
             stop_loss=stop_loss,
-            max_position_percent=self.config.max_position_size_percent,
+            # max_position_size_percent represents committed margin. Convert
+            # it to the equivalent leveraged notional cap for paper sizing.
+            max_position_percent=(
+                self.config.max_position_size_percent * leverage
+            ),
         )
 
         if size <= 0:
@@ -232,6 +275,8 @@ class RealtimePaperTradingEngine:
             "entry": entry,
             "size": size,
             "remaining_size": size,
+            "leverage": leverage,
+            "used_capital": round(entry * size / leverage, 8),
             "stop_loss": stop_loss,
             "static_stop_loss": stop_loss,
             "trailing_stop_loss": None,
@@ -239,7 +284,7 @@ class RealtimePaperTradingEngine:
             "highest_price": entry,
             "lowest_price": entry,
             "atr_at_entry": atr_at_entry,
-            "take_profit": list(signal["take_profit"]),
+            "take_profit": take_profit,
             "tp_hit": [False, False, False],
             "realized_pnl_partial": 0.0,
             "opened_at": self._now(),
@@ -247,6 +292,7 @@ class RealtimePaperTradingEngine:
             "unrealized_pnl": 0.0,
             "confidence": float(signal["confidence"]),
             "entry_reason": self._build_entry_reason(signal, side),
+            "configured_leverage": self.config.leverage,
         }
 
         open_positions[symbol] = position
@@ -416,13 +462,19 @@ class RealtimePaperTradingEngine:
         entry_price: float,
         atr_value: float,
     ) -> None:
-        if atr_value <= 0 or position.get("trailing_active", False):
+        if position.get("trailing_active", False):
             return
 
-        activation_distance = (
-            atr_value
-            * self.config.auto_exit.trailing_activation_atr_multiple
-        )
+        trailing_percent = self.config.trailing_stop_percent
+        if trailing_percent is not None:
+            activation_distance = entry_price * (trailing_percent / 100)
+        elif atr_value > 0:
+            activation_distance = (
+                atr_value
+                * self.config.auto_exit.trailing_activation_atr_multiple
+            )
+        else:
+            return
 
         if self._is_short(position):
             should_activate = (
@@ -443,13 +495,23 @@ class RealtimePaperTradingEngine:
         position: dict[str, object],
         atr_value: float,
     ) -> None:
-        if not position.get("trailing_active") or atr_value <= 0:
+        if not position.get("trailing_active"):
             return
-
-        trailing_distance = (
-            atr_value
-            * self.config.auto_exit.trailing_distance_atr_multiple
-        )
+        trailing_percent = self.config.trailing_stop_percent
+        if trailing_percent is not None:
+            reference = (
+                float(position["lowest_price"])
+                if self._is_short(position)
+                else float(position["highest_price"])
+            )
+            trailing_distance = reference * (trailing_percent / 100)
+        elif atr_value > 0:
+            trailing_distance = (
+                atr_value
+                * self.config.auto_exit.trailing_distance_atr_multiple
+            )
+        else:
+            return
         previous = position.get("trailing_stop_loss")
         entry_price = float(position["entry"])
 
@@ -604,6 +666,13 @@ class RealtimePaperTradingEngine:
 
         position["remaining_size"] = round(
             remaining - size_to_close,
+            8,
+        )
+        leverage = max(float(position.get("leverage", 1) or 1), 1.0)
+        position["used_capital"] = round(
+            float(position["entry"])
+            * float(position["remaining_size"])
+            / leverage,
             8,
         )
         position["realized_pnl_partial"] = round(
@@ -767,6 +836,31 @@ class RealtimePaperTradingEngine:
             "SHORT",
             "SELL",
         }
+
+    def _entry_stop_loss(
+        self,
+        signal: dict[str, object],
+        side: str,
+        entry: float,
+    ) -> float:
+        percent = self.config.stop_loss_percent
+        if percent is None:
+            return float(signal["stop_loss"])
+        multiplier = 1 + (percent / 100) if side == "SHORT" else 1 - (percent / 100)
+        return round(entry * multiplier, 8)
+
+    def _entry_take_profit(
+        self,
+        signal: dict[str, object],
+        side: str,
+        entry: float,
+    ) -> list[float]:
+        percent = self.config.take_profit_percent
+        if percent is None:
+            raw = signal.get("take_profit", [])
+            return [float(value) for value in raw] if isinstance(raw, list) else []
+        multiplier = 1 - (percent / 100) if side == "SHORT" else 1 + (percent / 100)
+        return [round(entry * multiplier, 8)]
 
     def _get_position(
         self,
@@ -960,7 +1054,11 @@ class RealtimePaperTradingEngine:
             return
         buffer_pct = float(self.config.auto_exit.acr_trail_buffer_pct)
         apply_acr_breakeven(position)
-        apply_acr_trailing(position, ltf_candles, buffer_pct=buffer_pct)
+        # An explicit dashboard percentage is authoritative for trailing
+        # distance. Keep ACR breakeven/invalidation, but do not replace the
+        # percentage trail with a swing-derived level.
+        if self.config.trailing_stop_percent is None:
+            apply_acr_trailing(position, ltf_candles, buffer_pct=buffer_pct)
 
     def _check_acr_invalidation(
         self, position: dict[str, object], ltf_candles: list[Any]
