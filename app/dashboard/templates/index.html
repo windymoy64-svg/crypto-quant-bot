@@ -152,6 +152,121 @@
         </section>
 
         <section class="workspace view-section" data-view-section="agents">
+          <article id="agent-squad" class="panel xwide agent-squad-panel">
+            <div class="panel-head">
+              <div><p>Agent Squad</p><h2>Multi-Agent Command</h2></div>
+              <div class="panel-actions">
+                <a class="ghost office-launch" href="/office" target="_blank" rel="noopener">
+                  Open Animated Office
+                </a>
+                <span id="agent-squad-status" class="pill">initializing</span>
+              </div>
+            </div>
+            <div class="agent-squad-stage">
+              <div class="agent-squad-scan" aria-hidden="true"></div>
+              <div class="agent-squad-flow" aria-hidden="true">
+                <span class="flow-line" style="--delay:0s"></span>
+                <span class="flow-line" style="--delay:.8s"></span>
+                <span class="flow-line" style="--delay:1.6s"></span>
+              </div>
+              <div class="agent-squad-grid">
+                <div class="agent-avatar" data-agent="chart">
+                  <div class="pixel-bot bot-chart" aria-hidden="true">
+                    <span class="p p-antenna"></span>
+                    <span class="p p-antenna-tip"></span>
+                    <span class="p p-head"></span>
+                    <span class="p p-visor"></span>
+                    <span class="p p-eye eye-l"></span>
+                    <span class="p p-eye eye-r"></span>
+                    <span class="p p-mouth"></span>
+                    <span class="p p-body"></span>
+                    <span class="p p-chest"></span>
+                    <span class="p p-arm arm-l"></span>
+                    <span class="p p-arm arm-r"></span>
+                    <span class="p p-leg leg-l"></span>
+                    <span class="p p-leg leg-r"></span>
+                    <span class="p p-shadow"></span>
+                  </div>
+                  <div class="agent-meta">
+                    <strong>Chart Reader</strong>
+                    <span class="agent-role">HTF · MTF · LTF vision</span>
+                    <span class="agent-status">standby</span>
+                  </div>
+                </div>
+                <div class="agent-avatar" data-agent="learning">
+                  <div class="pixel-bot bot-learning" aria-hidden="true">
+                    <span class="p p-antenna"></span>
+                    <span class="p p-antenna-tip"></span>
+                    <span class="p p-head"></span>
+                    <span class="p p-visor"></span>
+                    <span class="p p-eye eye-l"></span>
+                    <span class="p p-eye eye-r"></span>
+                    <span class="p p-mouth"></span>
+                    <span class="p p-body"></span>
+                    <span class="p p-chest"></span>
+                    <span class="p p-arm arm-l"></span>
+                    <span class="p p-arm arm-r"></span>
+                    <span class="p p-leg leg-l"></span>
+                    <span class="p p-leg leg-r"></span>
+                    <span class="p p-shadow"></span>
+                  </div>
+                  <div class="agent-meta">
+                    <strong>Learning Agent</strong>
+                    <span class="agent-role">Journal · Insight · Kalibrasi</span>
+                    <span class="agent-status">standby</span>
+                  </div>
+                </div>
+                <div class="agent-avatar" data-agent="decision">
+                  <div class="pixel-bot bot-decision" aria-hidden="true">
+                    <span class="p p-antenna"></span>
+                    <span class="p p-antenna-tip"></span>
+                    <span class="p p-head"></span>
+                    <span class="p p-visor"></span>
+                    <span class="p p-eye eye-l"></span>
+                    <span class="p p-eye eye-r"></span>
+                    <span class="p p-mouth"></span>
+                    <span class="p p-body"></span>
+                    <span class="p p-chest"></span>
+                    <span class="p p-arm arm-l"></span>
+                    <span class="p p-arm arm-r"></span>
+                    <span class="p p-leg leg-l"></span>
+                    <span class="p p-leg leg-r"></span>
+                    <span class="p p-shadow"></span>
+                  </div>
+                  <div class="agent-meta">
+                    <strong>Decision Agent</strong>
+                    <span class="agent-role">Entry · Hold · Exit</span>
+                    <span class="agent-status">standby</span>
+                  </div>
+                </div>
+                <div class="agent-avatar" data-agent="executor">
+                  <div class="pixel-bot bot-executor" aria-hidden="true">
+                    <span class="p p-antenna"></span>
+                    <span class="p p-antenna-tip"></span>
+                    <span class="p p-head"></span>
+                    <span class="p p-visor"></span>
+                    <span class="p p-eye eye-l"></span>
+                    <span class="p p-eye eye-r"></span>
+                    <span class="p p-mouth"></span>
+                    <span class="p p-body"></span>
+                    <span class="p p-chest"></span>
+                    <span class="p p-arm arm-l"></span>
+                    <span class="p p-arm arm-r"></span>
+                    <span class="p p-leg leg-l"></span>
+                    <span class="p p-leg leg-r"></span>
+                    <span class="p p-shadow"></span>
+                  </div>
+                  <div class="agent-meta">
+                    <strong>Executor</strong>
+                    <span class="agent-role">Order routing (advisory)</span>
+                    <span class="agent-status">standby</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p id="agent-squad-caption" class="agent-squad-caption">Loading pipeline state…</p>
+          </article>
+
           <article id="agent-pipeline" class="panel xwide">
             <div class="panel-head">
               <div><p>Multi-Agent</p><h2>Pipeline Snapshot</h2></div>
@@ -349,6 +464,10 @@
           <a href="#health" data-view-link="health" onclick="toggleMobileMenu()">
             <svg viewBox="0 0 24 24"><path d="M4 13h4l2-6 4 12 2-6h4"/></svg>
             <span>Health</span>
+          </a>
+          <a href="#agents" data-view-link="agents" onclick="toggleMobileMenu()">
+            <svg viewBox="0 0 24 24"><path d="M12 3l7 4v6l-7 4-7-4V7l7-4zm0 4v6"/></svg>
+            <span>Agents</span>
           </a>
           <a href="#settings" data-view-link="settings" onclick="toggleMobileMenu()">
             <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zM4 12h2m12 0h2M12 4v2m0 12v2"/></svg>

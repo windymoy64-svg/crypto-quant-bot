@@ -213,6 +213,9 @@ def run_pipeline_bridge(
         "enabled": True,
         "generated_at": datetime.now(tz=UTC).isoformat(),
         "execute_decisions": config.execute_decisions,
+        "executor_mode": (
+            "live" if coordinator.executor_agent.live else "dry_run"
+        ),
         "entries": entries,
         "monitor": monitor,
     }

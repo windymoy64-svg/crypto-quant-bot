@@ -16,6 +16,7 @@ the dashboard never breaks just because the pipeline hasn't run yet.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,19 @@ DEFAULT_PIPELINE_PATH = "logs/agent_pipeline.json"
 DEFAULT_TRADE_JOURNAL_PATH = "data/learning_journal.jsonl"
 DEFAULT_OBSERVATIONS_PATH = "data/chart_observations.jsonl"
 MAX_OBSERVATIONS_LIMIT = 200
+PIPELINE_FRESH_SECONDS = 300
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 @router.get("/pipeline")
@@ -49,6 +63,45 @@ def pipeline_snapshot() -> dict[str, Any]:
         return payload
     except (OSError, json.JSONDecodeError) as exc:
         return {"available": False, "reason": f"read_error: {exc}"}
+
+
+@router.get("/snapshot")
+def synchronized_snapshot(limit: int = 20) -> dict[str, Any]:
+    """Return one timestamped snapshot for every dashboard agent panel.
+
+    Reading the pipeline, learning journal, and observations inside one request
+    prevents independently-polled panels from showing different scan cycles.
+    ``sync_status`` describes runtime freshness, not trading execution mode.
+    """
+
+    snapshot_at = datetime.now(UTC)
+    pipeline = pipeline_snapshot()
+    learning = learning_insight()
+    observations = recent_observations(limit=limit)
+    generated_at = _parse_timestamp(pipeline.get("generated_at"))
+    age_seconds = (
+        max(0.0, (snapshot_at - generated_at).total_seconds())
+        if generated_at is not None
+        else None
+    )
+    available = pipeline.get("available") is not False and pipeline.get("enabled") is not False
+    if not available:
+        sync_status = "offline"
+    elif pipeline.get("error"):
+        sync_status = "error"
+    elif age_seconds is None or age_seconds > PIPELINE_FRESH_SECONDS:
+        sync_status = "stale"
+    else:
+        sync_status = "online"
+
+    return {
+        "snapshot_at": snapshot_at.isoformat(),
+        "sync_status": sync_status,
+        "age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+        "pipeline": pipeline,
+        "learning": learning,
+        "observations": observations,
+    }
 
 
 @router.get("/learning")

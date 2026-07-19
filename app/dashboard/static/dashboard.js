@@ -76,9 +76,9 @@ function toggleFullscreenChart(){ byId("chart-card")?.classList.toggle("fullscre
 function resizeCharts(){ const node=byId("tv-chart"); if(state.tvChart&&node) state.tvChart.applyOptions({width:node.clientWidth,height:node.clientHeight||460}); if(state.apexChart) state.apexChart.updateOptions({chart:{height:byId("pnl-chart")?.clientHeight||220}},false,false); }
 function debounce(fn,wait=160){ let timer; return (...args)=>{ clearTimeout(timer); timer=setTimeout(()=>fn(...args),wait); }; }
 function tickClock(){ text("clock",new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})); }
-function showView(view){ state.currentView=view||"overview"; document.querySelectorAll("[data-view-section]").forEach(s=>s.classList.toggle("active",s.dataset.viewSection===state.currentView)); document.querySelectorAll("[data-view-link]").forEach(l=>l.classList.toggle("active",l.dataset.viewLink===state.currentView)); const isMenuView=["portfolio","health","settings"].includes(state.currentView); document.querySelector(".nav-menu-btn")?.classList.toggle("active",isMenuView); toggleMobileMenu(false); document.body.dataset.view=state.currentView; history.replaceState(null,"",`#${state.currentView}`); setTimeout(resizeCharts,80); }
+function showView(view){ state.currentView=view||"overview"; document.querySelectorAll("[data-view-section]").forEach(s=>s.classList.toggle("active",s.dataset.viewSection===state.currentView)); document.querySelectorAll("[data-view-link]").forEach(l=>l.classList.toggle("active",l.dataset.viewLink===state.currentView)); const isMenuView=["portfolio","health","agents","settings"].includes(state.currentView); document.querySelector(".nav-menu-btn")?.classList.toggle("active",isMenuView); toggleMobileMenu(false); document.body.dataset.view=state.currentView; history.replaceState(null,"",`#${state.currentView}`); setTimeout(resizeCharts,80); if(state.currentView==="agents") loadAgentPanels().catch(console.warn); }
 function initUi(){ if(localStorage.getItem("sidebarCollapsed")==="1") document.body.classList.add("sidebar-collapsed"); populateChartSymbols(state.symbols); renderSymbolUniverse({symbols:state.symbols,configured_symbols:[]}); tickClock(); setInterval(tickClock,1000); window.addEventListener("resize",debounce(resizeCharts,180),{passive:true}); document.querySelectorAll("[data-view-link]").forEach(link=>link.addEventListener("click",e=>{ e.preventDefault(); showView(link.dataset.viewLink); })); document.addEventListener("keydown",e=>{ if(e.key==="Escape") toggleMobileMenu(false); }); showView(location.hash?.replace("#","")||"overview"); }
-function connectWs(){ const protocol=location.protocol==="https:"?"wss":"ws"; setWsStatus("Reconnecting"); const token=document.querySelector('meta[name="dashboard-token"]')?.content||""; const query=token?`?api_key=${encodeURIComponent(token)}`:""; const ws=new WebSocket(`${protocol}://${location.host}/ws${query}`); ws.onopen=()=>{ setWsStatus("Connected"); showToast("Websocket connected"); }; ws.onerror=()=>setWsStatus("Disconnected"); ws.onclose=()=>{ setWsStatus("Disconnected"); setTimeout(()=>{ setWsStatus("Reconnecting"); connectWs(); },3000); }; let snapshotTimer=null; ws.onmessage=msg=>{ let data; try{ data=JSON.parse(msg.data); }catch(err){ console.warn("Invalid websocket payload",err); return; } if(data.type==="snapshot"){ clearTimeout(snapshotTimer); snapshotTimer=setTimeout(()=>render(data.payload),state.currentView==="orders"?100:800); renderEvents(); } if(data.type==="live_events"){ state.liveEvents=list(data.payload); renderEvents(); } if(data.type==="event"){ state.liveEvents.push(data); showToast(`${data.event_type??"event"} received`); renderEvents(); } if(data.type==="price_update") handlePriceUpdate(data.payload); }; }
+function connectWs(){ const protocol=location.protocol==="https:"?"wss":"ws"; setWsStatus("Reconnecting"); const token=document.querySelector('meta[name="dashboard-token"]')?.content||""; const query=token?`?api_key=${encodeURIComponent(token)}`:""; const ws=new WebSocket(`${protocol}://${location.host}/ws${query}`); ws.onopen=()=>{ setWsStatus("Connected"); showToast("Websocket connected"); }; ws.onerror=()=>setWsStatus("Disconnected"); ws.onclose=()=>{ setWsStatus("Disconnected"); setTimeout(()=>{ setWsStatus("Reconnecting"); connectWs(); },3000); }; let snapshotTimer=null; ws.onmessage=msg=>{ let data; try{ data=JSON.parse(msg.data); }catch(err){ console.warn("Invalid websocket payload",err); return; } if(data.type==="snapshot"){ clearTimeout(snapshotTimer); snapshotTimer=setTimeout(()=>render(data.payload),state.currentView==="orders"?100:800); renderEvents(); } if(data.type==="agent_snapshot") renderAgentSnapshot(data.payload); if(data.type==="live_events"){ state.liveEvents=list(data.payload); renderEvents(); } if(data.type==="event"){ state.liveEvents.push(data); showToast(`${data.event_type??"event"} received`); renderEvents(); } if(data.type==="price_update") handlePriceUpdate(data.payload); }; }
 document.addEventListener("change",e=>{ if(e.target?.id==="market-filter") render(state.lastPayload); });
 document.addEventListener("input",debounce(e=>{ if(["journal-filter","symbol-filter","search"].includes(e.target?.id)) render(state.lastPayload); },180));
 function handleError(err){ console.error(err); setLoading(false); showToast(err.message); render(clone(DEFAULT_PAYLOAD)); }
@@ -404,26 +404,110 @@ async function loadFuturesAccount(){
   }
 }
 
+let agentPanelsLoading = false;
+
 async function loadAgentPanels(){
+  if(agentPanelsLoading) return;
+  agentPanelsLoading = true;
   try {
-    const [pipeline, learning, obs] = await Promise.allSettled([
-      getJson("/api/agent/pipeline"),
-      getJson("/api/agent/learning"),
-      getJson("/api/agent/observations?limit=20"),
-    ]);
-    renderAgentPipeline(pipeline.status === "fulfilled" ? pipeline.value : null);
-    renderAgentLearning(learning.status === "fulfilled" ? learning.value : null);
-    renderAgentObservations(obs.status === "fulfilled" ? obs.value : null);
+    renderAgentSnapshot(await getJson("/api/agent/snapshot?limit=20"));
   } catch (err) {
     console.warn("agent panels failed", err);
+  } finally {
+    agentPanelsLoading = false;
   }
+}
+
+function renderAgentSnapshot(snapshot){
+  if(!snapshot || typeof snapshot !== "object") return;
+  const pipeline = snapshot.pipeline || null;
+  const learning = snapshot.learning || null;
+  const observations = snapshot.observations || null;
+  renderAgentSquad(pipeline, learning, observations, snapshot);
+  renderAgentPipeline(pipeline, snapshot);
+  renderAgentLearning(learning);
+  renderAgentObservations(observations);
+}
+
+function formatAgentTime(value, includeDate=false){
+  const date = new Date(value || "");
+  if(Number.isNaN(date.getTime())) return "-";
+  const options = includeDate
+    ? {day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}
+    : {hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false};
+  return new Intl.DateTimeFormat(undefined, options).format(date);
+}
+
+function setAgentState(agent, mode, statusLabel){
+  const card = document.querySelector(`.agent-avatar[data-agent="${agent}"]`);
+  if(!card) return;
+  card.classList.remove("is-active","is-alert","is-idle");
+  if(mode && mode !== "idle") card.classList.add(`is-${mode}`);
+  else card.classList.add("is-idle");
+  const s = card.querySelector(".agent-status");
+  if(s && statusLabel) s.textContent = statusLabel;
+}
+
+function renderAgentSquad(pipeline, learning, obs, snapshot={}){
+  const status = byId("agent-squad-status");
+  const caption = byId("agent-squad-caption");
+  if(!status || !caption) return;
+
+  const enabled = !!(pipeline && pipeline.available !== false);
+  const entries = list(pipeline?.entries);
+  const monitor = list(pipeline?.monitor);
+  const executing = !!pipeline?.execute_decisions;
+  const observations = list(obs?.observations);
+  const trades = Number(learning?.total_trades || 0);
+  const generated = formatAgentTime(pipeline?.generated_at);
+  const syncStatus = String(snapshot?.sync_status || "offline");
+  const age = snapshot?.age_seconds == null ? null : Number(snapshot.age_seconds);
+
+  if(!enabled){
+    status.textContent = "pipeline offline";
+    status.className = "pill";
+    setAgentState("chart","idle","standby");
+    setAgentState("learning","idle","standby");
+    setAgentState("decision","idle","standby");
+    setAgentState("executor","idle","standby");
+    caption.textContent = "// Agent pipeline belum aktif. Aktifkan agent_pipeline.enabled=true di configs/realtime.json lalu restart run_realtime.";
+    return;
+  }
+
+  status.textContent = syncStatus === "online" ? "all agents synced" : `agents ${syncStatus}`;
+  status.className = "pill " + (syncStatus === "online" ? "success" : "warning");
+
+  // Availability and work output are different states: every configured agent
+  // remains online even when the current scan has no eligible candidate.
+  setAgentState("chart", "active", observations.length ? `online · ${observations.length} reads` : "online · scanning");
+  setAgentState("learning", "active", trades > 0 ? `online · ${trades} trades` : "online · collecting");
+
+  // Decision Agent: aktif kalau ada decision di entries/monitor.
+  const decisionCount =
+    entries.filter(e => e?.result?.decision).length +
+    monitor.filter(m => m?.result?.decision).length;
+  const hasExit = monitor.some(m => (m?.result?.decision?.action || "") === "EXIT");
+  setAgentState("decision", hasExit ? "alert" : "active", hasExit ? "exit signal" : (decisionCount > 0 ? `online · ${decisionCount} decisions` : "online · watching"));
+
+  const executorMode = String(pipeline?.executor_mode || (executing ? "dry_run" : "advisory"));
+  setAgentState("executor", "active", executing ? `online · ${executorMode.replace("_", " ")}` : "online · gated");
+
+  const bits = [];
+  bits.push(`entries=${entries.length}`);
+  bits.push(`monitor=${monitor.length}`);
+  bits.push(`observations=${observations.length}`);
+  bits.push(`trades=${trades}`);
+  if(generated !== "-") bits.push(`cycle=${generated}`);
+  if(Number.isFinite(age)) bits.push(`sync_age=${Math.round(age)}s`);
+  bits.push(`executor=${executorMode}`);
+  caption.textContent = "// " + bits.join("  ·  ") + (executorMode === "live" ? "  ·  ⚠ live execution" : "  ·  live order gate remains locked");
 }
 
 function kpiCard(label, value){
   return `<article class="kpi-card"><span>${esc(label)}</span><strong>${esc(String(value))}</strong></article>`;
 }
 
-function renderAgentPipeline(payload){
+function renderAgentPipeline(payload, snapshot={}){
   const status = byId("agent-pipeline-status");
   const summary = byId("agent-pipeline-summary");
   const entries = byId("agent-pipeline-entries");
@@ -439,13 +523,14 @@ function renderAgentPipeline(payload){
     return;
   }
 
-  status.textContent = payload.execute_decisions ? "advisory + execute" : "advisory only";
-  status.className = "pill " + (payload.execute_decisions ? "warning" : "success");
+  const syncStatus = String(snapshot?.sync_status || "online");
+  status.textContent = syncStatus === "online" ? "realtime synced" : syncStatus;
+  status.className = "pill " + (syncStatus === "online" ? "success" : "warning");
   summary.innerHTML = [
     kpiCard("Entries", (payload.entries || []).length),
     kpiCard("Monitored", (payload.monitor || []).length),
-    kpiCard("Generated", esc(payload.generated_at || "-")),
-    kpiCard("Execute", payload.execute_decisions ? "ON" : "OFF"),
+    kpiCard("Last cycle", formatAgentTime(payload.generated_at, true)),
+    kpiCard("Executor", payload.execute_decisions ? String(payload.executor_mode || "dry_run").replace("_", " ") : "gated"),
   ].join("");
 
   entries.innerHTML = renderAgentEntries(payload.entries || []);
@@ -463,9 +548,9 @@ function renderAgentEntries(items){
     const action = esc(decision.action || (res.eligible ? "-" : "SKIP"));
     const bias = esc(decision.regime || "-");
     const score = fmt(Number(decision.confidence_score ?? 0));
-    return `<tr><td>${symbol}</td><td>${conf}</td><td>${badge(action)}</td><td>${score}</td><td>${bias}</td><td><small>${eligibility}</small></td></tr>`;
+    return `<tr><td data-label="Symbol">${symbol}</td><td data-label="Scanner conf">${conf}</td><td data-label="Decision">${badge(action)}</td><td data-label="Score">${score}</td><td data-label="Regime">${bias}</td><td data-label="Reason"><small>${eligibility}</small></td></tr>`;
   }).join("");
-  return `<table><thead><tr><th>Symbol</th><th>Scanner Conf</th><th>Decision</th><th>Score</th><th>Regime</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="agent-table agent-entry-table"><thead><tr><th>Symbol</th><th>Scanner Conf</th><th>Decision</th><th>Score</th><th>Regime</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderAgentMonitor(items){
@@ -476,9 +561,9 @@ function renderAgentMonitor(items){
     const decision = res.decision || {};
     const action = esc(decision.action || "-");
     const reasons = list(decision.reasons).slice(0, 2).join(", ");
-    return `<tr><td>${symbol}</td><td>${badge(action)}</td><td><small>${esc(reasons || "-")}</small></td></tr>`;
+    return `<tr><td data-label="Symbol">${symbol}</td><td data-label="Decision">${badge(action)}</td><td data-label="Reasons"><small>${esc(reasons || "-")}</small></td></tr>`;
   }).join("");
-  return `<table><thead><tr><th>Symbol</th><th>Decision</th><th>Reasons</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table class="agent-table agent-monitor-table"><thead><tr><th>Symbol</th><th>Decision</th><th>Reasons</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderAgentLearning(payload){
@@ -545,10 +630,10 @@ function renderAgentObservations(payload){
     const bias = esc(reading.bias || "-");
     const confluence = fmt(Number(reading.confluence_score ?? 0));
     const action = esc(decision.action || "-");
-    const ts = String(obs.timestamp || "").slice(0, 19);
-    return `<tr><td>${esc(ts)}</td><td>${symbol}</td><td>${stage}</td><td>${badge(bias)}</td><td>${confluence}</td><td>${badge(action)}</td></tr>`;
+    const ts = formatAgentTime(obs.timestamp, true);
+    return `<tr><td data-label="Time"><time datetime="${esc(obs.timestamp || "")}">${esc(ts)}</time></td><td data-label="Symbol">${symbol}</td><td data-label="Stage">${stage}</td><td data-label="Bias">${badge(bias)}</td><td data-label="Confluence">${confluence}</td><td data-label="Decision">${badge(action)}</td></tr>`;
   }).join("");
-  listEl.innerHTML = `<table><thead><tr><th>Time</th><th>Symbol</th><th>Stage</th><th>Bias</th><th>Confluence</th><th>Decision</th></tr></thead><tbody>${rows}</tbody></table>`;
+  listEl.innerHTML = `<table class="agent-table agent-observations-table"><thead><tr><th>Time</th><th>Symbol</th><th>Stage</th><th>Bias</th><th>Confluence</th><th>Decision</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 initUi(); loadAll().catch(handleError); connectWs(); loadExchangeSettings(); loadFuturesSettings(); loadAgentPanels().catch(console.warn);

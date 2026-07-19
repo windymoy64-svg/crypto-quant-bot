@@ -111,7 +111,7 @@ class AgentPipelineCoordinator:
         )
         execution = (
             self.executor_agent.execute(decision, position)
-            if self.config.execute_decisions and decision.action == "EXIT"
+            if self.config.execute_decisions
             else None
         )
         return PipelineResult(

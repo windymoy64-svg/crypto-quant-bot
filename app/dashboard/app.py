@@ -21,6 +21,7 @@ from app.dashboard.routes import (
     futures,
     health,
     market,
+    office,
     paper,
     portfolio,
     settings,
@@ -89,6 +90,7 @@ def create_app() -> FastAPI:
         settings,
         futures,
         agent,
+        office,
     ):
         _include_http_router(
             dashboard,
@@ -189,6 +191,54 @@ def _register_compat_routes(dashboard: FastAPI) -> None:
         # keluar terbaru; asset .css/.js tetap aman di-cache karena URL-nya
         # sudah di-versionkan.
         response.headers["Cache-Control"] = "no-store"
+        cookie_secure = os.getenv("DASHBOARD_COOKIE_SECURE", "false").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if api_key:
+            response.set_cookie(
+                key="dashboard_token",
+                value=api_key,
+                httponly=True,
+                secure=cookie_secure,
+                samesite="strict",
+                max_age=60 * 60 * 12,
+            )
+        return response
+
+    @dashboard.get("/office", response_class=HTMLResponse)
+    def office_view(request: Request) -> HTMLResponse:
+        """Halaman animated agents.
+
+        Diserve dengan template terpisah ``office.html`` yang punya canvas
+        pixel-art sendiri; tidak bergantung ke sidebar dashboard utama.
+        """
+
+        static_dir = Path(__file__).parent / "static"
+        try:
+            asset_version = str(int(max(
+                (static_dir / "office.js").stat().st_mtime,
+                (static_dir / "office.css").stat().st_mtime,
+            )))
+        except OSError:
+            asset_version = "0"
+
+        response = templates.TemplateResponse(
+            request=request,
+            name="office.html",
+            context={
+                "request": request,
+                "asset_version": asset_version,
+            },
+        )
+        response.headers["Cache-Control"] = "no-store"
+
+        # Sama seperti halaman dashboard utama: membuka halaman HTML akan
+        # memasang cookie HttpOnly agar polling /api/office/state tetap lolos
+        # ketika BOT_API_KEY diaktifkan.
+        api_key = os.getenv("BOT_API_KEY")
         cookie_secure = os.getenv("DASHBOARD_COOKIE_SECURE", "false").lower() in {
             "1",
             "true",

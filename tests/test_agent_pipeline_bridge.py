@@ -141,6 +141,7 @@ def test_bridge_writes_output_artifact(tmp_path: Path) -> None:
     assert output.exists()
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["enabled"] is True
+    assert payload["executor_mode"] == "dry_run"
     assert payload["execute_decisions"] is False
     assert len(payload["entries"]) == 1
 

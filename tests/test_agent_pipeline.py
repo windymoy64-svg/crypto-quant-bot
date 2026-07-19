@@ -126,6 +126,19 @@ def test_execution_remains_opt_in(tmp_path: Path) -> None:
     assert result.execution is None
 
 
+def test_monitoring_runs_executor_as_dry_run_when_enabled(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path, execute=True)
+    result = coordinator.monitor_position(
+        symbol="BTC/USDT",
+        position=PositionContext(side="BUY", quantity=1.0, current_price=105.0),
+        htf_candles=_candles(), mtf_candles=_candles(), ltf_candles=_candles(),
+    )
+
+    assert result.execution is not None
+    assert result.execution.plan.dry_run is True
+    assert result.execution.plan.decision_action == result.decision.action
+
+
 def test_pipeline_result_serializes(tmp_path: Path) -> None:
     coordinator = _coordinator(tmp_path)
     result = coordinator.process_entry_candidate(

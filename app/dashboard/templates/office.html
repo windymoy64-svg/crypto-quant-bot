@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CQB Office - Animated Agents</title>
+    <link rel="stylesheet" href="/static/office.css?v={{ asset_version }}" />
+  </head>
+  <body>
+    <div id="office-shell">
+      <header id="office-header">
+        <div class="brand">
+          <span class="brand-mark">CQB</span>
+          <div class="brand-title">
+            <strong>Quant Office</strong>
+            <small>Live operations floor</small>
+          </div>
+        </div>
+        <div class="kpi-row" id="kpi-row">
+          <div class="kpi"><span class="kpi-label">Staff</span><span class="kpi-value" data-kpi="staff">--</span></div>
+          <div class="kpi"><span class="kpi-label">Working</span><span class="kpi-value" data-kpi="working">--</span></div>
+          <div class="kpi"><span class="kpi-label">In Progress</span><span class="kpi-value" data-kpi="in_progress">--</span></div>
+          <div class="kpi"><span class="kpi-label">Done</span><span class="kpi-value" data-kpi="done">--</span></div>
+          <div class="kpi kpi-status" id="conn-status" data-status="loading">
+            <span class="kpi-label">Feed</span>
+            <span class="kpi-value">--</span>
+          </div>
+        </div>
+      </header>
+
+      <main id="office-stage">
+        <canvas id="office-canvas" width="1280" height="720"></canvas>
+        <aside id="office-legend" aria-live="polite">
+          <h2>Agents</h2>
+          <ul id="agent-list"></ul>
+        </aside>
+      </main>
+
+      <footer id="office-footer">
+        <span>Crypto Quant Bot</span>
+        <span id="last-updated">--</span>
+      </footer>
+    </div>
+
+    <script src="/static/office.js?v={{ asset_version }}" defer></script>
+  </body>
+</html>

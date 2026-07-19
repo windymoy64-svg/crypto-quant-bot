@@ -13,6 +13,7 @@ from app.dashboard.routes.agent import (
     pipeline_snapshot,
     recent_observations,
     router,
+    synchronized_snapshot,
 )
 from app.learning_agent.models import ChartObservation
 
@@ -44,6 +45,7 @@ def test_router_has_expected_routes() -> None:
     assert "/api/agent/pipeline" in paths
     assert "/api/agent/learning" in paths
     assert "/api/agent/observations" in paths
+    assert "/api/agent/snapshot" in paths
 
 
 def test_pipeline_snapshot_missing_file(_redirect_paths) -> None:
@@ -60,6 +62,35 @@ def test_pipeline_snapshot_returns_payload(_redirect_paths) -> None:
     result = pipeline_snapshot()
     assert result["available"] is True
     assert result["enabled"] is True
+
+
+def test_synchronized_snapshot_marks_fresh_pipeline_online(_redirect_paths) -> None:
+    from datetime import UTC, datetime
+
+    _redirect_paths["pipeline"].write_text(
+        json.dumps({
+            "enabled": True,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "entries": [],
+            "monitor": [],
+        }),
+        encoding="utf-8",
+    )
+
+    result = synchronized_snapshot(limit=10)
+
+    assert result["sync_status"] == "online"
+    assert result["age_seconds"] is not None
+    assert result["pipeline"]["available"] is True
+    assert result["learning"]["available"] is True
+    assert result["observations"]["available"] is True
+
+
+def test_synchronized_snapshot_marks_missing_pipeline_offline(_redirect_paths) -> None:
+    result = synchronized_snapshot(limit=10)
+
+    assert result["sync_status"] == "offline"
+    assert result["age_seconds"] is None
 
 
 def test_pipeline_snapshot_handles_invalid_json(_redirect_paths) -> None:

@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.dashboard.services import dashboard_service, utc_now_iso
+from app.dashboard.routes.agent import synchronized_snapshot
 from app.events.subscriber import subscribe
 from app.exchange.binance.stream import BinanceStreamCallbacks
 from app.exchange.binance.websocket import BinanceWebSocket
@@ -35,6 +36,10 @@ class DashboardEventHub:
         self._ensure_runtime()
         try:
             await websocket.send_json({"type": "snapshot", "payload": dashboard_service.snapshot()})
+            await websocket.send_json({
+                "type": "agent_snapshot",
+                "payload": await asyncio.to_thread(synchronized_snapshot),
+            })
             await websocket.send_json({"type": "live_events", "payload": list(self.live_events)})
         except Exception:
             logger.exception("Failed to initialize dashboard websocket connection")
@@ -151,6 +156,10 @@ class DashboardEventHub:
                 await self.broadcast({
                     "type": "snapshot",
                     "payload": dashboard_service.snapshot(),
+                })
+                await self.broadcast({
+                    "type": "agent_snapshot",
+                    "payload": await asyncio.to_thread(synchronized_snapshot),
                 })
             except Exception:
                 logger.exception("Periodic snapshot broadcast failed")
