@@ -53,3 +53,47 @@ class LLMInsightStore:
                 if isinstance(data, dict):
                     rows.append(data)
         return rows
+
+    def latest_input_fingerprint(self) -> tuple[int, str] | None:
+        """Fingerprint of the input data used for the most recent LLM insight.
+
+        Returns ``(record_count, latest_trade_id)`` from the last stored
+        insight's ``input_summary``, or ``None`` when no insight exists yet.
+        Used to skip regenerating an identical insight when the underlying
+        trade data has not changed.
+        """
+        latest = self.latest()
+        if latest is None:
+            return None
+        summary = latest.get("input_summary") or {}
+        if not isinstance(summary, dict):
+            return None
+        try:
+            record_count = int(summary.get("record_count") or 0)
+        except (TypeError, ValueError):
+            record_count = 0
+        recent = summary.get("recent_trades")
+        latest_trade_id = ""
+        if isinstance(recent, list) and recent:
+            last = recent[-1]
+            if isinstance(last, dict):
+                latest_trade_id = str(last.get("trade_id") or "")
+        return (record_count, latest_trade_id)
+
+    def latest(self) -> dict[str, Any] | None:
+        """Return the most recent insight row without parsing the whole file."""
+        if not self.path.exists():
+            return None
+        last_line = ""
+        with self.path.open("r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if line:
+                    last_line = line
+        if not last_line:
+            return None
+        try:
+            data = json.loads(last_line)
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None

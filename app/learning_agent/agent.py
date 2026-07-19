@@ -146,6 +146,23 @@ class LearningAgent:
             insight.meta.setdefault("llm", {"enabled": False, "model": None})
             return insight
         summary = self._llm_input_summary(insight, records)
+
+        # Skip the LLM call when the underlying trade data has not changed
+        # since the last stored insight.  Calling the model on an identical
+        # input only reproduces a near-duplicate narrative and wastes quota.
+        current_fp = self._records_fingerprint(records)
+        previous_fp = self._llm_insight_store.latest_input_fingerprint()
+        if previous_fp is not None and previous_fp == current_fp:
+            latest = self._llm_insight_store.latest()
+            insight.meta["llm"] = {
+                "enabled": True,
+                "model": self._llm_model,
+                "latest": (latest or {}).get("output"),
+                "stored": False,
+                "skipped": "no_new_trades",
+            }
+            return insight
+
         try:
             output = self._llm_client.chat_json(
                 system=(
@@ -196,6 +213,12 @@ class LearningAgent:
                 "must be marked as advisory and requiring backtest before trading."
             ),
         }
+
+    @staticmethod
+    def _records_fingerprint(records: list[TradeRecord]) -> tuple[int, str]:
+        """Identify the trade dataset: (count, last trade_id)."""
+        latest_id = str(records[-1].trade_id) if records else ""
+        return (len(records), latest_id)
 
     def _pattern_insights(self, records: list[TradeRecord]) -> list[PatternInsight]:
         """Group trades by pattern+regime and compute stats."""
