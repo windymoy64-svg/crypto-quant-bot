@@ -138,12 +138,34 @@ def run_pipeline_bridge(
     if not config.enabled:
         return {"enabled": False, "reason": "pipeline_disabled_by_config"}
 
-    coordinator = coordinator or AgentPipelineCoordinator(
-        config=AgentPipelineConfig(
-            min_scanner_confidence=config.min_scanner_confidence,
-            execute_decisions=config.execute_decisions,
-        ),
-    )
+    if coordinator is None:
+        from app.learning_agent.agent import LearningAgent
+        from app.llm.factory import build_agent_llm
+
+        chart_llm_client, chart_llm_model, chart_llm_base_url = build_agent_llm("chart")
+        llm_client, llm_model, llm_base_url = build_agent_llm("learning")
+        decision_llm_client, decision_llm_model, decision_llm_base_url = build_agent_llm("decision")
+        executor_llm_client, executor_llm_model, executor_llm_base_url = build_agent_llm("executor")
+        coordinator = AgentPipelineCoordinator(
+            learning_agent=LearningAgent(
+                llm_client=llm_client,
+                llm_model=llm_model,
+                llm_base_url=llm_base_url,
+            ),
+            chart_llm_client=chart_llm_client,
+            chart_llm_model=chart_llm_model,
+            chart_llm_base_url=chart_llm_base_url,
+            decision_llm_client=decision_llm_client,
+            decision_llm_model=decision_llm_model,
+            decision_llm_base_url=decision_llm_base_url,
+            executor_llm_client=executor_llm_client,
+            executor_llm_model=executor_llm_model,
+            executor_llm_base_url=executor_llm_base_url,
+            config=AgentPipelineConfig(
+                min_scanner_confidence=config.min_scanner_confidence,
+                execute_decisions=config.execute_decisions,
+            ),
+        )
 
     fetch_htf = _candle_fetcher(market_data, config.htf_timeframe, config.htf_limit)
     fetch_mtf = _candle_fetcher(market_data, config.mtf_timeframe, config.mtf_limit)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import UTC, datetime
+import json
 from typing import Any
 
 from app.chart_agent.models import ChartReading
@@ -20,6 +21,7 @@ from app.learning_agent.models import (
     TradeRecord,
 )
 from app.learning_agent.store import ChartObservationStore, TradeStore
+from app.learning_agent.insight_store import LLMInsightRecord, LLMInsightStore
 
 
 class LearningAgent:
@@ -33,9 +35,17 @@ class LearningAgent:
         self,
         store: TradeStore | None = None,
         observation_store: ChartObservationStore | None = None,
+        llm_client: Any = None,
+        llm_model: str | None = None,
+        llm_base_url: str = "",
+        llm_insight_store: LLMInsightStore | None = None,
     ) -> None:
         self._store = store or TradeStore()
         self._observation_store = observation_store or ChartObservationStore()
+        self._llm_client = llm_client
+        self._llm_model = llm_model
+        self._llm_base_url = llm_base_url
+        self._llm_insight_store = llm_insight_store or LLMInsightStore()
 
     def learn(self) -> LearningInsight:
         """Analyze all stored trades and produce insight."""
@@ -75,7 +85,8 @@ class LearningAgent:
 
     def _analyze(self, records: list[TradeRecord]) -> LearningInsight:
         if not records:
-            return self._empty_insight()
+            insight = self._empty_insight()
+            return self._enrich_with_llm(insight, records)
 
         now = datetime.now(tz=UTC).isoformat()
         wins = [r for r in records if r.is_win]
@@ -108,7 +119,7 @@ class LearningAgent:
 
         earliest = min((r.timestamp_entry for r in records), default=now)
 
-        return LearningInsight(
+        insight = LearningInsight(
             total_trades=total,
             overall_winrate=round(winrate, 1),
             overall_avg_pnl=round(avg_pnl, 3),
@@ -126,6 +137,65 @@ class LearningAgent:
             last_updated=now,
             data_since=earliest,
         )
+        return self._enrich_with_llm(insight, records)
+
+    def _enrich_with_llm(
+        self, insight: LearningInsight, records: list[TradeRecord]
+    ) -> LearningInsight:
+        if self._llm_client is None or not self._llm_model:
+            insight.meta.setdefault("llm", {"enabled": False, "model": None})
+            return insight
+        summary = self._llm_input_summary(insight, records)
+        try:
+            output = self._llm_client.chat_json(
+                system=(
+                    "You are a read-only trading Learning Agent. Analyze only the "
+                    "provided deterministic trade statistics. Do not issue direct "
+                    "buy/sell orders. Return compact JSON with keys: summary, "
+                    "strengths, weaknesses, recommendations, requires_backtest."
+                ),
+                user=json.dumps(summary, ensure_ascii=False),
+                max_tokens=900,
+                temperature=0.2,
+            )
+            now = datetime.now(tz=UTC).isoformat()
+            record = LLMInsightRecord(
+                timestamp=now,
+                agent="learning",
+                provider_base_url=self._llm_base_url,
+                model=self._llm_model,
+                input_summary=summary,
+                output=output,
+            )
+            self._llm_insight_store.save(record)
+            insight.meta["llm"] = {
+                "enabled": True,
+                "model": self._llm_model,
+                "latest": output,
+                "stored": True,
+            }
+        except Exception as exc:  # noqa: BLE001 - LLM must never break learning
+            insight.meta["llm"] = {
+                "enabled": True,
+                "model": self._llm_model,
+                "error": str(exc),
+                "fallback": "deterministic_learning_only",
+            }
+        return insight
+
+    def _llm_input_summary(
+        self, insight: LearningInsight, records: list[TradeRecord]
+    ) -> dict[str, Any]:
+        recent = records[-20:]
+        return {
+            "deterministic_insight": insight.to_dict(),
+            "recent_trades": [r.to_dict() for r in recent],
+            "record_count": len(records),
+            "instructions": (
+                "Explain patterns and propose hypotheses only. Any recommendation "
+                "must be marked as advisory and requiring backtest before trading."
+            ),
+        }
 
     def _pattern_insights(self, records: list[TradeRecord]) -> list[PatternInsight]:
         """Group trades by pattern+regime and compute stats."""

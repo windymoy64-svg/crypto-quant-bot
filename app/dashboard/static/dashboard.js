@@ -457,6 +457,44 @@ function onExchangeSelectChange(){
   loadExchangeSettings();
 }
 
+// ---------- Settings: Optional LLM Provider ----------
+const LLM_AGENTS = ["chart","learning","decision","executor"];
+function setLLMStatus(state,label){ const badge=byId("llm-settings-status"); if(!badge) return; badge.classList.remove("ok","warn","err"); if(state) badge.classList.add(state); badge.textContent=label; }
+function renderLLMResult(message, ok){ const box=byId("llm-settings-result"); if(!box) return; box.hidden=false; box.classList.remove("ok","err"); box.classList.add(ok?"ok":"err"); box.textContent=String(message||""); }
+function renderLLMSettings(data){
+  const models=list(data?.models);
+  const configured=!!data?.api_key_configured;
+  setText("llm-cur-provider",data?.base_url||"-");
+  setText("llm-cur-key",configured?(data.api_key_masked||"configured"):"missing");
+  setText("llm-cur-models",models.length?`${models.length} detected`:"none");
+  setText("llm-cur-learning",data?.agent_models?.learning||"None");
+  const base=byId("llm-base-url"); if(base) base.value=data?.base_url||"";
+  const timeout=byId("llm-timeout"); if(timeout) timeout.value=String(data?.timeout_seconds||30);
+  LLM_AGENTS.forEach(agent=>{
+    const sel=byId(`llm-agent-${agent}`); if(!sel) return;
+    const selected=data?.agent_models?.[agent]||"none";
+    sel.innerHTML='<option value="none">None — deterministic</option>'+models.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    if(models.includes(selected)) sel.value=selected; else sel.value="none";
+  });
+  setLLMStatus(configured&&data?.base_url?"ok":"warn",configured&&data?.base_url?"configured":"optional");
+}
+async function loadLLMSettings(){ try{ renderLLMSettings(await apiFetch("/api/settings/llm")); }catch(err){ setLLMStatus("err","load failed"); renderLLMResult(err.message,false); } }
+async function saveLLMProvider(event){
+  event?.preventDefault(); setLLMStatus("warn","saving...");
+  try{
+    const payload={ base_url:byId("llm-base-url")?.value||"", timeout_seconds:Number(byId("llm-timeout")?.value||30) };
+    const key=byId("llm-api-key")?.value.trim(); if(key) payload.api_key=key;
+    const data=await apiFetch("/api/settings/llm/provider",{method:"PUT",body:JSON.stringify(payload)});
+    const keyInput=byId("llm-api-key"); if(keyInput) keyInput.value="";
+    renderLLMSettings(data); renderLLMResult("LLM provider saved. Fetch Models to populate dropdowns.",true); showToast("LLM provider saved");
+  }catch(err){ setLLMStatus("err","save failed"); renderLLMResult(err.message,false); }
+  return false;
+}
+async function fetchLLMModels(){ setLLMStatus("warn","fetching..."); try{ const data=await apiFetch("/api/settings/llm/models",{method:"POST",body:"{}"}); renderLLMSettings(data); renderLLMResult(`${data.models_found||0} models detected`,true); showToast(`${data.models_found||0} LLM models detected`); }catch(err){ setLLMStatus("err","fetch failed"); renderLLMResult(err.message,false); } }
+async function testLLMProvider(){ setLLMStatus("warn","testing..."); try{ const payload={base_url:byId("llm-base-url")?.value||""}; const key=byId("llm-api-key")?.value.trim(); if(key) payload.api_key=key; const data=await apiFetch("/api/settings/llm/test",{method:"POST",body:JSON.stringify(payload)}); setLLMStatus(data.ok?"ok":"err",data.ok?"connected":"test failed"); renderLLMResult(data.ok?`Connected — ${data.models_found||0} models available`:`Test failed: ${data.error||"unknown error"}`,!!data.ok); }catch(err){ setLLMStatus("err","test failed"); renderLLMResult(err.message,false); } }
+async function saveLLMAgentModels(){ setLLMStatus("warn","saving models..."); try{ const agent_models={}; LLM_AGENTS.forEach(agent=>{ agent_models[agent]=byId(`llm-agent-${agent}`)?.value||"none"; }); const data=await apiFetch("/api/settings/llm/agents",{method:"PUT",body:JSON.stringify({agent_models})}); renderLLMSettings(data); renderLLMResult("Agent LLM model assignment saved. None means no LLM.",true); showToast("Agent LLM models saved"); }catch(err){ setLLMStatus("err","save failed"); renderLLMResult(err.message,false); } }
+async function clearLLMSettings(){ if(!confirm("Hapus LLM provider, API key, model list, dan assignment agent?")) return; try{ const data=await apiFetch("/api/settings/llm",{method:"DELETE"}); renderLLMSettings(data); renderLLMResult("LLM settings cleared.",true); showToast("LLM settings cleared"); }catch(err){ setLLMStatus("err","clear failed"); renderLLMResult(err.message,false); } }
+
 
 // ---------- Settings: Futures (USDⓈ-M) ----------
 function setFuturesStatus(state, label){
@@ -584,9 +622,12 @@ function renderAgentSnapshot(snapshot){
   const pipeline = snapshot.pipeline || null;
   const learning = snapshot.learning || null;
   const observations = snapshot.observations || null;
-  renderAgentSquad(pipeline, learning, observations, snapshot);
+  const llm = snapshot.llm || null;
+  const llmInsights = snapshot.llm_insights || null;
+  renderAgentSquad(pipeline, learning, observations, snapshot, llm);
   renderAgentPipeline(pipeline, snapshot);
   renderAgentLearning(learning);
+  renderAgentLLMInsights(llmInsights, llm);
   renderAgentObservations(observations);
 }
 
@@ -609,7 +650,7 @@ function setAgentState(agent, mode, statusLabel){
   if(s && statusLabel) s.textContent = statusLabel;
 }
 
-function renderAgentSquad(pipeline, learning, obs, snapshot={}){
+function renderAgentSquad(pipeline, learning, obs, snapshot={}, llm=null){
   const status = byId("agent-squad-status");
   const caption = byId("agent-squad-caption");
   if(!status || !caption) return;
@@ -640,18 +681,20 @@ function renderAgentSquad(pipeline, learning, obs, snapshot={}){
 
   // Availability and work output are different states: every configured agent
   // remains online even when the current scan has no eligible candidate.
-  setAgentState("chart", "active", observations.length ? `online · ${observations.length} reads` : "online · scanning");
-  setAgentState("learning", "active", trades > 0 ? `online · ${trades} trades` : "online · collecting");
+  const llmModels = llm?.agent_models || {};
+  const llmLabel = agent => llmModels?.[agent] ? ` · LLM ${llmModels[agent]}` : "";
+  setAgentState("chart", "active", (observations.length ? `online · ${observations.length} reads` : "online · scanning") + llmLabel("chart"));
+  setAgentState("learning", "active", (trades > 0 ? `online · ${trades} trades` : "online · collecting") + llmLabel("learning"));
 
   // Decision Agent: aktif kalau ada decision di entries/monitor.
   const decisionCount =
     entries.filter(e => e?.result?.decision).length +
     monitor.filter(m => m?.result?.decision).length;
   const hasExit = monitor.some(m => (m?.result?.decision?.action || "") === "EXIT");
-  setAgentState("decision", hasExit ? "alert" : "active", hasExit ? "exit signal" : (decisionCount > 0 ? `online · ${decisionCount} decisions` : "online · watching"));
+  setAgentState("decision", hasExit ? "alert" : "active", (hasExit ? "exit signal" : (decisionCount > 0 ? `online · ${decisionCount} decisions` : "online · watching")) + llmLabel("decision"));
 
   const executorMode = String(pipeline?.executor_mode || (executing ? "dry_run" : "advisory"));
-  setAgentState("executor", "active", executing ? `online · ${executorMode.replace("_", " ")}` : "online · gated");
+  setAgentState("executor", "active", (executing ? `online · ${executorMode.replace("_", " ")}` : "online · gated") + llmLabel("executor"));
 
   const bits = [];
   bits.push(`entries=${entries.length}`);
@@ -661,6 +704,7 @@ function renderAgentSquad(pipeline, learning, obs, snapshot={}){
   if(generated !== "-") bits.push(`cycle=${generated}`);
   if(Number.isFinite(age)) bits.push(`sync_age=${Math.round(age)}s`);
   bits.push(`executor=${executorMode}`);
+  if(llm?.api_key_configured) bits.push(`llm=${Object.entries(llmModels).filter(([,m])=>m).map(([a,m])=>`${a}:${m}`).join(",")||"none"}`);
   caption.textContent = "// " + bits.join("  ·  ") + (executorMode === "live" ? "  ·  ⚠ live execution" : "  ·  live order gate remains locked");
 }
 
@@ -717,6 +761,22 @@ function renderAgentPipeline(payload, snapshot={}){
   monitor.innerHTML = renderAgentMonitor(payload.monitor || []);
 }
 
+function agentText(value){
+  if(value===null||value===undefined) return "";
+  if(typeof value==="string") return value;
+  if(typeof value==="number"||typeof value==="boolean") return String(value);
+  if(typeof value==="object"){
+    return String(value.text||value.message||value.summary||value.reason||value.title||value.description||"");
+  }
+  return String(value);
+}
+function agentPrettyReason(value){
+  return agentText(value).replace(/[_-]+/g," ").replace(/\s+/g," ").trim();
+}
+function agentJoin(values,limit=2){
+  return list(values).map(agentPrettyReason).filter(Boolean).slice(0,limit).join("; ");
+}
+
 function renderAgentEntries(items){
   if (!items.length) return emptyState("Belum ada kandidat entry", "Chart Agent akan mengevaluasi kandidat scanner dengan confidence >= 90.");
   const rows = items.map(item => {
@@ -740,7 +800,7 @@ function renderAgentMonitor(items){
     const res = item.result || {};
     const decision = res.decision || {};
     const action = esc(decision.action || "-");
-    const reasons = list(decision.reasons).slice(0, 2).join(", ");
+    const reasons = agentJoin(decision.reasons, 2);
     return `<tr><td data-label="Symbol">${symbol}</td><td data-label="Decision">${badge(action)}</td><td data-label="Reasons"><small>${esc(reasons || "-")}</small></td></tr>`;
   }).join("");
   return `<table class="agent-table agent-monitor-table"><thead><tr><th>Symbol</th><th>Decision</th><th>Reasons</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -778,7 +838,52 @@ function renderAgentLearning(payload){
     <div>Cold patterns</div><strong>${esc(cold)}</strong>
     <div>Avg confluence (winners)</div><strong>${fmt(Number(payload.avg_confluence_winners ?? 0))}</strong>
     <div>Avg confluence (losers)</div><strong>${fmt(Number(payload.avg_confluence_losers ?? 0))}</strong>
+    <div>LLM</div><strong>${esc(payload.meta?.llm?.enabled ? (payload.meta.llm.model || "enabled") : "none")}</strong>
   `;
+}
+
+function renderAgentLLMInsights(payload, llm){
+  const status = byId("agent-llm-status");
+  const summary = byId("agent-llm-summary");
+  const listEl = byId("agent-llm-list");
+  if(!status || !summary || !listEl) return;
+
+  const configured = !!llm?.api_key_configured;
+  const insights = list(payload?.insights);
+  if(!configured){
+    status.textContent = "optional";
+    status.className = "pill";
+    summary.innerHTML = emptyState("LLM belum dikonfigurasi", "Isi Base URL + API Key di Settings, lalu Fetch Models.");
+    listEl.innerHTML = "";
+    return;
+  }
+
+  status.textContent = `${insights.length} / ${payload?.total_stored || 0}`;
+  status.className = "pill info";
+  summary.innerHTML = [
+    agentMetricCard("Models", Object.values(llm?.agent_models || {}).filter(Boolean).length, "factor", "blue"),
+    agentMetricCard("Insights", payload?.total_stored || 0, "trades", "green"),
+    agentMetricCard("Latest", insights.length ? formatAgentTime(insights[insights.length-1]?.timestamp, true) : "-", "cycle", "amber"),
+  ].join("");
+
+  if(!insights.length){
+    listEl.innerHTML = emptyState("Belum ada insight LLM", "Learning Agent akan menulis insight ketika model learning dipilih.");
+    return;
+  }
+
+  const rows = insights.slice().reverse().map(item=>{
+    const output = item.output || {};
+    const summaryText = agentText(output.summary || output.explanation || output.reason || output.analysis) || "-";
+    const recommendations = agentJoin(output.recommendations, 2);
+    const warnings = agentJoin(output.warnings, 2);
+    return `<tr>
+      <td data-label="Time">${esc(formatAgentTime(item.timestamp,true))}</td>
+      <td data-label="Agent">${esc(item.agent||"-")}</td>
+      <td data-label="Model">${esc(item.model||"-")}</td>
+      <td data-label="Output"><strong>${esc(summaryText)}</strong>${warnings?`<div><small>Warnings: ${esc(warnings)}</small></div>`:""}${recommendations?`<div><small>Recommendations: ${esc(recommendations)}</small></div>`:""}</td>
+    </tr>`;
+  }).join("");
+  listEl.innerHTML = `<table class="agent-table"><thead><tr><th>Time</th><th>Agent</th><th>Model</th><th>Output</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderAgentObservations(payload){
@@ -816,5 +921,5 @@ function renderAgentObservations(payload){
   listEl.innerHTML = `<table class="agent-table agent-observations-table"><thead><tr><th>Time</th><th>Symbol</th><th>Stage</th><th>Bias</th><th>Confluence</th><th>Decision</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-initUi(); loadAll().catch(handleError); connectWs(); loadMultiPortfolio().catch(console.warn); loadExchangeSettings(); loadPortfolioSettings(); loadExecutionSettings(); loadFuturesSettings(); loadAgentPanels().catch(console.warn);
+initUi(); loadAll().catch(handleError); connectWs(); loadMultiPortfolio().catch(console.warn); loadLLMSettings(); loadExchangeSettings(); loadPortfolioSettings(); loadExecutionSettings(); loadFuturesSettings(); loadAgentPanels().catch(console.warn);
 setInterval(() => { loadAgentPanels().catch(console.warn); loadMultiPortfolio().catch(console.warn); }, 30000);

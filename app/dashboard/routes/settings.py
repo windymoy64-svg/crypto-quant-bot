@@ -44,6 +44,16 @@ from app.settings.trading_preferences import (
     load_trading_preferences,
     save_trading_preferences,
 )
+from app.settings.llm_preferences import (
+    AGENTS as LLM_AGENTS,
+    clear_llm_provider,
+    load_llm_api_key,
+    load_llm_preferences,
+    save_agent_models,
+    save_llm_models,
+    save_llm_provider,
+)
+from app.llm.client import LLMClientConfig, OpenAICompatibleClient
 
 
 logger = logging.getLogger(__name__)
@@ -202,6 +212,86 @@ def _execution_summary() -> dict[str, Any]:
         "credentials_configured": configured,
         "live_confirmation_phrase": LIVE_CONFIRMATION,
     }
+
+
+@router.get("/settings/llm")
+def get_llm_settings() -> dict[str, Any]:
+    return load_llm_preferences().to_dict()
+
+
+@router.put("/settings/llm/provider")
+def update_llm_provider(payload: dict[str, Any]) -> dict[str, Any]:
+    base_url = str(payload.get("base_url", "")).strip()
+    api_key_value = payload.get("api_key")
+    api_key = None if api_key_value is None else str(api_key_value).strip()
+    timeout = payload.get("timeout_seconds")
+    try:
+        timeout_seconds = int(timeout) if timeout is not None else None
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid timeout_seconds") from exc
+    if api_key is not None and bool(api_key) is False:
+        api_key = ""
+    return save_llm_provider(
+        base_url=base_url,
+        api_key=api_key,
+        timeout_seconds=timeout_seconds,
+    ).to_dict()
+
+
+@router.put("/settings/llm/agents")
+def update_llm_agent_models(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = payload.get("agent_models", payload)
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="agent_models must be an object")
+    filtered = {agent: raw.get(agent) for agent in LLM_AGENTS}
+    return save_agent_models(filtered).to_dict()
+
+
+@router.post("/settings/llm/models")
+def fetch_llm_models() -> dict[str, Any]:
+    prefs = load_llm_preferences()
+    api_key = load_llm_api_key()
+    if not prefs.base_url or not api_key:
+        raise HTTPException(status_code=400, detail="llm_provider_not_configured")
+    try:
+        client = OpenAICompatibleClient(LLMClientConfig(
+            base_url=prefs.base_url,
+            api_key=api_key,
+            model="__models__",
+            timeout_seconds=prefs.timeout_seconds,
+        ))
+        models = client.list_models()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"model_fetch_failed: {exc}") from exc
+    updated = save_llm_models(models)
+    return {**updated.to_dict(), "ok": True, "models_found": len(models)}
+
+
+@router.post("/settings/llm/test")
+def test_llm_settings(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = payload or {}
+    prefs = load_llm_preferences()
+    base_url = str(payload.get("base_url") or prefs.base_url).strip()
+    api_key = str(payload.get("api_key") or load_llm_api_key() or "").strip()
+    model = str(payload.get("model") or next(iter(prefs.models), "")).strip()
+    if not base_url or not api_key:
+        raise HTTPException(status_code=400, detail="base_url_and_api_key_required")
+    try:
+        client = OpenAICompatibleClient(LLMClientConfig(
+            base_url=base_url,
+            api_key=api_key,
+            model=model or "__test__",
+            timeout_seconds=prefs.timeout_seconds,
+        ))
+        models = client.list_models()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc), "base_url": base_url}
+    return {"ok": True, "base_url": base_url, "models_found": len(models), "models": models[:50]}
+
+
+@router.delete("/settings/llm")
+def delete_llm_settings() -> dict[str, Any]:
+    return clear_llm_provider().to_dict()
 
 
 @router.get("/settings/execution")

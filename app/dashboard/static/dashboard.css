@@ -2677,4 +2677,244 @@ body.menu-open{overflow:hidden}
   #signal-terminal .stats-label{
     font-size:8px !important;
   }
+
+/* ============================================================
+   Agents view — professional polish (desktop + mobile)
+   ============================================================ */
+.view-section[data-view-section="agents"]{gap:18px}
+
+.view-section[data-view-section="agents"] .panel{
+  border-radius:20px;
+  box-shadow:0 10px 30px rgba(0,0,0,.28);
+  border-color:rgba(255,255,255,.075);
+}
+
+/* Panel heading hierarchy */
+.view-section[data-view-section="agents"] .panel-head p{letter-spacing:.14em}
+.view-section[data-view-section="agents"] .panel-head h2{font-size:17px}
+.view-section[data-view-section="agents"] .pill{
+  display:inline-flex;align-items:center;gap:6px;
+  font-variant-numeric:tabular-nums;
+}
+
+/* --- Multi-Agent command (squad) --- */
+.view-section[data-view-section="agents"] .agent-squad-panel{
+  border-radius:22px;
+  box-shadow:0 14px 40px rgba(0,0,0,.38),0 0 0 1px rgba(59,130,246,.06);
+}
+.view-section[data-view-section="agents"] .agent-squad-stage{
+  border-radius:18px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+}
+.view-section[data-view-section="agents"] .agent-avatar:hover{
+  transform:translateY(-2px);
+  border-color:var(--border-2);
+}
+.view-section[data-view-section="agents"] .agent-status::before{
+  content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--txt-mute);margin-right:5px;vertical-align:1px;
+}
+.view-section[data-view-section="agents"] .agent-avatar.is-active .agent-status::before{
+  background:var(--green);box-shadow:0 0 6px var(--green);
+  animation:agentDotPulse 1.6s ease-in-out infinite;
+}
+.view-section[data-view-section="agents"] .agent-avatar.is-alert .agent-status::before{
+  background:#eab308;box-shadow:0 0 6px #eab308;
+}
+@keyframes agentDotPulse{0%,100%{opacity:1}50%{opacity:.35}}
+.view-section[data-view-section="agents"] .agent-squad-caption{
+  border-radius:14px;font-size:11.5px;
+  overflow-wrap:anywhere;
+}
+
+/* --- Section sub-headers inside panels --- */
+.view-section[data-view-section="agents"] .agent-block{
+  display:flex;flex-direction:column;gap:8px;min-width:0;
+}
+.view-section[data-view-section="agents"] .agent-block-head{
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  padding:2px 2px 0;flex-wrap:wrap;
+}
+.view-section[data-view-section="agents"] .agent-block-head h3{
+  font-size:12px;font-weight:700;color:var(--txt-dim);
+  text-transform:uppercase;letter-spacing:.1em;
+}
+.view-section[data-view-section="agents"] .agent-block-head span{
+  font-size:11px;color:var(--txt-mute);
+}
+
+/* --- Metric cards --- */
+.view-section[data-view-section="agents"] .summary-grid{
+  grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+}
+.view-section[data-view-section="agents"] .agent-metric-card{
+  border-radius:16px;
+  box-shadow:0 2px 10px rgba(0,0,0,.18);
+}
+.view-section[data-view-section="agents"] .agent-metric-icon{
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);
+}
+
+/* --- Tables --- */
+.view-section[data-view-section="agents"] .table{
+  border-radius:14px;
+  max-height:420px;
+  scrollbar-gutter:stable;
+}
+.view-section[data-view-section="agents"] .agent-table{
+  min-width:640px;
+}
+.view-section[data-view-section="agents"] .agent-table th{
+  border-bottom:1px solid var(--border-2);
+  padding:11px 14px;
+}
+.view-section[data-view-section="agents"] .agent-table tbody tr{
+  transition:background .12s ease;
+}
+.view-section[data-view-section="agents"] .agent-table tbody tr:hover{
+  background:rgba(255,255,255,.035);
+}
+.view-section[data-view-section="agents"] .agent-table td .badge,
+.view-section[data-view-section="agents"] .agent-table td .tag{
+  white-space:nowrap;
+}
+
+/* --- Learning detail grid --- */
+.view-section[data-view-section="agents"] #agent-learning-detail{
+  border-radius:16px;
+  box-shadow:0 2px 10px rgba(0,0,0,.16);
+}
+.view-section[data-view-section="agents"] #agent-learning-detail > div{
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--txt-mute);font-weight:600;align-self:start;padding-top:3px;
+}
+.view-section[data-view-section="agents"] #agent-learning-detail > strong{
+  font-size:13.5px;line-height:1.5;
+}
+
+/* --- Empty states inside agent tables --- */
+.view-section[data-view-section="agents"] .table .empty-state{
+  padding:36px 20px;
+}
+
+/* --- Tablet --- */
+@media(max-width:900px){
+  .view-section[data-view-section="agents"]{gap:14px}
+  .view-section[data-view-section="agents"] .panel{border-radius:18px}
+  .view-section[data-view-section="agents"] .agent-squad-panel{border-radius:20px}
+  .view-section[data-view-section="agents"] .agent-squad-grid{gap:12px}
+}
+
+/* --- Mobile --- */
+@media(max-width:640px){
+  .view-section[data-view-section="agents"] .panel{
+    padding:16px 14px;border-radius:16px;
+    box-shadow:0 6px 20px rgba(0,0,0,.24);
+  }
+  .view-section[data-view-section="agents"] .panel-head h2{font-size:15px}
+  .view-section[data-view-section="agents"] .agent-squad-panel{border-radius:18px}
+  .view-section[data-view-section="agents"] .agent-avatar{border-radius:12px}
+  .view-section[data-view-section="agents"] .agent-meta strong{font-size:12px}
+  .view-section[data-view-section="agents"] .agent-block-head h3{font-size:11px}
+  .view-section[data-view-section="agents"] .agent-metric-card{
+    border-radius:14px;padding:12px;
+  }
+  .view-section[data-view-section="agents"] .agent-metric-copy strong{font-size:17px}
+  .view-section[data-view-section="agents"] .agent-table tr{
+    border-radius:14px;
+    gap:10px 14px;
+    box-shadow:0 2px 8px rgba(0,0,0,.14);
+  }
+  .view-section[data-view-section="agents"] .agent-table tr:hover{
+    background:var(--panel-2);
+  }
+  .view-section[data-view-section="agents"] #agent-learning-detail{
+    border-radius:14px;padding:14px;
+  }
+  .view-section[data-view-section="agents"] #agent-learning-detail > strong{
+    padding-bottom:10px;border-bottom:1px solid var(--border);
+  }
+  .view-section[data-view-section="agents"] #agent-learning-detail > div{
+    padding-top:0;
+  }
+}
+
+@media(max-width:420px){
+  .view-section[data-view-section="agents"] .agent-squad-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .view-section[data-view-section="agents"] .agent-squad-caption{font-size:10.5px}
+}
+
+/* --- Reduced motion: keep the view usable for everyone --- */
+@media (prefers-reduced-motion:reduce){
+  .view-section[data-view-section="agents"] .agent-status::before{
+    animation:none !important;
+  }
+  .view-section[data-view-section="agents"] .agent-avatar,
+  .view-section[data-view-section="agents"] .agent-metric-card,
+  .view-section[data-view-section="agents"] .agent-table tbody tr{
+    transition:none;
+  }
+}
+}
+
+/* ============================================================
+   Agents view — mobile fixes (scroll + readable cards)
+   ============================================================ */
+@media(max-width:640px){
+  /* Kembalikan scroll vertikal pada tabel agent (rule lama mematikannya) */
+  .view-section[data-view-section="agents"] .table{
+    display:block;
+    max-height:62vh;
+    overflow-y:auto;
+    overflow-x:hidden;
+    -webkit-overflow-scrolling:touch;
+    border:1px solid var(--border);
+    border-radius:14px;
+    background:var(--bg-2);
+    padding:10px;
+  }
+  /* Kartu 1 kolom penuh: kolom 2 yang sempit membuat teks patah aneh */
+  .view-section[data-view-section="agents"] .agent-table tr{
+    grid-template-columns:1fr;
+    gap:8px;
+    padding:14px;
+  }
+  .view-section[data-view-section="agents"] .agent-table td,
+  .view-section[data-view-section="agents"] .agent-table td:last-child:nth-child(odd),
+  .view-section[data-view-section="agents"] .agent-monitor-table td:last-child,
+  .view-section[data-view-section="agents"] .agent-entry-table td:last-child{
+    grid-column:1 / -1;
+  }
+  /* Teks boleh wrap normal, tidak dipotong per karakter */
+  .view-section[data-view-section="agents"] .agent-table th,
+  .view-section[data-view-section="agents"] .agent-table td{
+    overflow-wrap:normal;
+    word-break:normal;
+  }
+  .view-section[data-view-section="agents"] .agent-table td small{
+    overflow-wrap:anywhere;
+    line-height:1.5;
+  }
+  /* Symbol & time tetap satu baris utuh */
+  .view-section[data-view-section="agents"] .agent-table td[data-label="Symbol"],
+  .view-section[data-view-section="agents"] .agent-table td[data-label="Time"]{
+    white-space:nowrap;
+    font-weight:700;
+  }
+  /* Badge jangan full-width supaya rapi */
+  .view-section[data-view-section="agents"] .agent-table td .badge{
+    display:inline-flex;
+    width:auto;
+    align-self:flex-start;
+  }
+  /* Metric value: izinkan wrap supaya tanggal tidak terpotong "…" */
+  .view-section[data-view-section="agents"] .agent-metric-copy strong{
+    white-space:normal;
+    overflow:visible;
+    text-overflow:clip;
+    font-size:15px;
+    line-height:1.3;
+  }
 }

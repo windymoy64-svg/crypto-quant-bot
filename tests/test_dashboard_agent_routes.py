@@ -11,6 +11,7 @@ import pytest
 from app.dashboard.routes.agent import (
     learning_insight,
     pipeline_snapshot,
+    recent_llm_insights,
     recent_observations,
     router,
     synchronized_snapshot,
@@ -24,6 +25,7 @@ def _redirect_paths(tmp_path, monkeypatch):
     pipeline_path = tmp_path / "agent_pipeline.json"
     trades_path = tmp_path / "learning_journal.jsonl"
     obs_path = tmp_path / "chart_observations.jsonl"
+    llm_insights_path = tmp_path / "llm_learning_insights.jsonl"
     monkeypatch.setattr(
         "app.dashboard.routes.agent.DEFAULT_PIPELINE_PATH", str(pipeline_path)
     )
@@ -33,10 +35,14 @@ def _redirect_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "app.dashboard.routes.agent.DEFAULT_OBSERVATIONS_PATH", str(obs_path)
     )
+    monkeypatch.setattr(
+        "app.dashboard.routes.agent.DEFAULT_LLM_INSIGHTS_PATH", str(llm_insights_path)
+    )
     return {
         "pipeline": pipeline_path,
         "trades": trades_path,
         "observations": obs_path,
+        "llm_insights": llm_insights_path,
     }
 
 
@@ -46,6 +52,7 @@ def test_router_has_expected_routes() -> None:
     assert "/api/agent/learning" in paths
     assert "/api/agent/observations" in paths
     assert "/api/agent/snapshot" in paths
+    assert "/api/agent/llm/insights" in paths
 
 
 def test_pipeline_snapshot_missing_file(_redirect_paths) -> None:
@@ -177,3 +184,34 @@ def test_observations_filter_by_symbol(_redirect_paths) -> None:
     result = recent_observations(limit=10, symbol="eth/usdt")
     assert result["count"] == 1
     assert result["observations"][0]["symbol"] == "ETH/USDT"
+
+
+def test_llm_insights_returns_recent_rows(_redirect_paths) -> None:
+    _redirect_paths["llm_insights"].write_text(
+        "\n".join([
+            json.dumps({
+                "timestamp": "2024-01-01T00:00:00Z",
+                "agent": "learning",
+                "provider_base_url": "https://api.example.com/v1",
+                "model": "gpt-4.1",
+                "input_summary": {},
+                "output": {"summary": "old"},
+            }),
+            json.dumps({
+                "timestamp": "2024-01-02T00:00:00Z",
+                "agent": "learning",
+                "provider_base_url": "https://api.example.com/v1",
+                "model": "gpt-4.1",
+                "input_summary": {},
+                "output": {"summary": "new"},
+            }),
+        ]),
+        encoding="utf-8",
+    )
+
+    result = recent_llm_insights(limit=5)
+
+    assert result["available"] is True
+    assert result["count"] == 2
+    assert result["total_stored"] == 2
+    assert result["insights"][-1]["output"]["summary"] == "new"

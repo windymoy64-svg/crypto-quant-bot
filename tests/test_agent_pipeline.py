@@ -149,3 +149,34 @@ def test_pipeline_result_serializes(tmp_path: Path) -> None:
     assert payload["stage"] == "ENTRY"
     assert payload["chart_reading"] is not None
     assert payload["decision"] is not None
+
+
+def test_optional_llm_hooks_do_not_change_pipeline_outputs() -> None:
+    class FakeLLM:
+        def chat_json(self, **_kwargs):
+            return {"summary": "ok", "consistent": True, "warnings": []}
+
+    coordinator = AgentPipelineCoordinator(
+        chart_llm_client=FakeLLM(),
+        chart_llm_model="chart-model",
+        decision_llm_client=FakeLLM(),
+        decision_llm_model="decision-model",
+        executor_llm_client=FakeLLM(),
+        executor_llm_model="executor-model",
+        config=AgentPipelineConfig(min_scanner_confidence=90.0, execute_decisions=True),
+    )
+    candidate = ScannerCandidate(
+        symbol="BTC/USDT", action="BUY", confidence=95.0, failed_gates=[], meta={}
+    )
+    candles = _candles(40)
+
+    result = coordinator.process_entry_candidate(
+        candidate, htf_candles=candles, mtf_candles=candles, ltf_candles=candles
+    )
+    data = result.to_dict()
+
+    assert data["chart_reading"]["meta"]["llm_explanation"]["model"] == "chart-model"
+    assert data["decision"]["meta"]["llm_audit"]["model"] == "decision-model"
+    if data["execution"] is not None:
+        assert data["execution"]["plan"]["meta"]["llm_explanation"]["model"] == "executor-model"
+    assert data["decision"]["meta"]["llm_audit"]["final_action_unchanged"] is True

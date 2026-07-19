@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.dashboard.app import create_app
 from app.settings import exchange_credentials as ec_module
+from app.settings import llm_preferences as llm_module
 from app.settings import store as store_module
 from app.settings import trading_preferences as tp_module
 from app.settings.store import SecretsStore
@@ -22,6 +23,7 @@ def isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SecretsSt
     )
     monkeypatch.setattr(store_module, "get_secrets_store", lambda: store)
     monkeypatch.setattr(ec_module, "get_secrets_store", lambda: store)
+    monkeypatch.setattr(llm_module, "get_secrets_store", lambda: store)
     monkeypatch.setattr(tp_module, "get_secrets_store", lambda: store)
     return store
 
@@ -63,6 +65,35 @@ def test_put_exchange_settings_stores_credentials(
     # But the stored value remains intact.
     assert isolated_store.get("binance.api_key") == "abcdefghij1234567890"
     assert isolated_store.get("binance.api_secret") == "supersecretvalue"
+
+
+def test_llm_settings_store_provider_and_agent_models(
+    client: TestClient, isolated_store: SecretsStore
+) -> None:
+    saved = client.put(
+        "/api/settings/llm/provider",
+        json={
+            "base_url": "https://api.example.com/v1/",
+            "api_key": "llm-secret-key",
+            "timeout_seconds": 17,
+        },
+    )
+
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["base_url"] == "https://api.example.com/v1"
+    assert body["api_key_configured"] is True
+    assert body["api_key_masked"].endswith("-key")
+    assert "llm-secret" not in body["api_key_masked"]
+    assert isolated_store.get("llm.api_key") == "llm-secret-key"
+
+    models = client.put(
+        "/api/settings/llm/agents",
+        json={"agent_models": {"learning": "gpt-4.1", "chart": "none"}},
+    )
+    assert models.status_code == 200
+    assert models.json()["agent_models"]["learning"] == "gpt-4.1"
+    assert models.json()["agent_models"]["chart"] is None
 
 
 def test_put_exchange_settings_rejects_empty_payload(client: TestClient) -> None:

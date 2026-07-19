@@ -29,6 +29,7 @@ router = APIRouter(prefix="/api/agent", tags=["agent_pipeline"])
 DEFAULT_PIPELINE_PATH = "logs/agent_pipeline.json"
 DEFAULT_TRADE_JOURNAL_PATH = "data/learning_journal.jsonl"
 DEFAULT_OBSERVATIONS_PATH = "data/chart_observations.jsonl"
+DEFAULT_LLM_INSIGHTS_PATH = "data/llm_learning_insights.jsonl"
 MAX_OBSERVATIONS_LIMIT = 200
 PIPELINE_FRESH_SECONDS = 300
 
@@ -78,6 +79,13 @@ def synchronized_snapshot(limit: int = 20) -> dict[str, Any]:
     pipeline = pipeline_snapshot()
     learning = learning_insight()
     observations = recent_observations(limit=limit)
+    try:
+        from app.settings.llm_preferences import load_llm_preferences
+
+        llm = load_llm_preferences().to_dict()
+    except Exception:
+        llm = {"available": False}
+    llm_insights = recent_llm_insights(limit=5)
     generated_at = _parse_timestamp(pipeline.get("generated_at"))
     age_seconds = (
         max(0.0, (snapshot_at - generated_at).total_seconds())
@@ -101,6 +109,8 @@ def synchronized_snapshot(limit: int = 20) -> dict[str, Any]:
         "pipeline": pipeline,
         "learning": learning,
         "observations": observations,
+        "llm": llm,
+        "llm_insights": llm_insights,
     }
 
 
@@ -109,11 +119,17 @@ def learning_insight() -> dict[str, Any]:
     """Compute the current LearningInsight from stored trades."""
     from app.learning_agent.agent import LearningAgent
     from app.learning_agent.store import ChartObservationStore, TradeStore
+    from app.llm.factory import build_agent_llm
 
     trade_store = TradeStore(DEFAULT_TRADE_JOURNAL_PATH)
     observation_store = ChartObservationStore(DEFAULT_OBSERVATIONS_PATH)
+    llm_client, llm_model, llm_base_url = build_agent_llm("learning")
     agent = LearningAgent(
-        store=trade_store, observation_store=observation_store
+        store=trade_store,
+        observation_store=observation_store,
+        llm_client=llm_client,
+        llm_model=llm_model,
+        llm_base_url=llm_base_url,
     )
 
     insight = agent.learn()
@@ -153,4 +169,20 @@ def recent_observations(
         "count": len(tail),
         "total_stored": len(observations),
         "observations": [obs.to_dict() for obs in tail],
+    }
+
+
+@router.get("/llm/insights")
+def recent_llm_insights(limit: int = 20) -> dict[str, Any]:
+    """Return persisted optional LLM insights, newest last."""
+    from app.learning_agent.insight_store import LLMInsightStore
+
+    limit = max(1, min(int(limit), 100))
+    rows = LLMInsightStore(DEFAULT_LLM_INSIGHTS_PATH).load_all()
+    tail = rows[-limit:]
+    return {
+        "available": True,
+        "count": len(tail),
+        "total_stored": len(rows),
+        "insights": tail,
     }

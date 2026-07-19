@@ -71,13 +71,19 @@ def build_recorder_if_enabled(
     from app.learning_agent.agent import LearningAgent
     from app.learning_agent.recorder import TradeFeedbackRecorder
     from app.learning_agent.store import ChartObservationStore, TradeStore
+    from app.llm.factory import build_agent_llm
 
     trade_store = TradeStore(config.trade_store_path)
     observation_store = ChartObservationStore(config.observation_store_path)
+    llm_client, llm_model, llm_base_url = build_agent_llm("learning")
     return TradeFeedbackRecorder(
         trades_path=resolved,
         learning_agent=LearningAgent(
-            store=trade_store, observation_store=observation_store
+            store=trade_store,
+            observation_store=observation_store,
+            llm_client=llm_client,
+            llm_model=llm_model,
+            llm_base_url=llm_base_url,
         ),
         observation_store=observation_store,
         checkpoint_path=config.checkpoint_path,

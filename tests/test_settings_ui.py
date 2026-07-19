@@ -102,3 +102,28 @@ def test_execution_mode_and_kill_switch_controls_are_present() -> None:
     assert "Kill Switch — Return to Paper" in html
     assert '"/api/settings/execution"' in javascript
     assert '"/api/settings/execution/kill"' in javascript
+
+
+def test_llm_settings_controls_are_present() -> None:
+    html = TEMPLATE.read_text(encoding="utf-8")
+    javascript = SCRIPT.read_text(encoding="utf-8")
+
+    for control_id in (
+        "llm-settings-panel",
+        "llm-base-url",
+        "llm-api-key",
+        "llm-agent-chart",
+        "llm-agent-learning",
+        "llm-agent-decision",
+        "llm-agent-executor",
+        "agent-llm-insights",
+        "agent-llm-summary",
+        "agent-llm-list",
+    ):
+        assert f'id="{control_id}"' in html
+
+    assert '"/api/settings/llm"' in javascript
+    assert '"/api/settings/llm/provider"' in javascript
+    assert '"/api/settings/llm/agents"' in javascript
+    assert "function saveLLMAgentModels" in javascript
+    assert "function renderAgentLLMInsights" in javascript
