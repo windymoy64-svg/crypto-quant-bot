@@ -5,6 +5,7 @@
   "paper_trading_enabled": true,
   "telegram_enabled": true,
   "live_execution_enabled": false,
+  "use_primary_exchange": true,
   "interval_seconds": 60,
   "latest_output": "logs/latest_signals.json",
   "history_output": "logs/signals.jsonl",

@@ -59,16 +59,27 @@ def resolve_symbols(config: dict[str, object], exchange: str) -> list[str]:
     if mode == "top_volume":
         client = PublicHttpExchangeClient(exchange)
         top_n = int(config.get("prefilter_top_n", 100))
-        return client.fetch_top_symbols_by_volume(
-            quote_asset=str(config.get("quote_asset", "USDT")),
-            top_n=top_n,
-        )
+        try:
+            return client.fetch_top_symbols_by_volume(
+                quote_asset=str(config.get("quote_asset", "USDT")),
+                top_n=top_n,
+            )
+        except ValueError:
+            configured = [str(symbol) for symbol in config.get("symbols", [])]
+            if configured:
+                return configured[:top_n]
+            raise
 
     if mode == "all":
         client = PublicHttpExchangeClient(exchange)
-        symbols = client.fetch_all_symbols(
-            quote_asset=str(config.get("quote_asset", "USDT")),
-        )
+        try:
+            symbols = client.fetch_all_symbols(
+                quote_asset=str(config.get("quote_asset", "USDT")),
+            )
+        except ValueError:
+            symbols = [str(symbol) for symbol in config.get("symbols", [])]
+            if not symbols:
+                raise
         max_symbols = int(config.get("max_symbols", 0))
         if max_symbols > 0:
             symbols = symbols[:max_symbols]
@@ -144,12 +155,17 @@ def scan_symbol_rankings(
     for symbol in symbols:
         # Simbol posisi terbuka wajib harga realtime: lewati cache agar
         # perubahan harga benar-benar terpantau tiap siklus scan.
-        loaded = market_data.fetch_ohlcv(
-            symbol=symbol,
-            timeframe=timeframe,
-            limit=limit,
-            force_refresh=symbol in tracked_set,
-        )
+        try:
+            loaded = market_data.fetch_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=limit,
+                force_refresh=symbol in tracked_set,
+            )
+        except Exception as exc:
+            # One unavailable pair must not stop the whole scan batch.
+            print(f"scan symbol skipped {symbol}: {exc}", flush=True)
+            continue
 
         # LONG: jalur lama.
 

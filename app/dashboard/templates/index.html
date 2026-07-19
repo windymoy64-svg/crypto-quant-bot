@@ -52,10 +52,9 @@
             <a href="#analytics" data-view-link="analytics">Analytics</a>
           </nav>
           <div class="top-actions">
-            <span class="market-badge exchange">Binance</span>
-            <span class="market-badge paper">Paper</span>
-            <span class="market-badge dry">Dry Run</span>
-            <span class="market-badge live">Live</span>
+            <span id="exchange-badge" class="market-badge exchange">Exchange --</span>
+            <span id="mode-badge" class="market-badge paper">Mode --</span>
+            <span id="portfolio-view-badge" class="market-badge latency">Portfolio --</span>
             <span id="latency-badge" class="market-badge latency">Latency -- ms</span>
             <span id="clock" class="market-badge clock">--:--:--</span>
             <input id="search" type="search" placeholder="Search symbol, event, order..." @input="query = $event.target.value" />
@@ -67,7 +66,7 @@
         <section id="overview" class="metrics view-section active" data-view-section="overview">
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-16 3 9h4v2h-5l-2-6-4 15-4-9H3z"/></svg></span><span class="status-badge neutral">Hari Ini</span></div><span>Trade</span><strong id="metric-trades-today">0</strong><div class="kpi-meta"><small>trade dieksekusi</small></div></article>
           <article class="kpi-card featured"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18v-2H5V3H3zm4 12l4-4 3 3 6-6-1.5-1.5L14 9l-3-3-6 6 2 3z"/></svg></span><span class="status-badge success">Hari Ini</span></div><span>Profit </span><strong id="metric-profit-today">0</strong><div class="kpi-meta"><small>realized PnL</small></div></article>
-          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 012-2h12a2 2 0 012 2v1h1a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm14 7a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/></svg></span><span class="status-badge info">Paper</span></div><span>Balance</span><strong id="metric-balance">0</strong><div class="kpi-meta"><small>paper/live source</small></div></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 012-2h12a2 2 0 012 2v1h1a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm14 7a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/></svg></span><span id="balance-source-badge" class="status-badge info">Paper</span></div><span>Balance</span><strong id="metric-balance">0</strong><div class="kpi-meta"><small id="balance-source-caption">paper/live source</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 5h-2v6l5 3 1-1.7-4-2.3V7z"/></svg></span><span class="status-badge warning">Exposure</span></div><span>Positions</span><strong id="metric-positions">0</strong><div class="kpi-meta"><small>open exposure</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg></span><span class="status-badge success">Profit</span></div><span>Trade Profit</span><strong id="metric-total-wins">0</strong><div class="kpi-meta"><small>trade menang</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 7l6 6 4-4 8 8M15 17h6v-6"/></svg></span><span class="status-badge warning">Loss</span></div><span>Trade Loss</span><strong id="metric-total-losses">0</strong><div class="kpi-meta"><small>trade rugi</small></div></article>
@@ -308,7 +307,58 @@
             </div>
           </article>
 
-          <article id="settings-futures" class="panel xwide">
+          <article id="settings-portfolio-panel" class="panel xwide">
+            <div class="panel-head">
+              <div><p>Portfolio</p><h2>Multi-Exchange View</h2></div>
+              <span id="portfolio-settings-status" class="pill">loading</span>
+            </div>
+            <p class="settings-field-hint">Akun Binance dan Bitunix dapat ditampilkan bersamaan. Eksekusi bot tetap diarahkan ke satu exchange aktif.</p>
+            <form id="portfolio-settings-form" class="settings-form" autocomplete="off" onsubmit="return savePortfolioSettings(event)">
+              <label>Portfolio view
+                <select id="portfolio-view-mode">
+                  <option value="single">Single exchange account</option>
+                  <option value="multi">Multi-exchange accounts</option>
+                </select>
+              </label>
+              <label>Primary exchange
+                <select id="portfolio-active-exchange">
+                  <option value="binance">Binance</option>
+                  <option value="bitunix">Bitunix</option>
+                </select>
+              </label>
+              <p class="settings-field-hint">Mode multi menggabungkan data read-only. Primary exchange disimpan sebagai tujuan routing tunggal; safety gate live tetap harus diaktifkan terpisah.</p>
+              <div class="settings-actions">
+                <button type="submit" class="primary">Save Portfolio View</button>
+                <button type="button" class="ghost" onclick="loadMultiPortfolio()">Refresh Accounts</button>
+              </div>
+              <div id="portfolio-settings-result" class="settings-result" hidden></div>
+            </form>
+            <div id="execution-mode-summary" class="settings-grid execution-mode-summary">
+              <div>Account data</div><strong id="execution-account-source">Paper</strong>
+              <div>Bot execution</div><strong id="execution-bot-mode">Paper</strong>
+              <div>Live readiness</div><strong id="execution-live-readiness">Locked</strong>
+            </div>
+            <div class="settings-divider"></div>
+            <form id="execution-mode-form" class="settings-form" autocomplete="off" onsubmit="return saveExecutionMode(event)">
+              <label>Execution mode
+                <select id="execution-mode-select" onchange="onExecutionModeChange()">
+                  <option value="paper">Paper — simulated account</option>
+                  <option value="dry_run">Dry Run — validate exchange orders, no network submission</option>
+                  <option value="live">Live — real orders and real funds</option>
+                </select>
+              </label>
+              <label id="execution-live-confirm-label" hidden>Type <strong>ENABLE LIVE TRADING</strong> to confirm
+                <input id="execution-live-confirmation" type="text" autocomplete="off" placeholder="ENABLE LIVE TRADING" />
+              </label>
+              <div class="settings-actions">
+                <button type="submit" class="primary">Apply Execution Mode</button>
+                <button type="button" class="danger" onclick="triggerKillSwitch()">Kill Switch — Return to Paper</button>
+              </div>
+              <div id="execution-mode-result" class="settings-result" hidden></div>
+            </form>
+          </article>
+
+          <article id="settings-futures" class="panel xwide" data-exchange-only="binance">
             <div class="panel-head">
               <div><p>Futures</p><h2>USDⓈ-M Leverage</h2></div>
               <span id="futures-status" class="pill">loading</span>
@@ -980,21 +1030,86 @@
 
           // Cache payload terakhir supaya panel LIVE SIGNAL bisa di-render ulang
           // pada setiap price_update WebSocket tanpa perlu fetch API lagi.
-          const liveCache = { market: {}, paper: {}, analytics: {} };
+          const liveCache = { market: {}, paper: {}, analytics: {}, multi: {} };
+
+          // Normalisasi posisi real (multi portfolio) ke bentuk yang dipahami
+          // renderPnl/renderStats (entry, size, side, last_price, unrealized_pnl).
+          function normalizeRealPosition(pos){
+            const entry = Number(
+              pos.entry ?? pos.entry_price ?? pos.average_entry_price ?? pos.price ?? 0
+            );
+            const size = Number(
+              pos.remaining_size ?? pos.quantity ?? pos.qty ?? pos.size ?? 0
+            );
+            const rawSide = String(pos.side || "BUY").toUpperCase();
+            const isShort = rawSide === "SHORT" || rawSide === "SELL";
+            const last = Number(
+              pos.last_price ?? pos.mark_price ?? pos.current_price ?? entry
+            );
+            const calculated = isShort
+              ? (entry - last) * size
+              : (last - entry) * size;
+            return {
+              ...pos,
+              entry: entry,
+              size: size,
+              remaining_size: size,
+              last_price: last,
+              unrealized_pnl: Number(pos.unrealized_pnl ?? calculated),
+            };
+          }
+
+          // Bangun objek mirip /api/paper dari payload /api/portfolio/multi
+          // supaya panel Overview (KPI, Live Signal, P&L Stream) menampilkan
+          // data akun real (Bitunix) ketika execution mode = live/dry-run dan
+          // akun real terkoneksi. Trade history real belum tersedia -> KPI
+          // harian (Trade/Profit/Winrate) menampilkan 0, bukan angka paper.
+          function realSourceFromMulti(multi){
+            const positions = Array.isArray(multi?.positions)
+              ? multi.positions.map(normalizeRealPosition)
+              : [];
+            const balance = Number(multi?.available_balance_usdt ?? 0);
+            return {
+              balance: Number.isFinite(balance) ? balance : 0,
+              equity: Number.isFinite(balance) ? balance : 0,
+              open_positions: positions,
+              fills: [],
+              trades: [],
+              realized_exits: [],
+              opened_trades: [],
+            };
+          }
+
+          function realConnected(multi){
+            return Number(multi?.accounts_connected ?? 0) > 0;
+          }
+
+          // Dipakai dashboard.js (handlePriceUpdate) agar P&L Stream dan
+          // Live Signal ikut sumber yang sama dengan KPI Overview.
+          window.__livePanelSource = function(p){
+            const multi = p?.multiPortfolio || liveCache.multi || {};
+            if (realConnected(multi)) return realSourceFromMulti(multi);
+            return p?.paper || liveCache.paper || {};
+          };
 
           async function tick(){
             try {
-              const [market, paper, analytics] = await Promise.all([
+              const [market, paper, analytics, multi] = await Promise.all([
                 getJSON("/api/market").catch(()=>({})),
                 getJSON("/api/paper").catch(()=>({})),
                 getJSON("/api/analytics").catch(()=>({})),
+                getJSON("/api/portfolio/multi").catch(()=>({})),
               ]);
               liveCache.market = market || {};
               liveCache.paper = paper || {};
               liveCache.analytics = analytics || {};
-              renderStats(market, paper, analytics);
-              renderPnl(paper);
-              renderKpiExtra(paper);
+              liveCache.multi = multi || {};
+              const source = realConnected(multi)
+                ? realSourceFromMulti(multi)
+                : (paper || {});
+              renderStats(market, source, analytics);
+              renderPnl(source);
+              renderKpiExtra(source);
             } catch (e) {
               console.warn("panel tick error:", e);
             }
@@ -1002,8 +1117,10 @@
 
           document.addEventListener("DOMContentLoaded", ()=>{ 
             tick(); 
-            // Auto-refresh KPI dan PnL setiap 5 detik (sinkron dengan WebSocket snapshot)
-            setInterval(tick, 5000);
+            // Auto-refresh KPI dan PnL tiap 10 detik. Update harga sub-detik
+            // tetap ditangani WebSocket (handlePriceUpdate -> renderPnl/renderStats),
+            // jadi interval ini hanya untuk sinkronisasi state akun/posisi.
+            setInterval(tick, 10000);
           });
 
           // Expose renderPnl agar dashboard.js bisa memanggilnya pada setiap

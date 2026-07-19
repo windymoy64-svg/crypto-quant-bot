@@ -51,6 +51,12 @@
 }
 .settings-result.ok{border-color:var(--green);color:var(--green)}
 .settings-result.err{border-color:#ef4444;color:#ef4444}
+#portfolio-settings-status.ok{background:var(--green-bg);color:var(--green)}
+#portfolio-settings-status.warn{background:rgba(234,179,8,.15);color:#eab308}
+#portfolio-settings-status.err{background:var(--red-bg);color:var(--red)}
+.execution-mode-summary{margin-top:16px;padding-top:14px;border-top:1px solid var(--border)}
+.execution-mode-summary strong{overflow-wrap:anywhere}
+[hidden]{display:none!important}
 #settings-status.ok{background:rgba(34,197,94,.15);color:var(--green)}
 #settings-status.warn{background:rgba(234,179,8,.15);color:#eab308}
 #settings-status.err{background:rgba(239,68,68,.15);color:#ef4444}
@@ -1978,30 +1984,89 @@ body.menu-open{overflow:hidden}
 }
 .view-section[data-view-section="agents"] .summary-grid{
   display:grid;
-  grid-template-columns:repeat(4,minmax(0,1fr));
-  gap:10px;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+  margin-bottom:12px;
 }
-.view-section[data-view-section="agents"] .summary-grid .kpi-card{
+.view-section[data-view-section="agents"] .agent-metric-card{
   min-width:0;
-  min-height:102px;
-  padding:16px;
-  align-items:flex-start;
-  justify-content:center;
+  min-height:76px;
+  padding:13px 14px;
+  display:grid;
+  grid-template-columns:36px minmax(0,1fr);
+  align-items:center;
+  gap:12px;
   text-align:left;
-  border-radius:8px;
+  border:1px solid var(--border);
+  border-radius:16px;
+  background:var(--panel-2);
+  transition:border-color .18s ease,transform .18s ease,background .18s ease;
 }
-.view-section[data-view-section="agents"] .summary-grid .kpi-card > span{
-  order:1;
-  letter-spacing:0;
+.view-section[data-view-section="agents"] .agent-metric-card:hover{
+  transform:translateY(-1px);
+  border-color:var(--border-2);
 }
-.view-section[data-view-section="agents"] .summary-grid .kpi-card > strong{
-  order:2;
-  width:100%;
-  font-size:22px;
+.view-section[data-view-section="agents"] .agent-metric-icon{
+  width:36px;
+  height:36px;
+  display:grid;
+  place-items:center;
+  border-radius:50%;
+  background:var(--green-bg);
+  color:var(--green);
+}
+.view-section[data-view-section="agents"] .agent-metric-icon svg{
+  width:17px;
+  height:17px;
+  stroke:currentColor;
+  fill:none;
+}
+.view-section[data-view-section="agents"] .agent-metric-copy{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+.view-section[data-view-section="agents"] .agent-metric-copy small{
+  color:var(--txt-dim);
+  font-size:10px;
+  font-weight:600;
+  line-height:1.1;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+.view-section[data-view-section="agents"] .agent-metric-copy strong{
+  color:var(--green);
+  font-size:19px;
+  font-weight:800;
   line-height:1.25;
-  letter-spacing:0;
-  white-space:normal;
-  overflow-wrap:anywhere;
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.view-section[data-view-section="agents"] .agent-metric-card.tone-green{
+  border-color:var(--green-br);
+  background:linear-gradient(135deg,var(--green-bg),var(--panel-2) 68%);
+}
+.view-section[data-view-section="agents"] .agent-metric-card.tone-blue{
+  border-color:var(--blue-br);
+  background:linear-gradient(135deg,var(--blue-bg),var(--panel-2) 68%);
+}
+.view-section[data-view-section="agents"] .tone-blue .agent-metric-icon{background:var(--blue-bg);color:var(--blue)}
+.view-section[data-view-section="agents"] .tone-blue .agent-metric-copy strong{color:var(--blue)}
+.view-section[data-view-section="agents"] .agent-metric-card.tone-amber{
+  border-color:rgba(245,158,11,.30);
+  background:linear-gradient(135deg,rgba(245,158,11,.10),var(--panel-2) 68%);
+}
+.view-section[data-view-section="agents"] .tone-amber .agent-metric-icon{background:rgba(245,158,11,.12);color:var(--amber)}
+.view-section[data-view-section="agents"] .tone-amber .agent-metric-copy strong{color:var(--amber)}
+.view-section[data-view-section="agents"] #agent-learning-detail{
+  margin-top:4px;
+  padding:12px 14px;
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:var(--bg-2);
 }
 .view-section[data-view-section="agents"] .table{
   display:block;
@@ -2211,8 +2276,8 @@ body.menu-open{overflow:hidden}
   .view-section[data-view-section="agents"] .summary-grid{
     grid-template-columns:1fr;
   }
-  .view-section[data-view-section="agents"] .summary-grid .kpi-card{
-    min-height:82px;
+  .view-section[data-view-section="agents"] .agent-metric-card{
+    min-height:72px;
   }
   .view-section[data-view-section="agents"] .agent-table tr{
     grid-template-columns:1fr;

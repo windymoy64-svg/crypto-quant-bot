@@ -134,7 +134,11 @@ class ExecutorAgent:
             quantity=position.quantity,
             price=price,
             reduce_only=True,
-            meta={"role": "exit", "reason": exit_plan.reason if exit_plan else "unknown"},
+            meta={
+                "role": "exit",
+                "reason": exit_plan.reason if exit_plan else "unknown",
+                "position_id": position.position_id,
+            },
         )]
         return self._finalize(decision, orders, now)
 
@@ -222,6 +226,26 @@ class ExecutorAgent:
                 )
                 for order in orders
             ]
+
+        # Plan-aware adapters can validate an entry and all protective orders
+        # before making the first network request. This prevents a live entry
+        # from being opened when its stop-loss cannot be submitted safely.
+        place_orders = getattr(self._exchange, "place_orders", None)
+        if callable(place_orders):
+            try:
+                return list(place_orders(orders, timestamp=now))
+            except Exception as exc:  # noqa: BLE001
+                return [
+                    ExecutionResult(
+                        status="REJECTED", order_id=f"live_{uuid.uuid4().hex[:8]}",
+                        symbol=order.symbol, side=order.side,
+                        order_type=order.order_type,
+                        requested_quantity=order.quantity, filled_quantity=0.0,
+                        average_price=0.0, timestamp=now,
+                        reason=f"adapter_plan_error: {exc}", meta=order.meta,
+                    )
+                    for order in orders
+                ]
 
         # Delegate to the adapter. Any adapter must expose ``place_order``.
         results: list[ExecutionResult] = []

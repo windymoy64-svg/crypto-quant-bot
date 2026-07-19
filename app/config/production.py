@@ -72,6 +72,13 @@ def validate_environment() -> None:
 
 
 def runtime_mode() -> str:
+    try:
+        from app.settings.execution_preferences import load_execution_preferences
+        stored = load_execution_preferences()
+        if stored.mode in {"paper", "dry_run", "live"}:
+            return stored.mode.replace("_", "-")
+    except Exception:
+        pass
     if get_bool_env("LIVE_TRADING_ENABLED", False):
         return "live-dry-run" if get_bool_env("LIVE_TRADING_DRY_RUN", True) else "live"
     if get_bool_env("PAPER_TRADING_ENABLED", True):
@@ -81,10 +88,16 @@ def runtime_mode() -> str:
 
 def startup_info() -> StartupInfo:
     credentials = get_exchange_credentials()
+    exchange = credentials.exchange_id
+    try:
+        from app.settings.portfolio_preferences import load_portfolio_preferences
+        exchange = load_portfolio_preferences().active_execution_exchange
+    except Exception:
+        pass
     return StartupInfo(
         python_version=platform.python_version(),
         bot_version=os.getenv("BOT_VERSION", BOT_VERSION),
-        exchange=credentials.exchange_id,
+        exchange=exchange,
         dashboard_port=int(required_env("BOT_API_PORT")),
         mode=runtime_mode(),
         sqlite_path=str(DEFAULT_HISTORY_DB),
@@ -128,7 +141,14 @@ def production_startup() -> None:
 
 
 def _bootstrap_futures_if_enabled() -> None:
-    """Best-effort hook: apply futures config at startup, never raise."""
+    """Best-effort hook: apply Binance futures config only for Binance."""
+
+    try:
+        from app.settings.portfolio_preferences import load_portfolio_preferences
+        if load_portfolio_preferences().active_execution_exchange != "binance":
+            return
+    except Exception:
+        pass
 
     try:
         from app.exchange.binance_futures.lifecycle import (

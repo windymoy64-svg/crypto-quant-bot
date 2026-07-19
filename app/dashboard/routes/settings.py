@@ -29,6 +29,16 @@ from app.settings.exchange_credentials import (
     mask_secret,
     save_exchange_credentials,
 )
+from app.settings.portfolio_preferences import (
+    load_portfolio_preferences,
+    save_portfolio_preferences,
+)
+from app.settings.execution_preferences import (
+    LIVE_CONFIRMATION,
+    kill_switch,
+    load_execution_preferences,
+    save_execution_preferences,
+)
 from app.settings.trading_preferences import (
     leverage_options,
     load_trading_preferences,
@@ -47,6 +57,25 @@ BITUNIX_FUTURES_BASE = "https://fapi.bitunix.com"
 # ``error code: 1010`` (banned browser signature) for the default
 # ``Python-urllib/X.Y`` User-Agent. Any plausible UA passes the check.
 BITUNIX_USER_AGENT = "crypto-quant-bot/1.0 (+dashboard)"
+
+
+def _invalidate_multi_portfolio_cache() -> None:
+    """Buang cache /api/portfolio/multi setelah preferensi/kredensial berubah.
+
+    Lazy import dipakai untuk menghindari circular import: modul
+    ``multi_portfolio`` sendiri mengimport helper dari modul ini.
+    """
+
+    try:
+        from app.dashboard.routes.multi_portfolio import (
+            invalidate_multi_portfolio_cache,
+        )
+    except Exception:  # pragma: no cover - defensive
+        return
+    try:
+        invalidate_multi_portfolio_cache()
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("Failed to invalidate multi portfolio cache")
 
 
 def _normalize_exchange_or_400(value: str | None) -> str:
@@ -112,6 +141,114 @@ def list_exchange_settings() -> dict[str, Any]:
             record = None
         out["exchanges"].append(_summary(record, name))
     return out
+
+
+def _portfolio_summary() -> dict[str, Any]:
+    preferences = load_portfolio_preferences()
+    return {
+        "view_mode": preferences.view_mode,
+        "multi_exchange_enabled": preferences.multi_exchange_enabled,
+        "active_execution_exchange": preferences.active_execution_exchange,
+        "execution_scope": "single_exchange",
+        "read_only_aggregation": True,
+    }
+
+
+@router.get("/settings/portfolio")
+def get_portfolio_settings() -> dict[str, Any]:
+    """Return multi-exchange view and single-exchange execution preferences."""
+
+    try:
+        return _portfolio_summary()
+    except Exception as exc:
+        logger.exception("Failed to load portfolio preferences")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.put("/settings/portfolio")
+def update_portfolio_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    """Save portfolio view preferences without enabling order execution."""
+
+    try:
+        current = load_portfolio_preferences()
+        save_portfolio_preferences(
+            active_execution_exchange=str(
+                payload.get(
+                    "active_execution_exchange",
+                    current.active_execution_exchange,
+                )
+            ),
+            view_mode=str(payload.get("view_mode", current.view_mode)),
+        )
+        _invalidate_multi_portfolio_cache()
+        return _portfolio_summary()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to save portfolio preferences")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _execution_summary() -> dict[str, Any]:
+    execution = load_execution_preferences()
+    portfolio = load_portfolio_preferences()
+    credentials = load_exchange_credentials(exchange=portfolio.active_execution_exchange)
+    configured = bool(credentials and credentials.is_configured)
+    return {
+        "mode": execution.mode,
+        "live_confirmed": execution.live_confirmed,
+        "network_enabled": execution.network_enabled and configured,
+        "primary_exchange": portfolio.active_execution_exchange,
+        "credentials_configured": configured,
+        "live_confirmation_phrase": LIVE_CONFIRMATION,
+    }
+
+
+@router.get("/settings/execution")
+def get_execution_settings() -> dict[str, Any]:
+    return _execution_summary()
+
+
+@router.put("/settings/execution")
+def update_execution_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    mode = str(payload.get("mode", "paper")).strip().lower()
+    confirmation = str(payload.get("confirmation", ""))
+    portfolio = load_portfolio_preferences()
+    credentials = load_exchange_credentials(exchange=portfolio.active_execution_exchange)
+    if mode == "live" and (credentials is None or not credentials.is_configured):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{portfolio.active_execution_exchange}_credentials_missing",
+        )
+    if mode == "live" and portfolio.active_execution_exchange != "bitunix":
+        raise HTTPException(
+            status_code=400,
+            detail="live_execution_not_wired_for_selected_exchange",
+        )
+    if mode == "live" and credentials is not None:
+        preflight = _perform_bitunix_test(
+            credentials.api_key,
+            credentials.api_secret,
+            testnet=False,
+        )
+        if not preflight.get("ok"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"bitunix_preflight_failed: {preflight.get('error', 'unknown')}",
+            )
+    try:
+        save_execution_preferences(mode=mode, confirmation=confirmation)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _invalidate_multi_portfolio_cache()
+    return _execution_summary()
+
+
+@router.post("/settings/execution/kill")
+def trigger_execution_kill_switch() -> dict[str, Any]:
+    kill_switch()
+    _invalidate_multi_portfolio_cache()
+    return _execution_summary()
 
 
 def _optional_number(payload: dict[str, Any], key: str) -> float | None:
@@ -202,6 +339,7 @@ def update_exchange_settings(payload: dict[str, Any]) -> dict[str, Any]:
         logger.exception("Failed to persist %s credentials", exchange)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    _invalidate_multi_portfolio_cache()
     return _summary(record, exchange)
 
 
@@ -215,6 +353,7 @@ def delete_exchange_settings(
     except Exception as exc:
         logger.exception("Failed to clear %s credentials", exchange)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _invalidate_multi_portfolio_cache()
     return _summary(None, exchange)
 
 
@@ -323,6 +462,7 @@ def _perform_binance_test(
         "can_withdraw": data.get("canWithdraw"),
         "permissions": data.get("permissions", []),
         "non_zero_balances": len(balances),
+        "balances": balances,
         "testnet": testnet,
     }
 
@@ -438,7 +578,12 @@ def _perform_bitunix_test(
             "testnet": testnet,
         }
     entries = data.get("data") or []
-    entry = entries[0] if entries else {}
+    if isinstance(entries, list):
+        entry = entries[0] if entries and isinstance(entries[0], dict) else {}
+    elif isinstance(entries, dict):
+        entry = entries
+    else:
+        entry = {}
     return {
         "ok": True,
         "exchange": "bitunix",

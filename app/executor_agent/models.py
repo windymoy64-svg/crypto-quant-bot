@@ -18,6 +18,7 @@ class PositionContext:
     side: Literal["BUY", "SELL"]
     quantity: float
     current_price: float | None = None
+    position_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

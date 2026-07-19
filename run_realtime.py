@@ -19,6 +19,16 @@ from app.strategies.acr_realtime_enrichment import (
     enrich_realtime_signals,
 )
 from app.settings.trading_preferences import load_trading_preferences
+from app.settings.portfolio_preferences import load_portfolio_preferences
+from app.settings.execution_preferences import load_execution_preferences
+from app.settings.exchange_credentials import load_exchange_credentials
+from app.agent_pipeline.coordinator import AgentPipelineConfig, AgentPipelineCoordinator
+from app.executor_agent.agent import ExecutorAgent
+from app.executor_agent.bitunix_futures_adapter import (
+    BitunixCredentials,
+    BitunixFuturesExecutorAdapter,
+    BitunixLiveSafetyGate,
+)
 from app.agent_pipeline.bridge import (
     AgentPipelineRuntimeConfig,
     run_pipeline_bridge,
@@ -135,6 +145,62 @@ def prepare_paper_signals(
         seen.add(symbol)
 
     return prepared
+
+
+def build_runtime_agent_coordinator(
+    *, config: AgentPipelineRuntimeConfig, exchange: str,
+) -> AgentPipelineCoordinator:
+    """Build the selected exchange executor from persisted operator mode."""
+
+    execution = load_execution_preferences()
+    coordinator_config = AgentPipelineConfig(
+        min_scanner_confidence=config.min_scanner_confidence,
+        execute_decisions=config.execute_decisions,
+    )
+    if execution.mode == "paper":
+        return AgentPipelineCoordinator(
+            executor_agent=ExecutorAgent(), config=coordinator_config,
+        )
+
+    credentials = load_exchange_credentials(exchange=exchange)
+    if credentials is None or not credentials.is_configured:
+        return AgentPipelineCoordinator(
+            executor_agent=ExecutorAgent(live=True), config=coordinator_config,
+        )
+
+    if exchange != "bitunix":
+        # Binance live wiring remains fail-closed until the selected futures
+        # account config and endpoint are built through the same runtime path.
+        return AgentPipelineCoordinator(
+            executor_agent=ExecutorAgent(live=True), config=coordinator_config,
+        )
+
+    network_enabled = execution.network_enabled
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials(credentials.api_key, credentials.api_secret),
+        safety_gate=BitunixLiveSafetyGate(
+            enabled=True,
+            dry_run=not network_enabled,
+            confirm_live=execution.live_confirmed,
+        ),
+    )
+    balance = 10_000.0
+    if network_enabled:
+        balance = adapter.available_balance("USDT")
+    try:
+        trading = load_trading_preferences(exchange=exchange)
+        leverage = trading.leverage or 1
+    except Exception:
+        leverage = 1
+    return AgentPipelineCoordinator(
+        executor_agent=ExecutorAgent(
+            balance=balance,
+            leverage=leverage,
+            live=True,
+            exchange_adapter=adapter,
+        ),
+        config=coordinator_config,
+    )
 
 def write_scan_outputs(
     results: list[dict[str, object]],
@@ -501,6 +567,13 @@ def run_once(
 
     scan_config = load_json(scan_config_path)
     exchange = str(scan_config.get("exchange", "binance"))
+    if bool(runtime_config.get("use_primary_exchange", False)):
+        try:
+            portfolio_preferences = load_portfolio_preferences()
+            exchange = portfolio_preferences.active_execution_exchange
+            scan_config = {**scan_config, "exchange": exchange}
+        except Exception:
+            pass
     fallback = bool(scan_config.get("fallback_to_sample_data", True))
     market_data_key = (exchange.lower(), fallback)
     if market_data_cache is None:
@@ -520,15 +593,16 @@ def run_once(
             )
             market_data_cache[market_data_key] = market_data
 
-    paper_enabled = bool(
-        runtime_config.get("paper_trading_enabled", True)
+    execution_preferences = load_execution_preferences()
+    paper_enabled = bool(runtime_config.get("paper_trading_enabled", True)) and (
+        execution_preferences.mode == "paper"
     )
     paper_config: PaperTradingConfig | None = None
     open_position_symbols: list[str] = []
     telegram_notifier = None
     if paper_enabled:
         paper_data = load_json(paper_config_path)
-        selected_exchange = str(scan_config.get("exchange", "binance")).lower()
+        selected_exchange = exchange.lower()
         try:
             preferences = load_trading_preferences(exchange=selected_exchange)
         except Exception:
@@ -661,16 +735,40 @@ def run_once(
     )
     if agent_pipeline_config.enabled:
         open_positions_map: dict[str, dict[str, object]] = {}
-        if paper is not None:
+        if execution_preferences.mode in {"dry_run", "live"} and exchange.lower() == "bitunix":
+            try:
+                from app.dashboard.routes.multi_portfolio import _load_bitunix_details
+                creds = load_exchange_credentials(exchange=exchange.lower())
+                if creds is not None and creds.is_configured:
+                    details = _load_bitunix_details(creds.api_key, creds.api_secret)
+                    for pos in details.get("positions", []) or []:
+                        if isinstance(pos, dict) and pos.get("symbol"):
+                            symbol = str(pos["symbol"]).upper().replace("-", "/")
+                            open_positions_map[symbol] = {
+                                **pos,
+                                "side": (
+                                    "SELL" if str(pos.get("side", "")).upper() == "SHORT"
+                                    else "BUY"
+                                ),
+                                "remaining_size": pos.get("quantity"),
+                            }
+            except Exception as exc:  # noqa: BLE001
+                print(f"bitunix positions fallback to paper: {exc}", flush=True)
+        if not open_positions_map and paper is not None:
             for pos in paper.get("open_positions", []) or []:
                 if isinstance(pos, dict) and pos.get("symbol"):
                     open_positions_map[str(pos["symbol"])] = pos
         try:
+            coordinator = build_runtime_agent_coordinator(
+                config=agent_pipeline_config,
+                exchange=exchange.lower(),
+            )
             agent_pipeline_payload = run_pipeline_bridge(
                 config=agent_pipeline_config,
                 scanner_results=results,
                 open_positions=open_positions_map,
                 market_data=market_data,
+                coordinator=coordinator,
             )
         except Exception as exc:  # noqa: BLE001
             agent_pipeline_payload = {

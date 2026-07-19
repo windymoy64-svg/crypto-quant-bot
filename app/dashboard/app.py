@@ -21,6 +21,7 @@ from app.dashboard.routes import (
     futures,
     health,
     market,
+    multi_portfolio,
     office,
     paper,
     portfolio,
@@ -83,6 +84,7 @@ def create_app() -> FastAPI:
     for route in (
         market,
         portfolio,
+        multi_portfolio,
         paper,
         backtest,
         analytics,

@@ -177,6 +177,46 @@ def test_test_exchange_bitunix_sends_custom_user_agent(
     assert "fapi.bitunix.com" in str(captured["url"])
 
 
+def test_test_exchange_bitunix_accepts_object_account_data(
+    client: TestClient, isolated_store: SecretsStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.dashboard.routes import settings as settings_route
+    import io
+    import json as json_module
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return json_module.dumps({
+                "code": 0,
+                "data": {"marginCoin": "USDT", "available": "123.45"},
+                "msg": "ok",
+            }).encode()
+
+    monkeypatch.setattr(
+        settings_route.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    client.put(
+        "/api/settings/exchange",
+        json={"exchange": "bitunix", "api_key": "key", "api_secret": "secret"},
+    )
+
+    body = client.post(
+        "/api/settings/exchange/test", json={"exchange": "bitunix"}
+    ).json()
+
+    assert body["ok"] is True
+    assert body["margin_coin"] == "USDT"
+    assert body["available"] == "123.45"
+
+
 def test_trading_settings_are_isolated_per_exchange(client: TestClient) -> None:
     response = client.put(
         "/api/settings/trading",

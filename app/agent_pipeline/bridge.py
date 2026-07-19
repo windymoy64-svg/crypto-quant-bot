@@ -107,6 +107,10 @@ def _position_context(raw: dict[str, Any]) -> PositionContext | None:
         side=normalized,
         quantity=quantity,
         current_price=float(raw.get("last_price") or raw.get("entry") or 0.0) or None,
+        position_id=(
+            str(raw.get("position_id") or raw.get("positionId") or "").strip()
+            or None
+        ),
     )
 
 

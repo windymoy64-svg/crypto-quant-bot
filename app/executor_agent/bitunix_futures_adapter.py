@@ -47,6 +47,7 @@ from app.executor_agent.models import (
 BITUNIX_FUTURES_BASE = "https://fapi.bitunix.com"
 BITUNIX_USER_AGENT = "crypto-quant-bot/1.0 (+executor-agent)"
 BITUNIX_PLACE_ORDER_PATH = "/api/v1/futures/trade/place_order"
+BITUNIX_ACCOUNT_PATH = "/api/v1/futures/account"
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,122 @@ class BitunixFuturesExecutorAdapter:
 
         return self._to_execution_result(payload, order, timestamp)
 
+    def available_balance(self, margin_coin: str = "USDT") -> float:
+        """Read available futures balance for live sizing preflight."""
+
+        if not self._credentials.configured:
+            raise RuntimeError("credentials_missing")
+        params = {"marginCoin": margin_coin.upper()}
+        canonical = "".join(f"{key}{params[key]}" for key in sorted(params))
+        nonce = secrets.token_hex(16)
+        timestamp = str(int(time.time() * 1000))
+        digest = hashlib.sha256(
+            f"{nonce}{timestamp}{self._credentials.api_key}{canonical}".encode("utf-8")
+        ).hexdigest()
+        signature = hashlib.sha256(
+            f"{digest}{self._credentials.api_secret}".encode("utf-8")
+        ).hexdigest()
+        request = urllib.request.Request(
+            f"{self._base_url}{BITUNIX_ACCOUNT_PATH}?{urllib.parse.urlencode(params)}",
+            headers={
+                "api-key": self._credentials.api_key,
+                "sign": signature,
+                "nonce": nonce,
+                "timestamp": timestamp,
+                "language": "en-US",
+                "Content-Type": "application/json",
+                "User-Agent": BITUNIX_USER_AGENT,
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"account_preflight_failed: {exc}") from exc
+        if not isinstance(payload, dict) or payload.get("code") != 0:
+            raise RuntimeError(str(payload.get("msg") if isinstance(payload, dict) else "invalid_response"))
+        data = payload.get("data") or {}
+        if isinstance(data, list):
+            data = data[0] if data and isinstance(data[0], dict) else {}
+        if not isinstance(data, dict):
+            raise RuntimeError("invalid_account_payload")
+        available = _float(data.get("available"))
+        if available <= 0:
+            raise RuntimeError("available_balance_not_positive")
+        return available
+
+    def place_orders(
+        self, orders: list[OrderRequest], *, timestamp: str,
+    ) -> list[ExecutionResult]:
+        """Submit a complete plan, attaching protection atomically to entries."""
+
+        if not orders:
+            return []
+        entry = next((item for item in orders if item.meta.get("role") == "entry"), None)
+        if entry is None:
+            return [self.place_order(item, timestamp=timestamp) for item in orders]
+
+        gate_block = self._safety_gate.evaluate()
+        if gate_block is not None:
+            return [self._reject(item, timestamp, gate_block) for item in orders]
+        if not self._credentials.configured:
+            return [self._reject(item, timestamp, "credentials_missing") for item in orders]
+
+        stop = next((item for item in orders if item.meta.get("role") == "stop_loss"), None)
+        take_profit = next(
+            (item for item in orders if str(item.meta.get("role", "")).startswith("take_profit_")),
+            None,
+        )
+        if stop is None or stop.stop_price is None or stop.stop_price <= 0:
+            return [
+                self._reject(item, timestamp, "protective_stop_required_before_live_entry")
+                for item in orders
+            ]
+        if take_profit is None or take_profit.price is None or take_profit.price <= 0:
+            return [
+                self._reject(item, timestamp, "take_profit_required_before_live_entry")
+                for item in orders
+            ]
+
+        try:
+            body = self._build_body(entry)
+            body.update({
+                "slPrice": _fmt_number(stop.stop_price),
+                "slStopType": "MARK",
+                "slOrderType": "MARKET",
+                "tpPrice": _fmt_number(take_profit.price),
+                "tpStopType": "MARK",
+                "tpOrderType": "MARKET",
+            })
+        except ValueError as exc:
+            return [self._reject(item, timestamp, f"invalid_request: {exc}") for item in orders]
+
+        headers = self._sign_headers(body_json=json.dumps(body, separators=(",", ":")))
+        try:
+            payload = self._send(
+                url=f"{self._base_url}{BITUNIX_PLACE_ORDER_PATH}",
+                headers=headers,
+                body=body,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return [self._reject(item, timestamp, f"http_error: {exc}") for item in orders]
+
+        entry_result = self._to_execution_result(payload, entry, timestamp)
+        protective_results = [
+            ExecutionResult(
+                status="SUBMITTED" if entry_result.status != "REJECTED" else "REJECTED",
+                order_id=entry_result.order_id,
+                symbol=item.symbol, side=item.side, order_type=item.order_type,
+                requested_quantity=item.quantity, filled_quantity=0.0,
+                average_price=0.0, timestamp=timestamp,
+                reason=("attached_to_entry" if entry_result.status != "REJECTED" else entry_result.reason),
+                meta={**item.meta, "attached_to_entry": True},
+            )
+            for item in orders if item is not entry
+        ]
+        return [entry_result, *protective_results]
+
     def _build_body(self, order: OrderRequest) -> dict[str, Any]:
         if order.order_type not in {"MARKET", "LIMIT"}:
             raise ValueError(
@@ -134,6 +251,9 @@ class BitunixFuturesExecutorAdapter:
             raise ValueError("quantity_must_be_positive")
 
         symbol = order.symbol.replace("/", "").upper()
+        position_id = str(order.meta.get("position_id", "")).strip()
+        if order.reduce_only and not position_id:
+            raise ValueError("position_id_required_for_close")
         body: dict[str, Any] = {
             "symbol": symbol,
             "side": "BUY" if order.side == "BUY" else "SELL",
@@ -143,6 +263,8 @@ class BitunixFuturesExecutorAdapter:
             # OPEN for entries, CLOSE for reduce-only (partial TP / exits).
             "tradeSide": "CLOSE" if order.reduce_only else "OPEN",
         }
+        if position_id:
+            body["positionId"] = position_id
 
         if order.order_type == "LIMIT":
             if order.price is None or order.price <= 0:
