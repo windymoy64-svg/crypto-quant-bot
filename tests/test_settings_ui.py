@@ -127,3 +127,13 @@ def test_llm_settings_controls_are_present() -> None:
     assert '"/api/settings/llm/agents"' in javascript
     assert "function saveLLMAgentModels" in javascript
     assert "function renderAgentLLMInsights" in javascript
+
+
+def test_llm_insight_renderer_supports_structured_model_output() -> None:
+    """Structured GPT summaries/recommendations must not render as a dash."""
+
+    javascript = SCRIPT.read_text(encoding="utf-8")
+
+    assert "value.assessment || value.hypothesis" in javascript
+    assert "const rationale = agentText(value.rationale);" in javascript
+    assert 'join(" — ")' in javascript

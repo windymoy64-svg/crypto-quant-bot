@@ -10,6 +10,7 @@ from fastapi.params import Depends as DependsParam
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.templating import Jinja2Templates
 
 from app.config.env import get_exchange_credentials
@@ -72,6 +73,9 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=_lifespan,
     )
+    # Payload market/agent dapat ratusan KB. Kompresi mengurangi latency jaringan
+    # dashboard tanpa mengubah struktur JSON atau jalur WebSocket harga realtime.
+    dashboard.add_middleware(GZipMiddleware, minimum_size=1_000)
 
     base_dir = Path(__file__).parent
 
@@ -160,6 +164,8 @@ def _register_compat_routes(dashboard: FastAPI) -> None:
     templates = Jinja2Templates(
         directory=str(Path(__file__).parent / "templates")
     )
+    # Auto-reload templates so edits show up without restart.
+    templates.env.auto_reload = True
 
     @dashboard.get("/", response_class=HTMLResponse)
     def index(request: Request) -> HTMLResponse:
@@ -171,6 +177,7 @@ def _register_compat_routes(dashboard: FastAPI) -> None:
             asset_version = str(int(max(
                 (static_dir / "dashboard.js").stat().st_mtime,
                 (static_dir / "dashboard.css").stat().st_mtime,
+                (static_dir / "office.js").stat().st_mtime,
             )))
         except OSError:
             asset_version = "0"

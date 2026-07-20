@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+import threading
 from typing import Any
+
+
+_latest_insight_cache: dict[
+    tuple[str, int], tuple[int, int, list[dict[str, Any]], int]
+] = {}
+_latest_insight_cache_lock = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -53,6 +61,56 @@ class LLMInsightStore:
                 if isinstance(data, dict):
                     rows.append(data)
         return rows
+
+    def load_latest(self, limit: int) -> tuple[list[dict[str, Any]], int]:
+        # Hindari beberapa request startup memindai file yang sama bersamaan.
+        with _latest_insight_cache_lock:
+            return self._load_latest_locked(limit)
+
+    def _load_latest_locked(self, limit: int) -> tuple[list[dict[str, Any]], int]:
+        """Return the newest rows and valid row count using bounded memory."""
+        if limit <= 0 or not self.path.exists():
+            return [], 0
+        try:
+            stat = self.path.stat()
+        except OSError:
+            return [], 0
+        cache_key = (str(self.path.resolve()), limit)
+        signature = (stat.st_mtime_ns, stat.st_size)
+        with _latest_insight_cache_lock:
+            cached = _latest_insight_cache.get(cache_key)
+            if cached and cached[:2] == signature:
+                return list(cached[2]), cached[3]
+
+        append_offset = 0
+        if cached and stat.st_size > cached[1]:
+            append_offset = cached[1]
+            rows: deque[dict[str, Any]] = deque(cached[2], maxlen=limit)
+            total = cached[3]
+        else:
+            rows = deque(maxlen=limit)
+            total = 0
+        try:
+            with self.path.open("r", encoding="utf-8") as file:
+                if append_offset:
+                    file.seek(append_offset)
+                for line in file:
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(data, dict):
+                        total += 1
+                        rows.append(data)
+        except OSError:
+            return [], 0
+        result = list(rows)
+        with _latest_insight_cache_lock:
+            _latest_insight_cache[cache_key] = (*signature, result, total)
+            if len(_latest_insight_cache) > 32:
+                oldest = next(iter(_latest_insight_cache))
+                _latest_insight_cache.pop(oldest, None)
+        return list(result), total
 
     def latest_input_fingerprint(self) -> tuple[int, str] | None:
         """Fingerprint of the input data used for the most recent LLM insight.

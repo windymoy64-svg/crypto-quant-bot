@@ -464,12 +464,17 @@ body.menu-open{overflow:hidden}
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
 }
 .agent-office{
-  position:relative;z-index:2;margin-top:16px;overflow:hidden;
-  /* Match the official room artwork: 672 x 416 pixels (landscape). */
-  aspect-ratio:21 / 13;
+  position:relative;z-index:2;margin:4px auto 0;overflow:hidden;
+  width:min(100%,640px);
+  /* Visible bounds: active cols 0..19 and rows 10..20; top wall extends 32px. */
+  aspect-ratio:640 / 384;
+  background:#0d0e15;
 }
-.agent-office-frame{
-  display:block;width:100%;height:100%;border:0;
+.agent-office #office-canvas{
+  position:absolute;top:calc(-100% * 296 / 384);left:calc(-100% * 304 / 640);
+  width:calc(100% * 1280 / 640);height:calc(100% * 720 / 384);
+  max-width:none;display:block;
+  background:#0d0e15;image-rendering:pixelated;
 }
 
 /* --- Pixel bot art. All parts absolutely positioned inside .pixel-bot --- */

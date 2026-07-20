@@ -9,6 +9,9 @@ from app.core.models import Candle
 from app.dashboard.services import iter_jsonl_file, read_json_file, read_jsonl_file
 from app.dashboard.websocket import DashboardEventHub
 from app.market.data_service import MarketDataService
+from app.learning_agent.insight_store import LLMInsightStore
+from app.learning_agent.models import ChartObservation
+from app.learning_agent.store import ChartObservationStore
 
 
 def test_read_jsonl_file_keeps_latest_valid_rows(tmp_path: Path) -> None:
@@ -105,3 +108,40 @@ def test_dashboard_event_queue_drops_oldest_when_full() -> None:
     assert hub._queue.qsize() == 2
     assert hub._queue.get_nowait() == {"id": 2}
     assert hub._queue.get_nowait() == {"id": 3}
+
+
+def test_observation_tail_cache_invalidates_after_append(tmp_path: Path) -> None:
+    store = ChartObservationStore(str(tmp_path / "observations.jsonl"))
+    for index in range(2):
+        store.save(ChartObservation(
+            observation_id=str(index), symbol="BTC/USDT", timestamp=str(index),
+            stage="ENTRY_CANDIDATE", scanner_confidence=90.0,
+            scanner_gates_passed=True, chart_reading={},
+        ))
+
+    first, first_total = store.load_latest(1)
+    cached, cached_total = store.load_latest(1)
+    assert [row.observation_id for row in first] == ["1"]
+    assert [row.observation_id for row in cached] == ["1"]
+    assert first_total == cached_total == 2
+
+    store.save(ChartObservation(
+        observation_id="2", symbol="BTC/USDT", timestamp="2",
+        stage="ENTRY_CANDIDATE", scanner_confidence=90.0,
+        scanner_gates_passed=True, chart_reading={},
+    ))
+    updated, updated_total = store.load_latest(1)
+    assert [row.observation_id for row in updated] == ["2"]
+    assert updated_total == 3
+
+
+def test_insight_tail_cache_invalidates_after_append(tmp_path: Path) -> None:
+    path = tmp_path / "insights.jsonl"
+    path.write_text('{"id":1}\n', encoding="utf-8")
+    store = LLMInsightStore(str(path))
+    assert store.load_latest(1) == ([{"id": 1}], 1)
+    assert store.load_latest(1) == ([{"id": 1}], 1)
+
+    with path.open("a", encoding="utf-8") as file:
+        file.write('{"id":2}\n')
+    assert store.load_latest(1) == ([{"id": 2}], 2)

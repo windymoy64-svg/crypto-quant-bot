@@ -35,7 +35,8 @@ class DashboardEventHub:
         await websocket.accept()
         self._ensure_runtime()
         try:
-            await websocket.send_json({"type": "snapshot", "payload": dashboard_service.snapshot()})
+            snapshot = await asyncio.to_thread(dashboard_service.snapshot)
+            await websocket.send_json({"type": "snapshot", "payload": snapshot})
             await websocket.send_json({
                 "type": "agent_snapshot",
                 "payload": await asyncio.to_thread(synchronized_snapshot),
@@ -153,9 +154,10 @@ class DashboardEventHub:
             if not self.connections:
                 continue
             try:
+                snapshot = await asyncio.to_thread(dashboard_service.snapshot)
                 await self.broadcast({
                     "type": "snapshot",
-                    "payload": dashboard_service.snapshot(),
+                    "payload": snapshot,
                 })
                 await self.broadcast({
                     "type": "agent_snapshot",
@@ -178,8 +180,9 @@ class DashboardEventHub:
                 logger.exception("Realtime price stream sync failed")
 
     def _open_position_symbols(self) -> list[str]:
-        snapshot = dashboard_service.snapshot()
-        paper = snapshot.get("paper", {}) if isinstance(snapshot, dict) else {}
+        # Pemeriksaan ini berjalan tiap 10 detik dan hanya membutuhkan posisi;
+        # jangan ikut membangun market, analytics, health, dan backtest snapshot.
+        paper = dashboard_service.paper()
         positions = paper.get("open_positions", []) if isinstance(paper, dict) else []
         if not isinstance(positions, list):
             return []

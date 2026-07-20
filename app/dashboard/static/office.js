@@ -115,6 +115,7 @@ const STATUS_COLOR = {
 };
 
 const canvas = document.getElementById("office-canvas");
+if (!canvas) throw new Error("Animated office canvas is missing");
 // Every frame paints an opaque background, so an alpha backing buffer only
 // consumes memory/bandwidth without contributing to the final image.
 const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });

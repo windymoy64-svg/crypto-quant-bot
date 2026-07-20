@@ -6,8 +6,10 @@ Handles persistence of TradeRecords to JSONL and loading them back.
 from __future__ import annotations
 
 import json
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
+import threading
 from typing import Any
 
 from app.learning_agent.models import ChartObservation, TradeRecord
@@ -15,6 +17,16 @@ from app.learning_agent.models import ChartObservation, TradeRecord
 
 DEFAULT_STORE_PATH = "data/learning_journal.jsonl"
 DEFAULT_OBSERVATIONS_PATH = "data/chart_observations.jsonl"
+
+# Dashboard meminta tail yang sama setiap 5 detik, sedangkan file hanya berubah
+# ketika scanner menulis observasi baru. Cache berdasarkan metadata file menjaga
+# respons realtime (langsung invalid saat file berubah) tanpa parse puluhan MB
+# berulang kali.
+_latest_observation_cache: dict[
+    tuple[str, int, str | None, str | None],
+    tuple[int, int, list[ChartObservation], int],
+] = {}
+_latest_observation_cache_lock = threading.RLock()
 
 
 class TradeStore:
@@ -96,20 +108,96 @@ class ChartObservationStore:
             for line in f:
                 try:
                     data = json.loads(line)
-                    observations.append(ChartObservation(
-                        observation_id=str(data.get("observation_id", "")),
-                        symbol=str(data.get("symbol", "")),
-                        timestamp=str(data.get("timestamp", "")),
-                        stage=data.get("stage", "ENTRY_CANDIDATE"),
-                        scanner_confidence=float(data.get("scanner_confidence", 0.0)),
-                        scanner_gates_passed=bool(data.get("scanner_gates_passed", False)),
-                        chart_reading=data.get("chart_reading") or {},
-                        decision=data.get("decision") or {},
-                        meta=data.get("meta") or {},
-                    ))
+                    observations.append(_dict_to_observation(data))
                 except (json.JSONDecodeError, TypeError, ValueError):
                     continue
         return observations
+
+    def load_latest(
+        self,
+        limit: int,
+        *,
+        stage: str | None = None,
+        symbol: str | None = None,
+    ) -> tuple[list[ChartObservation], int]:
+        # Single-flight: saat startup hanya satu snapshot yang boleh bootstrap
+        # tail file besar. Pemanggil paralel menunggu lalu memakai cache.
+        with _latest_observation_cache_lock:
+            return self._load_latest_locked(
+                limit,
+                stage=stage,
+                symbol=symbol,
+            )
+
+    def _load_latest_locked(
+        self,
+        limit: int,
+        *,
+        stage: str | None = None,
+        symbol: str | None = None,
+    ) -> tuple[list[ChartObservation], int]:
+        """Read only the latest matching observations with bounded memory.
+
+        The JSONL file is append-only and can grow indefinitely.  Dashboard
+        requests only need a small tail, so do not materialize the complete
+        history on every realtime snapshot.
+        """
+        if limit <= 0 or not self._path.exists():
+            return [], 0
+
+        target_stage = stage.upper() if stage else None
+        target_symbol = symbol.upper() if symbol else None
+        try:
+            stat = self._path.stat()
+        except OSError:
+            return [], 0
+        cache_key = (str(self._path.resolve()), limit, target_stage, target_symbol)
+        signature = (stat.st_mtime_ns, stat.st_size)
+        with _latest_observation_cache_lock:
+            cached = _latest_observation_cache.get(cache_key)
+            if cached and cached[:2] == signature:
+                return list(cached[2]), cached[3]
+
+        # Append-only fast path: lanjut dari byte terakhir yang sudah diproses.
+        # Rotasi/truncate terdeteksi ketika ukuran mengecil dan otomatis kembali
+        # ke full scan satu kali.
+        append_offset = 0
+        if cached and stat.st_size > cached[1]:
+            append_offset = cached[1]
+            latest: deque[ChartObservation] = deque(cached[2], maxlen=limit)
+            total = cached[3]
+        else:
+            latest = deque(maxlen=limit)
+            total = 0
+        try:
+            with self._path.open("r", encoding="utf-8") as file:
+                if append_offset:
+                    file.seek(append_offset)
+                for line in file:
+                    try:
+                        data = json.loads(line)
+                        if not isinstance(data, dict):
+                            continue
+                        observation = _dict_to_observation(data)
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        continue
+                    if target_stage and str(observation.stage).upper() != target_stage:
+                        continue
+                    if target_symbol and observation.symbol.upper() != target_symbol:
+                        continue
+                    total += 1
+                    latest.append(observation)
+        except OSError:
+            return [], 0
+        result = list(latest)
+        with _latest_observation_cache_lock:
+            _latest_observation_cache[cache_key] = (*signature, result, total)
+            # Query dashboard terbatas, tetapi cegah kombinasi filter arbitrer
+            # membuat cache tumbuh tanpa batas.
+            if len(_latest_observation_cache) > 64:
+                oldest = next(iter(_latest_observation_cache))
+                _latest_observation_cache.pop(oldest, None)
+        return list(result), total
 
 
 def _dict_to_record(data: dict[str, Any]) -> TradeRecord:
@@ -144,5 +232,19 @@ def _dict_to_record(data: dict[str, Any]) -> TradeRecord:
         exit_reason_detail=str(data.get("exit_reason_detail", "")),
         entry_strategy=str(data.get("entry_strategy", "")),
         entry_confidence=float(data.get("entry_confidence", 0)),
+        meta=data.get("meta") or {},
+    )
+
+
+def _dict_to_observation(data: dict[str, Any]) -> ChartObservation:
+    return ChartObservation(
+        observation_id=str(data.get("observation_id", "")),
+        symbol=str(data.get("symbol", "")),
+        timestamp=str(data.get("timestamp", "")),
+        stage=data.get("stage", "ENTRY_CANDIDATE"),
+        scanner_confidence=float(data.get("scanner_confidence", 0.0)),
+        scanner_gates_passed=bool(data.get("scanner_gates_passed", False)),
+        chart_reading=data.get("chart_reading") or {},
+        decision=data.get("decision") or {},
         meta=data.get("meta") or {},
     )

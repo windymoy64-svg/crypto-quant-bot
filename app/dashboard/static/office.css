@@ -69,14 +69,12 @@ body.office-embedded #office-stage {
    crop to the iframe removes the surrounding dark canvas completely. */
 body.office-embedded #office-canvas {
   position: absolute;
+  top: calc(-100% * 152 / 416);
+  left: calc(-100% * 304 / 672);
   width: calc(100% * 1280 / 672);
   height: calc(100% * 720 / 416);
   max-width: none;
-  /* Exact source crop: x=304..976 and y=152..568 on the 1280x720 canvas.
-     Percent transforms are relative to the enlarged canvas, hence the
-     normalized offsets 304/672 and 152/416 below. */
-  transform: translate(-45.238095%, -36.538462%);
-  transform-origin: top left;
+  transform: none;
 }
 
 #office-header {

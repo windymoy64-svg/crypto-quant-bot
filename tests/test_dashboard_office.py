@@ -192,7 +192,11 @@ def test_agents_squad_embeds_animated_office_below_existing_characters() -> None
     office_start = template.index('<section class="agent-office"')
     caption_start = template.index('<p id="agent-squad-caption"')
     assert squad_end < office_start < caption_start
-    assert 'src="/office?embed=1&amp;v={{ asset_version }}"' in template
+    assert '<canvas id="office-canvas" width="1280" height="720"' in template
+    assert 'style="position:relative;z-index:2;margin:4px auto 0;overflow:hidden;width:min(100%,640px);aspect-ratio:640 / 384;background:#0d0e15;"' in template
+    assert 'style="position:absolute;top:calc(-100% * 296 / 384);left:calc(-100% * 304 / 640);width:calc(100% * 1280 / 640);height:calc(100% * 720 / 384);max-width:none;display:block;background:#0d0e15;image-rendering:pixelated;"' in template
+    assert 'src="/office?embed=1&amp;v={{ asset_version }}"' not in template
+    assert 'type="module" src="/static/office.js?v={{ asset_version }}"' in template
     assert "agent-office-head" not in template
     assert "agent-office-frame-wrap" not in template
     assert "Alur laporan:" not in template
@@ -205,9 +209,20 @@ def test_agents_squad_embeds_animated_office_below_existing_characters() -> None
     assert "body.office-embedded #office-header" in office_css
     assert "body.office-embedded #office-footer" in office_css
     assert "display: none !important" in office_css
-    assert "width: calc(100% * 1280 / 672)" in office_css
-    assert "height: calc(100% * 720 / 416)" in office_css
-    assert "transform: translate(-45.238095%, -36.538462%)" in office_css
+    assert ".agent-office #office-canvas" in dashboard_css
+    assert "margin:4px auto 0" in dashboard_css
+    assert "width:min(100%,640px)" in dashboard_css
+    assert "aspect-ratio:640 / 384" in dashboard_css
+    assert "top:calc(-100% * 296 / 384)" in dashboard_css
+    assert "left:calc(-100% * 304 / 640)" in dashboard_css
+    assert "width:calc(100% * 1280 / 640)" in dashboard_css
+    assert "height:calc(100% * 720 / 384)" in dashboard_css
+    assert "top:calc(-100% * 152 / 416)" not in dashboard_css
+    assert "height:calc(100% * 720 / 416)" not in dashboard_css
+    assert "top:calc(-100% * 152 / 568)" not in dashboard_css
+    assert "height:calc(100% * 720 / 568)" not in dashboard_css
+    assert "top:calc(-100% * 8 / 704)" not in dashboard_css
+    assert "height:calc(100% * 720 / 704)" not in dashboard_css
 
 
 def test_office_page_sets_cookie_for_protected_state_api(

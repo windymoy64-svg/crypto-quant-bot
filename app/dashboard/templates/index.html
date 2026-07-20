@@ -263,14 +263,8 @@
                 </div>
               </div>
             </div>
-            <section class="agent-office" aria-label="Animated office">
-              <iframe
-                id="agent-office-frame"
-                class="agent-office-frame"
-                src="/office?embed=1&amp;v={{ asset_version }}"
-                title="Animated office untuk empat core agents"
-                loading="eager"
-              ></iframe>
+            <section class="agent-office" aria-label="Animated office" style="position:relative;z-index:2;margin:4px auto 0;overflow:hidden;width:min(100%,640px);aspect-ratio:640 / 384;background:#0d0e15;">
+              <canvas id="office-canvas" width="1280" height="720" aria-label="Animated office" style="position:absolute;top:calc(-100% * 296 / 384);left:calc(-100% * 304 / 640);width:calc(100% * 1280 / 640);height:calc(100% * 720 / 384);max-width:none;display:block;background:#0d0e15;image-rendering:pixelated;"></canvas>
             </section>
             <p id="agent-squad-caption" class="agent-squad-caption" hidden></p>
           </article>
@@ -605,6 +599,7 @@
       </div>
     </div>
         <script src="/static/dashboard.js?v={{ asset_version }}"></script>
+        <script type="module" src="/static/office.js?v={{ asset_version }}"></script>
         <script>
         (function(){
           const pct = n => (n>=0?"▲ +":"▼ ") + Math.abs(Number(n||0)).toFixed(2) + "%";

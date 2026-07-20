@@ -28,8 +28,7 @@ router = APIRouter(prefix="/api/agent", tags=["agent_pipeline"])
 
 DEFAULT_PIPELINE_PATH = "logs/agent_pipeline.json"
 DEFAULT_TRADE_JOURNAL_PATH = "data/learning_journal.jsonl"
-DEFAULT_OBSERVATIONS_PATH = "data/chart_observ
-ations.jsonl"
+DEFAULT_OBSERVATIONS_PATH = "data/chart_observations.jsonl"
 DEFAULT_LLM_INSIGHTS_PATH = "data/llm_learning_insights.jsonl"
 MAX_OBSERVATIONS_LIMIT = 200
 PIPELINE_FRESH_SECONDS = 300
@@ -153,22 +152,15 @@ def recent_observations(
     limit = max(1, min(int(limit), MAX_OBSERVATIONS_LIMIT))
 
     store = ChartObservationStore(DEFAULT_OBSERVATIONS_PATH)
-    observations = store.load_all()
-    if stage and isinstance(stage, str):
-        target_stage = stage.upper()
-        observations = [o for o in observations if o.stage == target_stage]
-    if symbol and isinstance(symbol, str):
-        target_symbol = symbol.upper()
-        observations = [
-            o for o in observations if o.symbol.upper() == target_symbol
-        ]
-
-    # Return the most recent ``limit`` in chronological order.
-    tail = observations[-limit:]
+    tail, total = store.load_latest(
+        limit,
+        stage=stage if isinstance(stage, str) else None,
+        symbol=symbol if isinstance(symbol, str) else None,
+    )
     return {
         "available": True,
         "count": len(tail),
-        "total_stored": len(observations),
+        "total_stored": total,
         "observations": [obs.to_dict() for obs in tail],
     }
 
@@ -179,11 +171,10 @@ def recent_llm_insights(limit: int = 20) -> dict[str, Any]:
     from app.learning_agent.insight_store import LLMInsightStore
 
     limit = max(1, min(int(limit), 100))
-    rows = LLMInsightStore(DEFAULT_LLM_INSIGHTS_PATH).load_all()
-    tail = rows[-limit:]
+    tail, total = LLMInsightStore(DEFAULT_LLM_INSIGHTS_PATH).load_latest(limit)
     return {
         "available": True,
         "count": len(tail),
-        "total_stored": len(rows),
+        "total_stored": total,
         "insights": tail,
     }

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 from collections import deque
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 portfolio_synchronizer = PortfolioSynchronizer()
 _DYNAMIC_SYMBOLS_CACHE: list[str] = []
 _DYNAMIC_SYMBOLS_TS: float = 0.0
+_JSON_FILE_CACHE: dict[str, tuple[int, int, Any]] = {}
+_JSON_FILE_CACHE_LOCK = threading.Lock()
+_JSON_FILE_CACHE_MAX_ENTRIES = 64
 
 SUPPORTED_TIMEFRAMES = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")
 DEFAULT_KLINE_SYMBOL = "BTC/USDT"
@@ -84,8 +88,21 @@ def read_json_file(path: str | Path, default: Any) -> Any:
     if not target.exists():
         return default
     try:
+        stat = target.stat()
+        cache_key = str(target.resolve())
+        signature = (stat.st_mtime_ns, stat.st_size)
+        with _JSON_FILE_CACHE_LOCK:
+            cached = _JSON_FILE_CACHE.get(cache_key)
+            if cached and cached[:2] == signature:
+                return cached[2]
         with target.open(encoding="utf-8-sig") as file:
-            return json.load(file)
+            payload = json.load(file)
+        with _JSON_FILE_CACHE_LOCK:
+            _JSON_FILE_CACHE[cache_key] = (*signature, payload)
+            if len(_JSON_FILE_CACHE) > _JSON_FILE_CACHE_MAX_ENTRIES:
+                oldest = next(iter(_JSON_FILE_CACHE))
+                _JSON_FILE_CACHE.pop(oldest, None)
+        return payload
     except (OSError, json.JSONDecodeError):
         return default
 

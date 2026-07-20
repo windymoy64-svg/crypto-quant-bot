@@ -766,11 +766,20 @@ function agentText(value){
   if(typeof value==="string") return value;
   if(typeof value==="number"||typeof value==="boolean") return String(value);
   if(typeof value==="object"){
-    return String(value.text||value.message||value.summary||value.reason||value.title||value.description||"");
+    return String(
+      value.text || value.message || value.summary || value.reason ||
+      value.assessment || value.hypothesis || value.description ||
+      value.title || value.note || ""
+    );
   }
   return String(value);
 }
 function agentPrettyReason(value){
+  if(value && typeof value === "object" && !Array.isArray(value)){
+    const main = agentText(value);
+    const rationale = agentText(value.rationale);
+    return [main, rationale && rationale !== main ? rationale : ""].filter(Boolean).join(" — ");
+  }
   return agentText(value).replace(/[_-]+/g," ").replace(/\s+/g," ").trim();
 }
 function agentJoin(values,limit=2){
