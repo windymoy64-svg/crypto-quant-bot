@@ -233,6 +233,7 @@ def _register_compat_routes(dashboard: FastAPI) -> None:
             context={
                 "request": request,
                 "asset_version": asset_version,
+                "embed": request.query_params.get("embed") == "1",
             },
         )
         response.headers["Cache-Control"] = "no-store"

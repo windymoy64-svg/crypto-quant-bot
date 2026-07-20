@@ -28,7 +28,8 @@ router = APIRouter(prefix="/api/agent", tags=["agent_pipeline"])
 
 DEFAULT_PIPELINE_PATH = "logs/agent_pipeline.json"
 DEFAULT_TRADE_JOURNAL_PATH = "data/learning_journal.jsonl"
-DEFAULT_OBSERVATIONS_PATH = "data/chart_observations.jsonl"
+DEFAULT_OBSERVATIONS_PATH = "data/chart_observ
+ations.jsonl"
 DEFAULT_LLM_INSIGHTS_PATH = "data/llm_learning_insights.jsonl"
 MAX_OBSERVATIONS_LIMIT = 200
 PIPELINE_FRESH_SECONDS = 300

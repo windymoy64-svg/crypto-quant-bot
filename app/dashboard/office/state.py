@@ -1,7 +1,7 @@
 """Build ``OfficeSnapshot`` from live bot artefacts.
 
 Terjemahkan file JSON runtime bot (signals, paper state, agent pipeline
-output) menjadi state 7 agent pixel di layar kantor. Modul ini murni baca,
+output) menjadi state 4 core agent pixel di layar kantor. Modul ini murni baca,
 tidak pernah menulis, dan selalu mengembalikan snapshot yang valid meski
 file belum ada supaya frontend selalu bisa render sesuatu.
 """
@@ -13,7 +13,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 
 AgentStatus = Literal["working", "idle", "break", "offline", "alert"]
@@ -21,70 +21,42 @@ AgentStatus = Literal["working", "idle", "break", "offline", "alert"]
 
 AGENT_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
-        "id": "rian",
-        "name": "Rian",
-        "role": "Lead",
-        "room": "pre_production",
-        "room_label": "Pre-production",
-        "job": "Market Scanner",
-        "color": "#f472b6",
-    },
-    {
-        "id": "haru",
-        "name": "Haru",
-        "role": "Senior",
-        "room": "pre_production",
-        "room_label": "Pre-production",
-        "job": "Signal Builder",
-        "color": "#fb7185",
-    },
-    {
         "id": "yuna",
         "name": "Yuna",
         "role": "Lead",
-        "room": "scene_engine",
-        "room_label": "Scene Engine",
-        "job": "Chart Reader Agent",
+        "room": "chart_room",
+        "room_label": "Chart Desk",
+        "job": "Chart Agent",
         "color": "#a78bfa",
+    },
+    {
+        "id": "nara",
+        "name": "Nara",
+        "role": "Lead",
+        "room": "learning_room",
+        "room_label": "Learning Desk",
+        "job": "Learning Agent",
+        "color": "#34d399",
     },
     {
         "id": "miro",
         "name": "Miro",
-        "role": "Junior",
-        "room": "art_camera",
-        "room_label": "Art & Camera",
+        "role": "Lead",
+        "room": "decision_room",
+        "room_label": "Decision Desk",
         "job": "Decision Agent",
         "color": "#fbbf24",
-    },
-    {
-        "id": "quinn",
-        "name": "Quinn",
-        "role": "Lead",
-        "room": "cut_qa",
-        "room_label": "Cut QA",
-        "job": "Risk Manager",
-        "color": "#fca5a5",
-    },
-    {
-        "id": "raven",
-        "name": "Raven",
-        "role": "Lead",
-        "room": "devsecops",
-        "room_label": "DevSecOps",
-        "job": "Paper Broker",
-        "color": "#c084fc",
     },
     {
         "id": "dami",
         "name": "Dami",
         "role": "Lead",
-        "room": "operations",
-        "room_label": "Operations",
-        "job": "Live Executor",
+        "room": "executor_room",
+        "room_label": "Executor Desk",
+        "job": "Executor Agent",
         "color": "#6ee7b7",
     },
 )
-
 
 @dataclass(frozen=True)
 class AgentState:
@@ -169,6 +141,89 @@ def _safe_float(value: Any) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
+    """Yield dict rows dari file JSONL; skip baris rusak, aman file belum ada."""
+
+    if not path.exists():
+        return
+    try:
+        with path.open(encoding="utf-8-sig") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    yield item
+    except OSError:
+        return
+
+
+def _jsonl_stats(path: Path, *, window_minutes: int = 30) -> dict[str, Any]:
+    """Ringkas file JSONL: total baris + baris baru dalam window N menit terakhir.
+
+    Dipakai Learning Agent supaya aktivitas recorder (chart_observations /
+    trade journal) memicu kunjungan learning di kantor pixel.
+    """
+
+    cutoff = _utc_now() - timedelta(minutes=window_minutes)
+    count = 0
+    recent = 0
+    last_row: dict[str, Any] | None = None
+    latest_ts: datetime | None = None
+    for row in _iter_jsonl(path):
+        count += 1
+        ts = _parse_ts(row.get("timestamp"))
+        if ts is not None:
+            if latest_ts is None or ts > latest_ts:
+                latest_ts = ts
+            if ts >= cutoff:
+                recent += 1
+                last_row = row
+    return {
+        "count": count,
+        "recent": recent,
+        "latest_ts": latest_ts,
+        "last_row": last_row,
+    }
+
+
+def _pipeline_stage_map(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Kelompokkan entries pipeline per stage terakhir (ENTRY/POSITION_MONITOR)."""
+
+    if not isinstance(payload, dict):
+        return {}
+    entries = payload.get("entries")
+    stages: dict[str, dict[str, Any]] = {}
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
+            stage = str(result.get("stage") or "ENTRY")
+            stages[stage] = entry
+    return stages
+
+
+def _entry_has_reading(stages: dict[str, dict[str, Any]]) -> bool:
+    entry = stages.get("ENTRY")
+    if not isinstance(entry, dict):
+        return False
+    result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
+    return bool(result.get("eligible") and result.get("chart_reading"))
+
+
+def _entry_has_decision(stages: dict[str, dict[str, Any]]) -> bool:
+    entry = stages.get("ENTRY")
+    if not isinstance(entry, dict):
+        return False
+    result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
+    return bool(result.get("eligible") and result.get("decision"))
 
 
 def _count_paper_trades_today(trades_path: Path) -> int:
@@ -302,73 +357,53 @@ def _make(
 
 
 
-def _agent_rian(signals: dict[str, Any]) -> AgentState:
-    """Market Scanner. Fresh signal file berarti dia lagi kerja."""
+def _agent_nara(
+    observation_stats: dict[str, Any],
+    journal_stats: dict[str, Any],
+) -> AgentState:
+    """Learning Agent. Working saat recorder menulis observasi/jurnal baru."""
 
-    definition = _def("rian")
-    ts = _parse_ts(signals.get("timestamp"))
-    if _fresh(ts, window_minutes=5) and signals.get("count", 0) > 0:
-        top = signals.get("top") or {}
-        symbol = top.get("symbol", "?")
-        confidence = _safe_float(top.get("confidence"))
+    definition = _def("nara")
+    observations = int(observation_stats.get("count", 0))
+    journal = int(journal_stats.get("count", 0))
+    recent = int(observation_stats.get("recent", 0)) + int(journal_stats.get("recent", 0))
+    latest = max(
+        (t for t in (observation_stats.get("latest_ts"), journal_stats.get("latest_ts")) if t),
+        default=None,
+    )
+    updated_at = latest.isoformat() if latest else None
+
+    if recent > 0:
         return _make(
             definition,
             status="working",
-            task=f"Scan {symbol}",
-            detail=f"{signals.get('count', 0)} signals, top {confidence:.0f}%",
-            updated_at=signals.get("timestamp"),
+            task="Olah insight baru",
+            detail=f"+{recent} record 30m | {observations} obs / {journal} journal",
+            updated_at=updated_at,
         )
-    if signals.get("count", 0) > 0:
+    if observations or journal:
         return _make(
             definition,
             status="idle",
-            task="Menunggu cycle scan",
-            detail=f"{signals.get('count', 0)} signal tersimpan",
-            updated_at=signals.get("timestamp"),
+            task="Insight tersimpan",
+            detail=f"{observations} obs / {journal} journal",
+            updated_at=updated_at,
         )
     return _make(
         definition,
         status="offline",
-        task="Scanner belum jalan",
-        detail="logs/latest_signals.json kosong",
+        task="Journal kosong",
+        detail="data/learning_journal.jsonl belum ada",
         updated_at=None,
     )
 
 
-def _agent_haru(signals: dict[str, Any]) -> AgentState:
-    """Signal Builder. Aktif bareng scanner, fokus ke BUY."""
-
-    definition = _def("haru")
-    ts = _parse_ts(signals.get("timestamp"))
-    top = signals.get("top") or {}
-    if _fresh(ts, window_minutes=5) and top.get("action") == "BUY":
-        symbol = top.get("symbol", "?")
-        return _make(
-            definition,
-            status="working",
-            task=f"Bangun signal {symbol}",
-            detail=f"entry={top.get('entry')} sl={top.get('stop_loss')}",
-            updated_at=signals.get("timestamp"),
-        )
-    if _fresh(ts, window_minutes=5):
-        return _make(
-            definition,
-            status="idle",
-            task="Nunggu kandidat BUY",
-            detail="Belum ada action=BUY di cycle terakhir",
-            updated_at=signals.get("timestamp"),
-        )
-    return _make(
-        definition,
-        status="break",
-        task="Break",
-        detail="Signal builder idle",
-        updated_at=signals.get("timestamp"),
-    )
-
-
-def _agent_yuna(pipeline: dict[str, Any]) -> AgentState:
-    """Chart Reader Agent. Baca chart HTF/MTF/LTF."""
+def _agent_yuna(
+    pipeline: dict[str, Any],
+    stages: dict[str, dict[str, Any]],
+    signals: dict[str, Any],
+) -> AgentState:
+    """Chart Reader Agent. Tahu apakah reading berasal dari entry atau monitor."""
 
     definition = _def("yuna")
     ts = _parse_ts(pipeline.get("timestamp"))
@@ -380,14 +415,29 @@ def _agent_yuna(pipeline: dict[str, Any]) -> AgentState:
         bias = "?"
         if isinstance(reading, dict):
             bias = str(reading.get("bias", "?"))
+        if _entry_has_reading(stages):
+            source = "sinyal scanner"
+        elif "POSITION_MONITOR" in stages:
+            source = "posisi open"
+        else:
+            source = "scan pasar"
         return _make(
             definition,
             status="working",
             task=f"Baca chart {symbol}",
-            detail=f"bias={bias}",
+            detail=f"bias={bias} | {source}",
             updated_at=pipeline.get("timestamp"),
         )
     if pipeline.get("available"):
+        sig_ts = _parse_ts(signals.get("timestamp"))
+        if _fresh(sig_ts, window_minutes=5) and signals.get("count", 0) > 0:
+            return _make(
+                definition,
+                status="idle",
+                task="Antri sinyal baru",
+                detail="Belum ada kandidat eligible (gates/conf)",
+                updated_at=pipeline.get("timestamp"),
+            )
         return _make(
             definition,
             status="idle",
@@ -432,74 +482,6 @@ def _agent_miro(pipeline: dict[str, Any]) -> AgentState:
         task="Nunggu chart reading",
         detail="Decision agent standby",
         updated_at=pipeline.get("timestamp"),
-    )
-
-
-def _agent_quinn(signals: dict[str, Any]) -> AgentState:
-    """Risk Manager / QA. Alert kalau ada failed_gates."""
-
-    definition = _def("quinn")
-    ts = _parse_ts(signals.get("timestamp"))
-    top = signals.get("top") or {}
-    failed_gates = top.get("failed_gates") if isinstance(top, dict) else None
-    if _fresh(ts, window_minutes=5) and isinstance(failed_gates, list) and failed_gates:
-        return _make(
-            definition,
-            status="alert",
-            task="Review failed gates",
-            detail=", ".join(str(g) for g in failed_gates[:3]),
-            updated_at=signals.get("timestamp"),
-            has_alert=True,
-        )
-    if _fresh(ts, window_minutes=5):
-        risk = top.get("risk", "?") if isinstance(top, dict) else "?"
-        return _make(
-            definition,
-            status="working",
-            task="QA sinyal",
-            detail=f"risk={risk}",
-            updated_at=signals.get("timestamp"),
-        )
-    return _make(
-        definition,
-        status="break",
-        task="Break Room",
-        detail="Nunggu batch signal berikutnya",
-        updated_at=signals.get("timestamp"),
-    )
-
-
-def _agent_raven(paper: dict[str, Any], trades_today: int) -> AgentState:
-    """Paper Broker. Working kalau ada posisi terbuka."""
-
-    definition = _def("raven")
-    positions = paper.get("open_positions", [])
-    balance = paper.get("balance")
-    if positions:
-        pos = positions[0]
-        symbol = pos.get("symbol", "?")
-        side = pos.get("side", "?")
-        return _make(
-            definition,
-            status="working",
-            task=f"Kelola {symbol}",
-            detail=f"{side} @ {pos.get('entry')} | balance {balance}",
-            updated_at=paper.get("updated_at"),
-        )
-    if trades_today > 0:
-        return _make(
-            definition,
-            status="idle",
-            task="Post-trade wrap up",
-            detail=f"{trades_today} trade hari ini | balance {balance}",
-            updated_at=paper.get("updated_at"),
-        )
-    return _make(
-        definition,
-        status="idle",
-        task="Standby paper broker",
-        detail=f"balance {balance}",
-        updated_at=paper.get("updated_at"),
     )
 
 
@@ -563,17 +545,17 @@ def build_office_snapshot(
     pipeline = _summarize_pipeline(
         pipeline_raw if isinstance(pipeline_raw, dict) else None
     )
+    stages = _pipeline_stage_map(pipeline_raw if isinstance(pipeline_raw, dict) else None)
     paper = _summarize_paper(paper_raw if isinstance(paper_raw, dict) else None)
     trades_today = _count_paper_trades_today(root / "logs" / "paper_trades.jsonl")
     live_flags = _live_trading_flags()
+    observation_stats = _jsonl_stats(root / "data" / "chart_observations.jsonl")
+    journal_stats = _jsonl_stats(root / "data" / "learning_journal.jsonl")
 
     agents = [
-        _agent_rian(signals),
-        _agent_haru(signals),
-        _agent_yuna(pipeline),
+        _agent_yuna(pipeline, stages, signals),
+        _agent_nara(observation_stats, journal_stats),
         _agent_miro(pipeline),
-        _agent_quinn(signals),
-        _agent_raven(paper, trades_today),
         _agent_dami(live_flags, pipeline),
     ]
 

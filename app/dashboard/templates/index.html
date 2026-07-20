@@ -156,7 +156,7 @@
               <div><p>Agent Squad</p><h2>Multi-Agent Command</h2></div>
               <div class="panel-actions">
                 <a class="ghost office-launch" href="/office" target="_blank" rel="noopener">
-                  Open Animated Office
+                  Open Fullscreen
                 </a>
                 <span id="agent-squad-status" class="pill">initializing</span>
               </div>
@@ -263,7 +263,16 @@
                 </div>
               </div>
             </div>
-            <p id="agent-squad-caption" class="agent-squad-caption">Loading pipeline state…</p>
+            <section class="agent-office" aria-label="Animated office">
+              <iframe
+                id="agent-office-frame"
+                class="agent-office-frame"
+                src="/office?embed=1&amp;v={{ asset_version }}"
+                title="Animated office untuk empat core agents"
+                loading="eager"
+              ></iframe>
+            </section>
+            <p id="agent-squad-caption" class="agent-squad-caption" hidden></p>
           </article>
 
           <article id="agent-pipeline" class="panel xwide">

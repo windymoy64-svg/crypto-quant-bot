@@ -386,6 +386,7 @@ body.menu-open{overflow:hidden}
     linear-gradient(180deg,var(--panel) 0%,var(--panel-2) 100%);
   border:1px solid var(--border-2);
 }
+
 .agent-squad-panel::before{
   content:"";position:absolute;inset:0;pointer-events:none;
   background:
@@ -461,6 +462,14 @@ body.menu-open{overflow:hidden}
   background:var(--bg-2);border:1px solid var(--border);
   font-size:12px;color:var(--txt-dim);line-height:1.55;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.agent-office{
+  position:relative;z-index:2;margin-top:16px;overflow:hidden;
+  /* Match the official room artwork: 672 x 416 pixels (landscape). */
+  aspect-ratio:21 / 13;
+}
+.agent-office-frame{
+  display:block;width:100%;height:100%;border:0;
 }
 
 /* --- Pixel bot art. All parts absolutely positioned inside .pixel-bot --- */
@@ -565,6 +574,7 @@ body.menu-open{overflow:hidden}
 @media(max-width:900px){
   .agent-squad-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
   .agent-squad-flow{display:none}
+  .agent-office{margin-top:12px}
 }
 @media(max-width:420px){
   .pixel-bot{--sz:5px}

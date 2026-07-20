@@ -6,9 +6,9 @@
     <title>CQB Office - Animated Agents</title>
     <link rel="stylesheet" href="/static/office.css?v={{ asset_version }}" />
   </head>
-  <body>
+  <body{% if embed %} class="office-embedded"{% endif %}>
     <div id="office-shell">
-      <header id="office-header">
+      <header id="office-header"{% if embed %} hidden{% endif %}>
         <div class="brand">
           <span class="brand-mark">CQB</span>
           <div class="brand-title">
@@ -36,7 +36,7 @@
         </aside>
       </main>
 
-      <footer id="office-footer">
+      <footer id="office-footer"{% if embed %} hidden{% endif %}>
         <span>Crypto Quant Bot</span>
         <span id="last-updated">--</span>
       </footer>

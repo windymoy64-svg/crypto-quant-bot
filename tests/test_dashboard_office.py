@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -60,21 +60,19 @@ def test_snapshot_gracefully_handles_missing_runtime_files(
     snapshot = build_office_snapshot(base_dir=tmp_path).to_dict()
 
     assert snapshot["kpi"] == {
-        "staff": 7,
+        "staff": 4,
         "working": 0,
         "in_progress": 0,
         "done": 0,
     }
     assert [agent["id"] for agent in snapshot["agents"]] == [
-        "rian",
-        "haru",
         "yuna",
+        "nara",
         "miro",
-        "quinn",
-        "raven",
         "dami",
     ]
     assert snapshot["agents"][0]["status"] == "offline"
+    assert snapshot["agents"][1]["task"] == "Journal kosong"
     assert snapshot["agents"][-1]["task"] == "Live trading terkunci"
 
 
@@ -136,16 +134,13 @@ def test_snapshot_maps_fresh_runtime_work_to_agent_jobs(
     payload = build_office_snapshot(base_dir=tmp_path).to_dict()
     agents = {agent["id"]: agent for agent in payload["agents"]}
 
-    assert payload["kpi"]["staff"] == 7
-    assert payload["kpi"]["working"] == 6
+    assert payload["kpi"]["staff"] == 4
+    assert payload["kpi"]["working"] == 2
     assert payload["kpi"]["in_progress"] == 1
-    assert agents["rian"]["task"] == "Scan BTC/USDT"
-    assert agents["haru"]["task"] == "Bangun signal BTC/USDT"
-    assert agents["yuna"]["detail"] == "bias=BULLISH"
+    assert agents["nara"]["status"] == "offline"
+    assert agents["yuna"]["detail"] == "bias=BULLISH | sinyal scanner"
     assert agents["miro"]["task"] == "Decide ENTRY"
     assert agents["miro"]["has_alert"] is True
-    assert agents["quinn"]["detail"] == "risk=LOW"
-    assert agents["raven"]["task"] == "Kelola BTC/USDT"
     assert agents["dami"]["status"] == "offline"
 
 
@@ -163,12 +158,56 @@ def test_office_page_and_api_are_available(
 
     assert page.status_code == 200
     assert '<canvas id="office-canvas"' in page.body.decode()
-    assert payload["kpi"]["staff"] == 7
+    assert payload["kpi"]["staff"] == 4
 
     static_dir = Path(__file__).parents[1] / "app" / "dashboard" / "static"
     assert "requestAnimationFrame(loop)" in (
         static_dir / "office.js"
     ).read_text(encoding="utf-8")
+
+
+def test_office_frontend_keeps_four_agents_visible_and_names_report_targets() -> None:
+    """Guard against desks hiding agents and ambiguous handoff bubbles."""
+
+    static_dir = Path(__file__).parents[1] / "app" / "dashboard" / "static"
+    script = (static_dir / "office.js").read_text(encoding="utf-8")
+
+    assert 'scene.push({ kind: "agent", value: agent, zY: agent.y + s * 3 })' in script
+    assert "Yuna → Nara:" in script
+    assert "Yuna → Miro:" in script
+    assert "Nara → Miro:" in script
+    assert "Miro → Dami:" in script
+    assert "Dami → Nara:" in script
+    assert "laporan ke" in script
+
+
+def test_agents_squad_embeds_animated_office_below_existing_characters() -> None:
+    """The office belongs inside Agents > Agent Squad, with fullscreen optional."""
+
+    dashboard_dir = Path(__file__).parents[1] / "app" / "dashboard"
+    template = (dashboard_dir / "templates" / "index.html").read_text(encoding="utf-8")
+    office_template = (dashboard_dir / "templates" / "office.html").read_text(encoding="utf-8")
+
+    squad_end = template.index('</div>\n            </div>\n            <section class="agent-office"')
+    office_start = template.index('<section class="agent-office"')
+    caption_start = template.index('<p id="agent-squad-caption"')
+    assert squad_end < office_start < caption_start
+    assert 'src="/office?embed=1&amp;v={{ asset_version }}"' in template
+    assert "agent-office-head" not in template
+    assert "agent-office-frame-wrap" not in template
+    assert "Alur laporan:" not in template
+    assert 'class="agent-squad-caption" hidden' in template
+    assert 'class="office-embedded"' in office_template
+
+    dashboard_css = (dashboard_dir / "static" / "dashboard.css").read_text(encoding="utf-8")
+    office_css = (dashboard_dir / "static" / "office.css").read_text(encoding="utf-8")
+    assert '.agent-squad-panel > .agent-squad-stage' not in dashboard_css
+    assert "body.office-embedded #office-header" in office_css
+    assert "body.office-embedded #office-footer" in office_css
+    assert "display: none !important" in office_css
+    assert "width: calc(100% * 1280 / 672)" in office_css
+    assert "height: calc(100% * 720 / 416)" in office_css
+    assert "transform: translate(-45.238095%, -36.538462%)" in office_css
 
 
 def test_office_page_sets_cookie_for_protected_state_api(
@@ -191,3 +230,69 @@ def test_office_page_sets_cookie_for_protected_state_api(
         "dashboard_token=office-secret" in header and "HttpOnly" in header
         for header in cookie_headers
     )
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+
+
+def test_learning_agent_office_tracks_journal_activity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIVE_TRADING_ENABLED", "false")
+
+    # Journal lama (di luar window 30m) -> idle, bukan working
+    old_ts = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    _write_jsonl(
+        tmp_path / "data" / "learning_journal.jsonl",
+        [{"timestamp": old_ts, "symbol": "BTC/USDT", "pnl_percent": 1.2}],
+    )
+    payload = build_office_snapshot(base_dir=tmp_path).to_dict()
+    nara = next(a for a in payload["agents"] if a["id"] == "nara")
+    assert nara["status"] == "idle"
+    assert "1 journal" in nara["detail"]
+
+    # Observasi baru (fresh) -> working
+    fresh_ts = datetime.now(UTC).isoformat()
+    _write_jsonl(
+        tmp_path / "data" / "chart_observations.jsonl",
+        [{"timestamp": fresh_ts, "symbol": "ETH/USDT", "stage": "ENTRY"}],
+    )
+    payload = build_office_snapshot(base_dir=tmp_path).to_dict()
+    nara = next(a for a in payload["agents"] if a["id"] == "nara")
+    assert nara["status"] == "working"
+    assert nara["task"] == "Olah insight baru"
+
+
+def test_yuna_detail_marks_position_monitor_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIVE_TRADING_ENABLED", "false")
+    now = datetime.now(UTC).isoformat()
+    _write_json(
+        tmp_path / "logs" / "agent_pipeline.json",
+        {
+            "enabled": True,
+            "generated_at": now,
+            "entries": [
+                {
+                    "symbol": "BTC/USDT",
+                    "result": {
+                        "stage": "POSITION_MONITOR",
+                        "eligible": True,
+                        "chart_reading": {"bias": "BEARISH"},
+                        "decision": None,
+                    },
+                }
+            ],
+        },
+    )
+    payload = build_office_snapshot(base_dir=tmp_path).to_dict()
+    yuna = next(a for a in payload["agents"] if a["id"] == "yuna")
+    assert yuna["status"] == "working"
+    assert yuna["detail"] == "bias=BEARISH | posisi open"

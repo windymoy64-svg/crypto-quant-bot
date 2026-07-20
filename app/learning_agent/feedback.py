@@ -139,7 +139,29 @@ def _build(
         exit_reason_detail=close_reason,
         entry_strategy=str(position.get("strategy", position.get("entry_strategy", ""))),
         entry_confidence=float(position.get("confidence", 0.0)),
-        meta={"position": position, "close_event": close_event},
+        meta={
+            "position": position,
+            "close_event": close_event,
+            # True when the entry chart observation was unavailable, so the
+            # entry context fell back to neutral defaults.  Lets consumers
+            # distinguish fully-contextualized records from blind ones.
+            "entry_context_missing": _is_empty_context(entry_context),
+        },
+    )
+
+
+def _is_empty_context(context: dict[str, Any]) -> bool:
+    """Return True when an entry/exit context carries no real chart data.
+
+    Matches the neutral defaults produced by ``_empty_context`` — i.e. the
+    Chart Agent observation was missing at record time (typically because the
+    position was opened before the pipeline was active).
+    """
+    return (
+        not context.get("patterns")
+        and not context.get("techniques")
+        and not context.get("key_levels")
+        and float(context.get("confluence") or 0.0) == 0.0
     )
 
 

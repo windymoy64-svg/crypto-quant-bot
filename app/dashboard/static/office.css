@@ -36,6 +36,49 @@ body {
   min-height: 640px;
 }
 
+body.office-embedded,
+body.office-embedded #office-shell {
+  min-height: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body.office-embedded #office-shell {
+  display: block;
+}
+
+/* The normal #office-header display:flex rule overrides the browser's native
+   [hidden] style. Force chrome out of the dashboard embed while keeping the
+   standalone /office page unchanged. */
+body.office-embedded #office-header,
+body.office-embedded #office-footer {
+  display: none !important;
+}
+
+body.office-embedded #office-stage {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  aspect-ratio: auto;
+  overflow: hidden;
+  background: transparent;
+}
+
+/* Crop the 1280x720 renderer to the actual 21x13 office artwork. The official
+   room occupies x=304..976 and y=152..568 on the backing canvas. Scaling this
+   crop to the iframe removes the surrounding dark canvas completely. */
+body.office-embedded #office-canvas {
+  position: absolute;
+  width: calc(100% * 1280 / 672);
+  height: calc(100% * 720 / 416);
+  max-width: none;
+  /* Exact source crop: x=304..976 and y=152..568 on the 1280x720 canvas.
+     Percent transforms are relative to the enlarged canvas, hence the
+     normalized offsets 304/672 and 152/416 below. */
+  transform: translate(-45.238095%, -36.538462%);
+  transform-origin: top left;
+}
+
 #office-header {
   display: flex;
   justify-content: space-between;
@@ -121,17 +164,21 @@ body {
 
 #office-stage {
   position: relative;
-  display: grid;
-  grid-template-columns: 1fr 280px;
+  display: block;
+  width: min(100%, calc((100vh - 112px) * 16 / 9));
+  height: auto;
   min-height: 0;
+  max-height: calc(100vh - 112px);
   overflow: hidden;
+  background: #0d0e15;
+  aspect-ratio: 16 / 9;
+  justify-self: center;
+  align-self: center;
 }
 
 #office-canvas {
   width: 100%;
-  height: auto;
-  aspect-ratio: 16 / 9;
-  align-self: center;
+  height: 100%;
   display: block;
   background: #0d0e15;
   image-rendering: pixelated;
@@ -140,10 +187,7 @@ body {
 }
 
 #office-legend {
-  border-left: 1px solid var(--line);
-  background: var(--bg-1);
-  overflow-y: auto;
-  padding: 14px 16px;
+  display: none;
 }
 
 #office-legend h2 {
@@ -237,6 +281,14 @@ body {
   color: var(--status-break);
 }
 
+.agent-flow {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+
 #office-footer {
   display: flex;
   justify-content: space-between;
@@ -261,10 +313,13 @@ body {
 
 @media (max-width: 900px) {
   #office-stage {
-    grid-template-columns: 1fr;
+    width: 100%;
+    max-height: none;
     overflow-y: auto;
   }
   #office-legend {
+    position: static;
+    width: auto;
     border-left: none;
     border-top: 1px solid var(--line);
     max-height: 240px;
