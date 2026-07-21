@@ -36,6 +36,7 @@ class ACREnrichmentConfig:
     enabled: bool = False
     htf_timeframe: str = "15m"
     ltf_timeframe: str = "1m"
+    entry_timeframes: tuple[str, ...] = ()
     htf_limit: int = 60
     ltf_limit: int = 60
     min_rr: float = 2.0
@@ -50,6 +51,10 @@ class ACREnrichmentConfig:
             enabled=bool(data.get("enabled", False)),
             htf_timeframe=str(data.get("htf_timeframe", "15m")),
             ltf_timeframe=str(data.get("ltf_timeframe", "1m")),
+            entry_timeframes=tuple(
+                str(value) for value in data.get("entry_timeframes", [])
+                if str(value)
+            ),
             htf_limit=int(data.get("htf_limit", 60)),
             ltf_limit=int(data.get("ltf_limit", 60)),
             min_rr=float(data.get("min_rr", 2.0)),
@@ -169,7 +174,33 @@ def enrich_realtime_signals(
             continue
 
         htf_candles = _get(symbol, config.htf_timeframe, config.htf_limit)
-        ltf_candles = _get(symbol, config.ltf_timeframe, config.ltf_limit)
+        selected_ltf = config.ltf_timeframe
+        ltf_candles = _get(symbol, selected_ltf, config.ltf_limit)
+
+        # Evaluate every configured entry timeframe with the same HTF context.
+        # Prefer 5m when it has a complete aligned ACR setup; otherwise use 15m.
+        # A timeframe is never selected merely because its latest candle moved.
+        for candidate_tf in config.entry_timeframes:
+            candidate_candles = _get(symbol, candidate_tf, config.ltf_limit)
+            if not candidate_candles:
+                continue
+            try:
+                _, candidate_confirmation = enrich_trading_signal(
+                    dict(signal),
+                    htf_candles=htf_candles,
+                    ltf_candles=candidate_candles,
+                    min_rr=config.min_rr,
+                    veto_on_conflict=config.veto_on_conflict,
+                    veto_on_neutral=config.veto_on_neutral,
+                    htf_tf=config.htf_timeframe,
+                    ltf_tf=candidate_tf,
+                )
+            except Exception:  # noqa: BLE001 - next timeframe may still qualify
+                continue
+            if candidate_confirmation.alignment == "align":
+                selected_ltf = candidate_tf
+                ltf_candles = candidate_candles
+                break
 
         if not htf_candles or not ltf_candles:
             stats.errors += 1
@@ -179,6 +210,16 @@ def enrich_realtime_signals(
 
         if config.inject_ltf_candles:
             signal["ltf_candles"] = [_candle_to_dict(c) for c in ltf_candles]
+        signal["entry_timeframe"] = selected_ltf
+        signal_meta = signal.get("meta")
+        if not isinstance(signal_meta, dict):
+            signal_meta = {}
+            signal["meta"] = signal_meta
+        signal_meta["timeframe_context"] = {
+            "htf": config.htf_timeframe,
+            "entry": selected_ltf,
+            "candidates": list(config.entry_timeframes) or [config.ltf_timeframe],
+        }
 
         try:
             enriched_sig, confirmation = enrich_trading_signal(
@@ -189,7 +230,7 @@ def enrich_realtime_signals(
                 veto_on_conflict=config.veto_on_conflict,
                 veto_on_neutral=config.veto_on_neutral,
                 htf_tf=config.htf_timeframe,
-                ltf_tf=config.ltf_timeframe,
+                ltf_tf=selected_ltf,
             )
         except Exception as exc:  # noqa: BLE001
             stats.errors += 1

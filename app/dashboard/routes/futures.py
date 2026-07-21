@@ -155,7 +155,7 @@ def update_futures_settings(payload: dict[str, Any]) -> dict[str, Any]:
 def trigger_futures_bootstrap() -> dict[str, Any]:
     """Run the futures bootstrap on demand and return the report."""
 
-    report = bootstrap_futures_if_enabled()
+    report = bootstrap_futures_if_enabled(config_path=DEFAULT_CONFIG_PATH)
     if report is None:
         raise HTTPException(
             status_code=400,

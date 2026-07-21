@@ -244,6 +244,12 @@ def run_pipeline_bridge(
         ),
         "entries": entries,
         "monitor": monitor,
+        "summary": {
+            "entry_evaluations": len(entries),
+            "positions_received": len(open_positions),
+            "positions_monitored": len(monitor),
+            "position_symbols": list(open_positions),
+        },
     }
 
     _write_output(config.output_path, payload)

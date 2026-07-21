@@ -84,6 +84,7 @@ class PaperTradingConfig:
     stop_loss_percent: float | None = None
     trailing_stop_percent: float | None = None
     leverage: int | None = None
+    max_leverage: int = 5  # Cap effective leverage during validation/live.
 
     @classmethod
     def from_dict(
@@ -125,6 +126,7 @@ class PaperTradingConfig:
                 data.get("trailing_stop_percent")
             ),
             leverage=_optional_positive_int(data.get("leverage")),
+            max_leverage=int(data.get("max_leverage", 5)),
         )
 
 
@@ -246,7 +248,13 @@ class RealtimePaperTradingEngine:
                 signal,
             )
 
-        leverage = self.config.leverage or 1
+        # Leverage guard: cap effective leverage during validation. Leverage
+        # does not change edge, only amplifies liquidation and execution risk,
+        # so the cap is enforced even if operator preferences request higher.
+        max_leverage = int(getattr(self.config, "max_leverage", 5) or 5)
+        leverage = min(int(self.config.leverage or 1), max_leverage)
+        if leverage < 1:
+            leverage = 1
         size = calculate_position_size(
             account_balance=available,
             risk_percent=self.config.risk_percent,

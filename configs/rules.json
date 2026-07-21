@@ -1,6 +1,6 @@
 {
-  "buy_confidence": 90,
-  "watch_confidence": 80,
+  "buy_confidence": 80,
+  "watch_confidence": 70,
   "quality_gates": {
     "trend":        { "min_score": 30, "max_score": 100 },
     "momentum":     { "min_score": 20, "max_score": 100 },

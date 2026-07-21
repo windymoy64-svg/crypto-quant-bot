@@ -34,9 +34,9 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
         stop_distance = max(current_atr * 2.0, minimum_stop_distance)
         stop_loss = round(entry - stop_distance, decimals)
     
-    # TP: Resistance-based with ATR fallback, RR minimum 1:1.5
+    # TP: Resistance-based with ATR fallback, RR minimum 1:2.
     risk_per_unit = entry - stop_loss
-    min_tp1_distance = risk_per_unit * 1.5  # FIXED: 1:1.5 RR
+    min_tp1_distance = risk_per_unit * 2.0
     
     # TP1: Nearest resistance or 1.5R
     resistance = find_nearest_resistance(candles, entry, lookback=30)
@@ -53,7 +53,7 @@ def build_signal(symbol: str, candles: list[Candle], score: ScoreResult) -> Trad
     reward_per_unit = take_profit[0] - entry  # Use TP1 for RR calc
     risk_reward = round(reward_per_unit / risk_per_unit, 2) if risk_per_unit else 0.0
     # FIXED: Adjust risk classification untuk RR baru
-    risk = "LOW" if score.confidence >= 90 and risk_reward >= 1.5 else "MEDIUM" if score.confidence >= 85 else "HIGH"
+    risk = "LOW" if score.confidence >= 90 and risk_reward >= 2.0 else "MEDIUM" if score.confidence >= 85 else "HIGH"
 
     # Hitung gate dan failed_gates SEBELUM return
     gates = score.buckets.get("_gates", {}) if isinstance(score.buckets, dict) else {}
@@ -107,9 +107,9 @@ def build_short_signal(
         stop_distance = max(current_atr * 2.0, minimum_stop_distance)  # 2x ATR
         stop_loss = round(entry + stop_distance, decimals)
     
-    # TP: Support-based with ATR fallback, RR minimum 1:1.5
+    # TP: Support-based with ATR fallback, RR minimum 1:2.
     risk_per_unit = stop_loss - entry
-    min_tp1_distance = risk_per_unit * 1.5  # FIXED: 1:1.5 RR
+    min_tp1_distance = risk_per_unit * 2.0
     
     # TP1: Nearest support or 1.5R
     support = find_nearest_support(candles, entry, lookback=30)
@@ -133,7 +133,7 @@ def build_short_signal(
     # FIXED: Sinkronisasi risk classification dengan LONG
     risk = (
         "LOW"
-        if score.confidence >= 90 and risk_reward >= 1.5
+        if score.confidence >= 90 and risk_reward >= 2.0
         else "MEDIUM"
         if score.confidence >= 85
         else "HIGH"

@@ -121,6 +121,9 @@ def test_bridge_monitors_open_positions(tmp_path: Path) -> None:
     assert len(result["monitor"]) == 1
     assert result["monitor"][0]["symbol"] == "BTC/USDT"
     assert result["monitor"][0]["result"]["stage"] == "POSITION_MONITOR"
+    assert result["summary"]["positions_received"] == 1
+    assert result["summary"]["positions_monitored"] == 1
+    assert result["summary"]["position_symbols"] == ["BTC/USDT"]
 
 
 def test_bridge_writes_output_artifact(tmp_path: Path) -> None:

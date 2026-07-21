@@ -8,6 +8,24 @@ from app.scoring.engine import ScoreEngine
 from app.signals.builder import build_short_signal, build_signal
 
 
+DEFAULT_EXCLUDED_BASE_ASSETS = {
+    "BUSD", "DAI", "FDUSD", "PYUSD", "TUSD", "USDC", "USDP", "USD1",
+}
+
+
+def _is_excluded_entry_symbol(symbol: str, config: dict[str, object]) -> bool:
+    """Exclude cash-like pairs from ranking without dropping position tracking."""
+
+    configured = config.get("excluded_base_assets", DEFAULT_EXCLUDED_BASE_ASSETS)
+    assets = (
+        {str(value).strip().upper() for value in configured}
+        if isinstance(configured, (list, tuple, set))
+        else DEFAULT_EXCLUDED_BASE_ASSETS
+    )
+    base = symbol.upper().replace("-", "/").split("/", 1)[0]
+    return base in assets
+
+
 @dataclass(frozen=True)
 class ScanItem:
     symbol: str
@@ -268,8 +286,20 @@ def scan_symbol_rankings(
         config.get("short_top_n", long_top_n)
     )
 
+    entry_results = [
+        item for item in all_results
+        if not _is_excluded_entry_symbol(item.symbol, config)
+        or item.symbol in tracked_set
+    ]
+    # Existing excluded positions remain in ``tracked`` for exit management,
+    # but must never re-enter either directional ranking.
+    rankable_results = [
+        item for item in entry_results
+        if not _is_excluded_entry_symbol(item.symbol, config)
+    ]
+
     long_ranked = sorted(
-        all_results,
+        rankable_results,
         key=lambda item: (
             item.score,
             item.confidence,
@@ -278,7 +308,7 @@ def scan_symbol_rankings(
     )
 
     short_ranked = sorted(
-        all_results,
+        rankable_results,
         key=lambda item: (
             item.short_score,
             item.short_confidence,

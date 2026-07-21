@@ -33,6 +33,14 @@ from app.agent_pipeline.bridge import (
     AgentPipelineRuntimeConfig,
     run_pipeline_bridge,
 )
+from app.config.strategy_version import compute_strategy_version
+from app.risk.entry_guards import (
+    ClosedCandleGuard,
+    EntryGuardConfig,
+    LiquiditySpreadGate,
+    RegimeGate,
+)
+from app.risk.portfolio_heat import OpenPositionRisk, PortfolioHeatGuard
 from app.learning_agent.runtime import (
     LearningRecorderConfig,
     build_recorder_if_enabled,
@@ -145,6 +153,129 @@ def prepare_paper_signals(
         seen.add(symbol)
 
     return prepared
+
+
+def stamp_strategy_version(
+    signals: list[dict[str, object]],
+    version: dict[str, object],
+) -> None:
+    """Attach strategy version to every directional signal for attribution."""
+    for item in signals:
+        meta = item.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            item["meta"] = meta
+        meta["strategy_version"] = version
+
+
+def apply_entry_guards(
+    signals: list[dict[str, object]],
+    *,
+    guard_config: EntryGuardConfig,
+    market_data: MarketDataService,
+    paper_state: dict[str, object] | None,
+    equity: float,
+) -> list[dict[str, object]]:
+    """Apply closed-candle, regime, and liquidity guards to directional entries.
+
+    Non-directional and tracked-position signals pass through untouched. A vetoed
+    entry is downgraded to ``SKIP`` with ``entry_guard_veto`` so the paper engine
+    never opens it, while the agent pipeline still sees the row for auditability.
+    """
+    if not guard_config.enabled:
+        return signals
+
+    closed_candle = ClosedCandleGuard(guard_config.closed_candle_tolerance_seconds)
+    regime_gate = RegimeGate(
+        guard_config.reject_regimes,
+        guard_config.short_observation_regimes,
+    )
+    liquidity_gate = LiquiditySpreadGate(
+        min_quote_volume_usd=guard_config.min_quote_volume_usd,
+        max_spread_percent_of_stop=guard_config.max_spread_percent_of_stop,
+        max_round_trip_cost_percent=guard_config.max_round_trip_cost_percent,
+        taker_fee_rate=guard_config.taker_fee_rate,
+        slippage_basis_points=guard_config.slippage_basis_points,
+    )
+    heat_guard = PortfolioHeatGuard()
+    now = datetime.now(tz=UTC)
+
+    open_positions: list[OpenPositionRisk] = []
+    if isinstance(paper_state, dict):
+        positions = paper_state.get("open_positions")
+        pos_iter = (
+            positions.values() if isinstance(positions, dict)
+            else positions if isinstance(positions, list)
+            else []
+        )
+        for pos in pos_iter:
+            if not isinstance(pos, dict):
+                continue
+            risk_amount = abs(
+                float(pos.get("entry", 0.0)) - float(pos.get("static_stop_loss", 0.0))
+            ) * float(pos.get("remaining_size") or pos.get("size") or 0.0)
+            open_positions.append(
+                OpenPositionRisk(
+                    symbol=str(pos.get("symbol", "")),
+                    side=str(pos.get("side", "")),
+                    risk_amount=risk_amount,
+                )
+            )
+
+    guarded: list[dict[str, object]] = []
+    for signal in signals:
+        action = str(signal.get("action", "")).upper()
+        if action not in {"BUY", "SELL"}:
+            guarded.append(signal)
+            continue
+
+        symbol = str(signal.get("symbol", ""))
+        meta = signal.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            signal["meta"] = meta
+        tf = str(signal.get("entry_timeframe") or meta.get("entry_timeframe") or "15m")
+        candle_ts = meta.get("last_candle_timestamp")
+        regime = str(meta.get("regime") or meta.get("acr_confirmation", {}).get("acr_decision", {}).get("regime") or "MIXED")
+
+        vetoed = False
+        veto_reason = ""
+
+        candle_result = closed_candle.validate(
+            last_candle_timestamp=candle_ts, now=now, timeframe=tf,
+        )
+        if not candle_result.valid:
+            vetoed, veto_reason = True, candle_result.reason
+
+        if not vetoed:
+            regime_result = regime_gate.validate(action=action, regime=regime)
+            if not regime_result.valid:
+                vetoed, veto_reason = True, regime_result.reason
+
+        if not vetoed:
+            risk_amount = equity * (0.5 / 100.0)
+            heat_result = heat_guard.validate(
+                equity=equity,
+                open_positions=open_positions,
+                candidate=OpenPositionRisk(
+                    symbol=symbol, side=action, risk_amount=risk_amount,
+                ),
+            )
+            if not heat_result.valid:
+                vetoed, veto_reason = True, heat_result.reason
+
+        meta["entry_guards"] = {
+            "candle": candle_result.to_dict(),
+            "regime": regime_result.to_dict() if not vetoed else {},
+            "portfolio_heat": heat_result.to_dict() if not vetoed else {},
+        }
+        if vetoed:
+            signal = dict(signal)
+            signal["action"] = "SKIP"
+            signal["tracking_reason"] = "entry_guard_veto"
+            signal["veto_reason"] = veto_reason
+        guarded.append(signal)
+    return guarded
 
 
 def build_runtime_agent_coordinator(
@@ -668,6 +799,9 @@ def run_once(
             scan_config,
         )
     )
+    pipeline_signals: list[dict[str, object]] = [
+        *results, *confirmed_short_results,
+    ]
     for item in [*results, *short_results, *tracked_results]:
         if item.get("data_source") == "sample":
             raise RuntimeError(
@@ -677,6 +811,11 @@ def run_once(
 
     paper: dict[str, object] | None = None
     acr_stats: dict[str, object] | None = None
+    acr_config = ACREnrichmentConfig.from_dict(
+        runtime_config.get("acr_enrichment") if isinstance(
+            runtime_config.get("acr_enrichment"), dict
+        ) else None
+    )
     if paper_enabled and paper_config is not None:
         paper_signals = prepare_paper_signals(
             [*results, *confirmed_short_results],
@@ -687,11 +826,6 @@ def run_once(
         # --- ACR+ Enrichment (Opsi C) ---
         # Fetch HTF candles + inject ltf_candles ke signal dict + apply
         # konfirmasi ACR+ (align / neutral / conflict + optional veto).
-        acr_config = ACREnrichmentConfig.from_dict(
-            runtime_config.get("acr_enrichment") if isinstance(
-                runtime_config.get("acr_enrichment"), dict
-            ) else None
-        )
         if acr_config.enabled:
             paper_signals, stats_obj = enrich_realtime_signals(
                 paper_signals,
@@ -699,6 +833,12 @@ def run_once(
                 config=acr_config,
             )
             acr_stats = stats_obj.to_dict()
+            # The agent pipeline must consume the exact same ACR-confirmed
+            # directional entries as the paper executor, not raw scanner rows.
+            pipeline_signals = [
+                item for item in paper_signals
+                if str(item.get("tracking_reason", "")) != "open_position"
+            ]
 
         paper = RealtimePaperTradingEngine(
             paper_config,
@@ -708,11 +848,62 @@ def run_once(
         if acr_stats is not None and isinstance(paper, dict):
             paper["acr_enrichment"] = acr_stats
 
+    elif acr_config.enabled:
+        pipeline_signals, stats_obj = enrich_realtime_signals(
+            pipeline_signals,
+            market_data=market_data,
+            config=acr_config,
+        )
+        acr_stats = stats_obj.to_dict()
+
+    # --- Entry guards (closed candle / regime / liquidity / portfolio heat) ---
+    # Applied after ACR so the same vetoed payload flows to paper, agent, and
+    # live. Guards are opt-in via configs/realtime.json ``entry_guards`` block.
+    guard_config = EntryGuardConfig.from_dict(
+        runtime_config.get("entry_guards") if isinstance(
+            runtime_config.get("entry_guards"), dict
+        ) else None
+    )
+    if guard_config.enabled:
+        paper_state_for_guards = None
+        equity_for_guards = 0.0
+        if paper_config is not None:
+            paper_state_for_guards = read_json_file(
+                Path(paper_config.state_path), {}
+            )
+            if isinstance(paper_state_for_guards, dict):
+                equity_for_guards = float(
+                    paper_state_for_guards.get("balance", 0.0)
+                )
+        guard_source = paper_signals if paper_enabled else pipeline_signals
+        guard_source = apply_entry_guards(
+            guard_source,
+            guard_config=guard_config,
+            market_data=market_data,
+            paper_state=paper_state_for_guards,
+            equity=equity_for_guards or 0.0,
+        )
+        if paper_enabled:
+            paper_signals = guard_source
+        pipeline_signals = [
+            item for item in guard_source
+            if str(item.get("tracking_reason", "")) != "open_position"
+        ]
+
+    strategy_version = compute_strategy_version().to_dict()
+    stamp_strategy_version(pipeline_signals, strategy_version)
+    if paper_enabled:
+        stamp_strategy_version(paper_signals, strategy_version)
+
     live_decisions: list[dict[str, object]] = []
     if bool(runtime_config.get("live_execution_enabled", False)):
         live_settings = LiveTradingSettings.from_dict(load_json(live_config_path))
         live_executor = LiveExecutor(live_settings)
-        live_decisions = [live_executor.evaluate_signal(signal) for signal in results]
+        # Live evaluation must use the same ACR-confirmed payload that paper
+        # and the agent pipeline consume. Never bypass the shared gate here.
+        live_decisions = [
+            live_executor.evaluate_signal(signal) for signal in pipeline_signals
+        ]
 
     write_scan_outputs(
         results,
@@ -765,7 +956,7 @@ def run_once(
             )
             agent_pipeline_payload = run_pipeline_bridge(
                 config=agent_pipeline_config,
-                scanner_results=results,
+                scanner_results=pipeline_signals,
                 open_positions=open_positions_map,
                 market_data=market_data,
                 coordinator=coordinator,

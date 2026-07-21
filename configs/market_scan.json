@@ -1,7 +1,7 @@
 {
   "exchange": "binance",
-  "timeframe": "1m",
-  "limit": 100,
+  "timeframe": "15m",
+  "limit": 300,
   "symbol_mode": "top_volume",
   "quote_asset": "USDT",
   "prefilter_top_n": 100,
@@ -10,6 +10,7 @@
   "short_rules_path": "configs/short_rules.json",
   "short_execution_enabled": true,
   "short_confirmation_cycles": 2,
+  "excluded_base_assets": ["BUSD", "DAI", "FDUSD", "PYUSD", "TUSD", "USDC", "USDP", "USD1"],
   "minimum_direction_edge": 5.0,
   "short_confirmation_state_path": "logs/short_confirmation_state.json",
   "symbols": [

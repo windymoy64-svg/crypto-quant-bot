@@ -1,12 +1,12 @@
 {
-  "buy_confidence": 90,
-  "watch_confidence": 80,
+  "buy_confidence": 80,
+  "watch_confidence": 70,
   "quality_gates": {
-    "trend":        { "min_score": 15, "max_score": 100 },
-    "momentum":     { "min_score": 10, "max_score": 100 },
-    "price_action": { "min_score": 5,  "max_score": 100 },
-    "volume":       { "min_score": 0,  "max_score": 100 },
-    "volatility":   { "min_score": 0,  "max_score": 100 }
+    "trend":        { "min_score": 30, "max_score": 100 },
+    "momentum":     { "min_score": 20, "max_score": 100 },
+    "price_action": { "min_score": 15, "max_score": 100 },
+    "volume":       { "min_score": 5,  "max_score": 100 },
+    "volatility":   { "min_score": 3,  "max_score": 100 }
   },
   "rules": [
     {"id":"SHORT_001","name":"EMA20 below EMA50","category":"trend","feature":"ema20_lt_ema50","operator":"is_true","weight":4},

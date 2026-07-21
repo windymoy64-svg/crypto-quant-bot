@@ -1,7 +1,7 @@
 from app.core.models import Candle
 from app.exchange.public_http_client import PublicHttpExchangeClient
 from app.market.live_data import load_market_candles
-from app.market.scanner import scan_symbols
+from app.market.scanner import _is_excluded_entry_symbol, scan_symbols
 
 
 class FakeExchangeClient:
@@ -48,3 +48,12 @@ def test_public_http_client_formats_symbols() -> None:
 
     assert client._binance_symbol("BTC/USDT") == "BTCUSDT"
     assert client._okx_symbol("BTC/USDT") == "BTC-USDT"
+
+
+def test_stablecoin_base_assets_are_excluded_from_new_entries() -> None:
+    config = {"excluded_base_assets": ["USDC", "FDUSD", "USD1"]}
+
+    assert _is_excluded_entry_symbol("USDC/USDT", config) is True
+    assert _is_excluded_entry_symbol("FDUSD-USDT", config) is True
+    assert _is_excluded_entry_symbol("USD1/USDT", config) is True
+    assert _is_excluded_entry_symbol("BTC/USDT", config) is False
