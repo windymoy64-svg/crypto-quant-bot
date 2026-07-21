@@ -135,6 +135,76 @@ class RealtimePaperTradingEngine:
         self.config = config
         self.telegram_notifier = telegram_notifier
 
+    def update_tp1_flag(self, symbol: str, enabled: bool) -> bool:
+        """Set the ``tp1_enabled`` flag on an open position from a HOLD decision.
+
+        When ``enabled`` is False (strong structure), the TP1 partial close is
+        skipped so the full position rides the trailing stop toward TP2/TP3.
+        When True (weak structure), TP1 fires normally to lock partial profit.
+
+        Returns True when the flag was updated, False when the position is
+        missing or paper trading is disabled.
+        """
+        if not self.config.enabled:
+            return False
+        state = self._load_state()
+        open_positions = state.get("open_positions")
+        if not isinstance(open_positions, dict):
+            return False
+        position = open_positions.get(symbol)
+        if not isinstance(position, dict):
+            return False
+        if position.get("tp1_enabled") == enabled:
+            return False  # no change, avoid redundant write
+        position["tp1_enabled"] = enabled
+        state["updated_at"] = self._now()
+        self._save_state(state)
+        return True
+
+    def close_from_decision(
+        self,
+        symbol: str,
+        exit_price: float,
+        reason: str = "agent_decision_exit",
+        urgency: str = "NEXT_CANDLE",
+        pnl_ratio: float = 0.0,
+    ) -> dict[str, object] | None:
+        """Force-close an open position from an agent pipeline EXIT decision.
+
+        Priority logic (trader-professional):
+        - IMMEDIATE (CHoCH / structure invalidation): always close. Structure
+          is dead — locking profit or cutting loss beats hoping.
+        - NEXT_CANDLE (bias flip, confluence degraded): close only when PnL is
+          outside the (0, 1R) "let winners run" band. Cut losers fast, lock
+          big winners; small profits ride the mechanical trailing/TP.
+
+        ``pnl_ratio`` is unrealized PnL divided by risk amount (1R). Positive =
+        in profit, negative = in loss.
+
+        Returns the closed event dict, or None when the position does not exist
+        or the EXIT decision is suppressed by the priority gate.
+        """
+        if not self.config.enabled:
+            return None
+        if urgency != "IMMEDIATE":
+            # NEXT_CANDLE: only act on losers or big winners (>1R).
+            # Small profits (0 < pnl_ratio <= 1) stay — trailing handles them.
+            if 0.0 < pnl_ratio <= 1.0:
+                return None
+        state = self._load_state()
+        open_positions = state.get("open_positions")
+        if not isinstance(open_positions, dict):
+            return None
+        if symbol not in open_positions:
+            return None
+        signal = {"symbol": symbol, "entry": float(exit_price)}
+        event = self._close_position_full(state, symbol, float(exit_price), reason, signal)
+        state["updated_at"] = self._now()
+        self._save_state(state)
+        self._append_trade_event(event)
+        self._send_telegram_report(event, signal)
+        return event
+
     def process_signals(
         self,
         signals: list[dict[str, object]],
@@ -593,8 +663,18 @@ class RealtimePaperTradingEngine:
         if not isinstance(hits, list) or len(hits) < 3:
             hits = [False, False, False]
 
+        # Dynamic TP1: when a HOLD decision marks structure as strong, the
+        # Decision Agent sets ``tp1_enabled=False`` so the runner is not cut at
+        # TP1. TP2/TP3 and the trailing stop still apply. Default True keeps
+        # legacy behavior for positions without the flag.
+        tp1_enabled = bool(position.get("tp1_enabled", True))
+
         for index in range(min(3, len(targets))):
             if hits[index]:
+                continue
+
+            # Skip the TP1 partial when structure is strong (let it run).
+            if index == 0 and not tp1_enabled:
                 continue
 
             target = float(targets[index])

@@ -275,28 +275,36 @@ def _summarize_pipeline(payload: dict[str, Any] | None) -> dict[str, Any]:
         return {
             "available": False,
             "top": None,
+            "top_entries": [],
+            "top_monitor": [],
             "timestamp": None,
             "enabled": False,
             "execute_decisions": False,
         }
     entries = payload.get("entries")
-    top = None
+    monitor = payload.get("monitor")
+    top_entries: list[dict[str, Any]] = []
     if isinstance(entries, list):
+        eligible = []
+        fallback = []
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
             result = entry.get("result")
             if isinstance(result, dict) and result.get("eligible"):
-                top = entry
-                break
-        if top is None:
-            for entry in entries:
-                if isinstance(entry, dict):
-                    top = entry
-                    break
+                eligible.append(entry)
+            else:
+                fallback.append(entry)
+        top_entries = eligible or fallback
+    top_monitor: list[dict[str, Any]] = []
+    if isinstance(monitor, list):
+        top_monitor = [m for m in monitor if isinstance(m, dict)]
+    top = top_entries[0] if top_entries else (top_monitor[0] if top_monitor else None)
     return {
         "available": True,
         "top": top,
+        "top_entries": top_entries,
+        "top_monitor": top_monitor,
         "timestamp": payload.get("generated_at"),
         "enabled": bool(payload.get("enabled")),
         "execute_decisions": bool(payload.get("execute_decisions")),
@@ -398,6 +406,19 @@ def _agent_nara(
     )
 
 
+def _compact_symbols(
+    entries: list[dict[str, Any]], monitor: list[dict[str, Any]]
+) -> str:
+    """Gabungkan simbol entries + monitor jadi string ringkas untuk task agent."""
+
+    names: list[str] = []
+    for item in [*entries, *monitor]:
+        symbol = str(item.get("symbol", "")).replace("/USDT", "")
+        if symbol and symbol not in names:
+            names.append(symbol)
+    return ", ".join(names)
+
+
 def _agent_yuna(
     pipeline: dict[str, Any],
     stages: dict[str, dict[str, Any]],
@@ -408,6 +429,8 @@ def _agent_yuna(
     definition = _def("yuna")
     ts = _parse_ts(pipeline.get("timestamp"))
     top = pipeline.get("top")
+    top_entries = pipeline.get("top_entries") or []
+    top_monitor = pipeline.get("top_monitor") or []
     if _fresh(ts, window_minutes=10) and isinstance(top, dict):
         result = top.get("result") if isinstance(top.get("result"), dict) else {}
         reading = result.get("chart_reading") if isinstance(result, dict) else None
@@ -421,10 +444,15 @@ def _agent_yuna(
             source = "posisi open"
         else:
             source = "scan pasar"
+        count = len(top_entries) + len(top_monitor)
+        task = f"Baca chart {symbol}"
+        if count > 1:
+            symbols = _compact_symbols(top_entries, top_monitor)
+            task = f"Baca {count} chart ({symbols})"
         return _make(
             definition,
             status="working",
-            task=f"Baca chart {symbol}",
+            task=task,
             detail=f"bias={bias} | {source}",
             updated_at=pipeline.get("timestamp"),
         )
@@ -460,6 +488,8 @@ def _agent_miro(pipeline: dict[str, Any]) -> AgentState:
     definition = _def("miro")
     ts = _parse_ts(pipeline.get("timestamp"))
     top = pipeline.get("top")
+    top_entries = pipeline.get("top_entries") or []
+    top_monitor = pipeline.get("top_monitor") or []
     if _fresh(ts, window_minutes=10) and isinstance(top, dict):
         result = top.get("result") if isinstance(top.get("result"), dict) else {}
         decision = result.get("decision") if isinstance(result, dict) else None
@@ -468,10 +498,15 @@ def _agent_miro(pipeline: dict[str, Any]) -> AgentState:
         if isinstance(decision, dict):
             action = str(decision.get("action", "?"))
             conf = _safe_float(decision.get("confidence"))
+        count = len(top_entries) + len(top_monitor)
+        task = f"Decide {action}"
+        if count > 1:
+            symbols = _compact_symbols(top_entries, top_monitor)
+            task = f"Decide {action} ({count} simbol: {symbols})"
         return _make(
             definition,
             status="working",
-            task=f"Decide {action}",
+            task=task,
             detail=f"confidence {conf:.0f}%",
             updated_at=pipeline.get("timestamp"),
             has_alert=action in {"ENTRY", "EXIT"},

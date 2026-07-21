@@ -136,6 +136,38 @@ def test_hold_exit_low_confluence() -> None:
     assert decision.action == "EXIT"
 
 
+def test_hold_disables_tp1_on_strong_structure() -> None:
+    """Strong structure (high confluence + aligned + trending) → TP1 disabled."""
+    agent = DecisionMakerAgent()
+    decision = agent.decide_hold(
+        _reading(confluence=75.0, aligned=True), "BUY"
+    )
+    assert decision.action == "HOLD"
+    assert decision.meta["tp1_enabled"] is False
+    assert "tp1_disabled_let_runner" in decision.reasons
+
+
+def test_hold_enables_tp1_on_misaligned_trends() -> None:
+    """Trends not aligned → weak structure → TP1 enabled."""
+    agent = DecisionMakerAgent()
+    decision = agent.decide_hold(
+        _reading(confluence=75.0, aligned=False), "BUY"
+    )
+    assert decision.action == "HOLD"
+    assert decision.meta["tp1_enabled"] is True
+    assert "tp1_enabled_weak_structure" in decision.reasons
+
+
+def test_hold_enables_tp1_on_mid_confluence() -> None:
+    """Confluence in 40-50 band (above EXIT threshold, below strong) → TP1 on."""
+    agent = DecisionMakerAgent()
+    decision = agent.decide_hold(
+        _reading(confluence=45.0, aligned=True), "BUY"
+    )
+    assert decision.action == "HOLD"
+    assert decision.meta["tp1_enabled"] is True
+
+
 def test_sell_entry() -> None:
     agent = DecisionMakerAgent()
     decision = agent.decide_entry(_reading(bias="BEARISH"))

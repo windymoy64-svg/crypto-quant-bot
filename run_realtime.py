@@ -729,6 +729,7 @@ def run_once(
         execution_preferences.mode == "paper"
     )
     paper_config: PaperTradingConfig | None = None
+    paper_engine: RealtimePaperTradingEngine | None = None
     open_position_symbols: list[str] = []
     telegram_notifier = None
     if paper_enabled:
@@ -840,10 +841,11 @@ def run_once(
                 if str(item.get("tracking_reason", "")) != "open_position"
             ]
 
-        paper = RealtimePaperTradingEngine(
+        paper_engine = RealtimePaperTradingEngine(
             paper_config,
             telegram_notifier
-        ).process_signals(paper_signals)
+        )
+        paper = paper_engine.process_signals(paper_signals)
 
         if acr_stats is not None and isinstance(paper, dict):
             paper["acr_enrichment"] = acr_stats
@@ -966,6 +968,82 @@ def run_once(
                 "enabled": True,
                 "error": f"pipeline_bridge_failed: {exc}",
             }
+
+        # --- Decision → Paper execution bridge ---
+        # When the Decision Agent returns EXIT for an open position, route it to
+        # the paper engine so the advisory decision actually closes the trade.
+        # Priority gate (close_from_decision) decides whether to act based on
+        # urgency (CHoCH = always; bias flip / confluence low = only losers or
+        # big winners >1R). Only runs in paper mode where ``paper_engine`` lives.
+        agent_exit_executions: list[dict[str, object]] = []
+        if (
+            isinstance(agent_pipeline_payload, dict)
+            and agent_pipeline_config.enabled
+            and agent_pipeline_config.execute_decisions
+            and paper_enabled
+            and paper_engine is not None
+        ):
+            monitor_results = agent_pipeline_payload.get("monitor") or []
+            paper_state_path = (
+                paper_config.state_path if paper_config is not None else ""
+            )
+            paper_state_for_exits = read_json_file(Path(paper_state_path), {}) if paper_state_path else {}
+            open_positions_snapshot = (
+                paper_state_for_exits.get("open_positions") if isinstance(paper_state_for_exits, dict) else None
+            ) or {}
+            for entry in monitor_results:
+                if not isinstance(entry, dict) or entry.get("skipped"):
+                    continue
+                result = entry.get("result") or {}
+                decision = result.get("decision") or {}
+                action = str(decision.get("action", "")).upper()
+                symbol = str(entry.get("symbol") or decision.get("symbol") or "")
+                if not symbol:
+                    continue
+
+                # HOLD → sync dynamic TP1 flag onto the open position. Strong
+                # structure disables TP1 (let runner reach TP2/TP3); weak
+                # structure keeps TP1 to lock partial profit.
+                if action == "HOLD":
+                    meta = decision.get("meta") or {}
+                    if "tp1_enabled" in meta:
+                        paper_engine.update_tp1_flag(
+                            symbol=symbol, enabled=bool(meta["tp1_enabled"]),
+                        )
+                    continue
+
+                if action != "EXIT":
+                    continue
+                position = open_positions_snapshot.get(symbol)
+                if not isinstance(position, dict):
+                    continue
+                exit_plan = decision.get("exit_plan") or {}
+                urgency = str(exit_plan.get("urgency", "NEXT_CANDLE")).upper()
+                last_price = float(position.get("last_price", position.get("entry", 0.0)))
+                # PnL ratio = unrealized PnL / risk_amount (1R).
+                risk_amount = abs(
+                    float(position.get("entry", 0.0))
+                    - float(position.get("static_stop_loss") or position.get("stop_loss") or 0.0)
+                ) * float(position.get("remaining_size") or position.get("size") or 0.0)
+                unrealized = float(position.get("unrealized_pnl", 0.0))
+                pnl_ratio = (unrealized / risk_amount) if risk_amount > 0 else 0.0
+                reason = str(exit_plan.get("reason") or "agent_decision_exit")
+                closed = paper_engine.close_from_decision(
+                    symbol=symbol,
+                    exit_price=last_price,
+                    reason=reason,
+                    urgency=urgency,
+                    pnl_ratio=pnl_ratio,
+                )
+                agent_exit_executions.append({
+                    "symbol": symbol,
+                    "urgency": urgency,
+                    "pnl_ratio": round(pnl_ratio, 3),
+                    "reason": reason,
+                    "closed": closed is not None,
+                })
+            if agent_exit_executions:
+                agent_pipeline_payload["exit_executions"] = agent_exit_executions
 
     # --- Learning recorder (advisory, off by default) ---
     # Reads new closures from paper_trades.jsonl and records them into the

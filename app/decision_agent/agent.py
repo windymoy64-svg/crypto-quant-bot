@@ -29,6 +29,56 @@ LEARNING_BOOST_HOT_PATTERN = 8.0
 LEARNING_PENALTY_COLD_PATTERN = -12.0
 LEARNING_REGIME_PENALTY = -10.0
 HOLD_INVALIDATION_THRESHOLD = 40.0
+# Structure quality thresholds for dynamic TP1.
+# Below these → structure weak → TP1 enabled (lock partial profit early).
+# Above these → structure strong → TP1 disabled (let winners run to TP2/TP3).
+TP1_STRONG_CONFLUENCE = 50.0
+TP1_WEAK_CONFLUENCE = 40.0
+TP1_STRONG_REGIMES = ("TRENDING_BULLISH", "TRENDING_BEARISH")
+
+
+def should_enable_tp1(reading: ChartReading, position_side: str) -> bool:
+    """Decide whether TP1 (partial close) should fire for an open position.
+
+    Professional rule: ``let winners run, cut early when structure shaky``.
+    TP1 is a safety exit — only needed when structure is weak. When structure
+    is strong (high confluence, trends aligned, trending regime, no counter
+    CHoCH), disable TP1 so the full position rides the trailing stop toward
+    TP2/TP3 and maximizes the runner.
+
+    Args:
+        reading: latest ChartReading for the symbol.
+        position_side: ``BUY`` or ``SELL`` — the side of the open position.
+
+    Returns:
+        True  → TP1 enabled  (structure weak, lock partial profit).
+        False → TP1 disabled (structure strong, let it run).
+    """
+    # 1. Counter-trend CHoCH = structure damaged → always enable TP1.
+    for brk in reading.structure_breaks:
+        if position_side == "BUY" and brk.break_type == "CHoCH" and brk.direction == "BEARISH":
+            return True
+        if position_side == "SELL" and brk.break_type == "CHoCH" and brk.direction == "BULLISH":
+            return True
+
+    # 2. Low confluence → weak structure → enable TP1.
+    if reading.confluence_score < TP1_WEAK_CONFLUENCE:
+        return True
+
+    # 3. Trends not aligned → conflict → enable TP1.
+    if not reading.trends_aligned:
+        return True
+
+    # 4. Non-trending regime (RANGING / LOW_VOLATILITY / MIXED) → no momentum → enable TP1.
+    if reading.regime not in TP1_STRONG_REGIMES:
+        return True
+
+    # 5. Strong structure: high confluence + aligned + trending + no counter CHoCH → disable TP1.
+    if reading.confluence_score >= TP1_STRONG_CONFLUENCE:
+        return False
+
+    # 6. Middle band (40-50 confluence, otherwise strong) → conservative: enable TP1.
+    return True
 
 
 class DecisionMakerAgent:
@@ -187,11 +237,22 @@ class DecisionMakerAgent:
         reasons.append("structure_intact")
         if reading.trends_aligned:
             reasons.append("trends_aligned")
+
+        # Dynamic TP1: strong structure disables TP1 (let winners run), weak
+        # structure enables it (lock partial profit). The paper engine reads
+        # ``meta["tp1_enabled"]`` to decide whether the TP1 partial fires.
+        tp1_enabled = should_enable_tp1(reading, position_side)
+        if tp1_enabled:
+            reasons.append("tp1_enabled_weak_structure")
+        else:
+            reasons.append("tp1_disabled_let_runner")
+
         return Decision(
             action="HOLD", symbol=reading.symbol, confidence="MEDIUM",
             confidence_score=reading.bias_confidence, reasons=reasons,
             regime=reading.regime, confluence_score=reading.confluence_score,
             timestamp=reading.timestamp,
+            meta={"tp1_enabled": tp1_enabled},
         )
 
     # ------------------------------------------------------------------

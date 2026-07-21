@@ -311,3 +311,56 @@ def test_yuna_detail_marks_position_monitor_source(
     yuna = next(a for a in payload["agents"] if a["id"] == "yuna")
     assert yuna["status"] == "working"
     assert yuna["detail"] == "bias=BEARISH | posisi open"
+
+
+def test_office_shows_multi_candidate_count(tmp_path: Path) -> None:
+    """Office harus tampilkan jumlah + daftar simbol bila ada >1 kandidat/posisi."""
+    now = datetime.now(UTC).isoformat()
+    _write_json(
+        tmp_path / "logs" / "agent_pipeline.json",
+        {
+            "enabled": True,
+            "generated_at": now,
+            "execute_decisions": False,
+            "entries": [
+                {
+                    "symbol": "BTC/USDT",
+                    "result": {
+                        "eligible": True,
+                        "chart_reading": {"bias": "BULLISH"},
+                        "decision": {"action": "ENTRY", "confidence": 92},
+                    },
+                },
+                {
+                    "symbol": "ETH/USDT",
+                    "result": {
+                        "eligible": True,
+                        "chart_reading": {"bias": "BULLISH"},
+                        "decision": {"action": "HOLD", "confidence": 70},
+                    },
+                },
+            ],
+            "monitor": [
+                {
+                    "symbol": "SOL/USDT",
+                    "result": {
+                        "stage": "POSITION_MONITOR",
+                        "eligible": True,
+                        "chart_reading": {"bias": "BEARISH"},
+                    },
+                }
+            ],
+        },
+    )
+    payload = build_office_snapshot(base_dir=tmp_path).to_dict()
+    yuna = next(a for a in payload["agents"] if a["id"] == "yuna")
+    assert yuna["status"] == "working"
+    # 2 entries + 1 monitor = 3 chart dipantau
+    assert "3 chart" in yuna["task"]
+    assert "BTC" in yuna["task"]
+    assert "ETH" in yuna["task"]
+    assert "SOL" in yuna["task"]
+
+    miro = next(a for a in payload["agents"] if a["id"] == "miro")
+    assert miro["status"] == "working"
+    assert "3 simbol" in miro["task"]
