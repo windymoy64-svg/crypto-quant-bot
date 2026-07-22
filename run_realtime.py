@@ -110,11 +110,20 @@ def load_open_position_symbols(state_path: str) -> list[str]:
             if isinstance(item, dict)
         )
     else:
-        return []
+        raw_symbols = []
+
+    # Pending limit symbols must remain in the tracked scanner universe even
+    # after they fall out of top-N. Otherwise no fresh price reaches the paper
+    # engine and an order can stay PENDING forever despite touching its zone.
+    pending = state.get("pending_orders", {})
+    pending_symbols = pending.keys() if isinstance(pending, dict) else (
+        (item.get("symbol") for item in pending if isinstance(item, dict))
+        if isinstance(pending, list) else []
+    )
 
     seen: set[str] = set()
     symbols: list[str] = []
-    for value in raw_symbols:
+    for value in [*raw_symbols, *pending_symbols]:
         symbol = str(value or "").strip().upper().replace("-", "/")
         if not symbol or symbol in seen:
             continue
@@ -845,7 +854,30 @@ def run_once(
             paper_config,
             telegram_notifier
         )
-        paper = paper_engine.process_signals(paper_signals)
+        # When agent execution is active, scanner remains the candidate source
+        # and price feed, but must not open a position directly. New entries
+        # are routed below from Chart Agent -> Decision Agent so market/limit
+        # zone semantics cannot be bypassed by the scanner's last close.
+        agent_cfg_raw = runtime_config.get("agent_pipeline")
+        agent_controls_entries = bool(
+            isinstance(agent_cfg_raw, dict)
+            and agent_cfg_raw.get("enabled")
+            and agent_cfg_raw.get("execute_decisions")
+        )
+        paper_execution_signals = paper_signals
+        if agent_controls_entries:
+            paper_execution_signals = []
+            open_symbols = set(open_position_symbols)
+            for item in paper_signals:
+                copied = dict(item)
+                if (
+                    str(copied.get("symbol", "")) not in open_symbols
+                    and str(copied.get("action", "")).upper() in {"BUY", "SELL"}
+                ):
+                    copied["action"] = "SKIP"
+                    copied["tracking_reason"] = "awaiting_chart_agent_zone"
+                paper_execution_signals.append(copied)
+        paper = paper_engine.process_signals(paper_execution_signals)
 
         if acr_stats is not None and isinstance(paper, dict):
             paper["acr_enrichment"] = acr_stats
@@ -983,6 +1015,48 @@ def run_once(
             and paper_enabled
             and paper_engine is not None
         ):
+            # Route approved Chart/Decision Agent entries to paper. The agent
+            # supplies the zone; fill at market only when current price is
+            # already inside it, otherwise persist a LIMIT pending order.
+            agent_entry_signals: list[dict[str, object]] = []
+            current_by_symbol = {
+                str(item.get("symbol")): float(item.get("entry", 0.0))
+                for item in pipeline_signals if isinstance(item, dict)
+            }
+            for entry in agent_pipeline_payload.get("entries") or []:
+                if not isinstance(entry, dict) or entry.get("skipped"):
+                    continue
+                result = entry.get("result") or {}
+                decision = result.get("decision") or {}
+                action = str(decision.get("action", "")).upper()
+                plan = decision.get("entry_plan") or {}
+                symbol = str(entry.get("symbol") or decision.get("symbol") or "")
+                if action not in {"ENTRY_BUY", "ENTRY_SELL"} or not symbol or not plan:
+                    continue
+                zone = plan.get("entry_zone") or [plan.get("entry_price"), plan.get("entry_price")]
+                current = current_by_symbol.get(symbol, float(plan.get("entry_price", 0.0)))
+                low, high = sorted((float(zone[0]), float(zone[1])))
+                mode = "MARKET" if low <= current <= high else "LIMIT"
+                agent_entry_signals.append({
+                    "symbol": symbol,
+                    "action": "BUY" if action == "ENTRY_BUY" else "SELL",
+                    "entry": current if mode == "MARKET" else float(plan.get("entry_price")),
+                    "current_price": current,
+                    "entry_zone": [low, high],
+                    "entry_mode": mode,
+                    "stop_loss": float(plan.get("stop_loss")),
+                    "take_profit": [
+                        value for value in [plan.get("take_profit_1"), plan.get("take_profit_2"), plan.get("take_profit_3")]
+                        if value is not None
+                    ],
+                    "confidence": float(decision.get("confidence_score", 0.0)),
+                    "score": float(decision.get("confluence_score", 0.0)),
+                    "entry_reason": "chart_agent_zone",
+                    "expires_in_seconds": float(plan.get("expires_in_seconds", 900.0)),
+                })
+            if agent_entry_signals:
+                paper = paper_engine.process_signals(agent_entry_signals)
+
             monitor_results = agent_pipeline_payload.get("monitor") or []
             paper_state_path = (
                 paper_config.state_path if paper_config is not None else ""
@@ -1028,12 +1102,17 @@ def run_once(
                 unrealized = float(position.get("unrealized_pnl", 0.0))
                 pnl_ratio = (unrealized / risk_amount) if risk_amount > 0 else 0.0
                 reason = str(exit_plan.get("reason") or "agent_decision_exit")
+                min_hold = float(
+                    getattr(agent_pipeline_config, "min_hold_seconds", 300.0)
+                    or 300.0
+                )
                 closed = paper_engine.close_from_decision(
                     symbol=symbol,
                     exit_price=last_price,
                     reason=reason,
                     urgency=urgency,
                     pnl_ratio=pnl_ratio,
+                    min_hold_seconds=min_hold,
                 )
                 agent_exit_executions.append({
                     "symbol": symbol,

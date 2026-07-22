@@ -327,6 +327,11 @@ class DashboardService:
         positions = self._normalize_positions(state.get("positions", state.get("open_positions", [])))
         fills = state.get("fills", []) if isinstance(state.get("fills"), list) else []
         orders = state.get("orders", []) if isinstance(state.get("orders"), list) else []
+        pending_orders = state.get("pending_orders", {})
+        if isinstance(pending_orders, dict):
+            pending_orders = list(pending_orders.values())
+        elif not isinstance(pending_orders, list):
+            pending_orders = []
         account = state.get("account", {}) if isinstance(state.get("account"), dict) else {}
         balance = state.get("balance", account.get("cash", 0.0))
 
@@ -381,6 +386,7 @@ class DashboardService:
             "available_balance": account.get("available_balance", balance),
             "account": account,
             "open_positions": positions,
+            "pending_orders": pending_orders,
             "orders": orders[-100:],
             # `fills` dan `trades` dipakai frontend untuk menghitung KPI
             # "Trade Hari Ini / Trade Profit / Trade Loss / Winrate" dalam

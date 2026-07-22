@@ -224,6 +224,35 @@ def test_recorder_is_idempotent(tmp_path: Path) -> None:
     assert len(trade_store.load_all()) == 1
 
 
+def test_recorder_never_materializes_all_chart_observations(tmp_path: Path) -> None:
+    """Large observation history must be queried with bounded load_latest()."""
+    trades = tmp_path / "paper_trades.jsonl"
+    obs_store = ChartObservationStore(str(tmp_path / "obs.jsonl"))
+    obs_store.save(ChartObservation(
+        observation_id="BTC:entry", symbol="BTC/USDT",
+        timestamp="2024-01-01T09:59:00+00:00", stage="ENTRY_CANDIDATE",
+        scanner_confidence=95.0, scanner_gates_passed=True,
+        chart_reading=_reading().to_dict(),
+    ))
+    _write_trade_event(trades, {
+        "type": "closed", "symbol": "BTC/USDT",
+        "timestamp": "2024-01-01T12:00:00+00:00",
+        "close_reason": "take_profit_1",
+        "position": {**_position(), "exit": 106.0, "realized_pnl": 12.0},
+    })
+    # Regression guard: the old implementation called this and parsed the
+    # complete ~200 MB production file into nested Python objects every cycle.
+    obs_store.load_all = lambda: (_ for _ in ()).throw(AssertionError("unbounded load_all called"))  # type: ignore[method-assign]
+    trade_store = TradeStore(str(tmp_path / "journal.jsonl"))
+    recorder = TradeFeedbackRecorder(
+        trades_path=str(trades),
+        learning_agent=LearningAgent(store=trade_store, observation_store=obs_store),
+        observation_store=obs_store,
+        checkpoint_path=str(tmp_path / "checkpoint.json"),
+    )
+    assert len(recorder.process_new_closures()) == 1
+
+
 def test_recorder_ignores_non_close_events(tmp_path: Path) -> None:
     trades = tmp_path / "paper_trades.jsonl"
     _write_trade_event(trades, {"type": "opened", "symbol": "BTC/USDT"})

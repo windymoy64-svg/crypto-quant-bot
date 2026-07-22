@@ -94,7 +94,7 @@ def test_confirm_neutral_when_acr_holds() -> None:
     )
     assert r.alignment == "neutral"
     assert r.veto is False
-    assert r.confidence_multiplier < 1.0
+    assert r.confidence_multiplier == 1.0
 
 
 def test_confirm_veto_on_neutral_when_configured() -> None:

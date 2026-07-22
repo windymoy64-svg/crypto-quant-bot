@@ -51,6 +51,21 @@ def test_load_open_position_symbols_supports_position_map(
     assert symbols == ["ALLO/USDT", "THETA/USDT"]
 
 
+def test_load_open_position_symbols_includes_pending_orders(tmp_path: Path) -> None:
+    state_path = tmp_path / "paper_state.json"
+    state_path.write_text(json.dumps({
+        "open_positions": {"BTC/USDT": {}},
+        "pending_orders": {
+            "PROM/USDT": {"status": "PENDING"},
+            "BTC/USDT": {"status": "PENDING"},
+        },
+    }), encoding="utf-8")
+
+    assert load_open_position_symbols(str(state_path)) == [
+        "BTC/USDT", "PROM/USDT",
+    ]
+
+
 def test_prepare_paper_signals_keeps_unranked_open_position_tick() -> None:
     ranked = [
         {"symbol": "BTC/USDT", "action": "BUY", "entry": 100.0}

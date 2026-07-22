@@ -50,11 +50,11 @@ class TradeFeedbackRecorder:
         recorded_ids: set[str] = set(checkpoint.get("recorded_trade_ids", []))
         new_recorded: list[str] = []
 
-        observations = self._observations.load_all()
-        by_symbol_stage: dict[tuple[str, str], list[ChartObservation]] = {}
-        for obs in observations:
-            by_symbol_stage.setdefault((obs.symbol, obs.stage), []).append(obs)
-
+        # Do not call ChartObservationStore.load_all() here.  The observation
+        # JSONL is intentionally append-only and can become hundreds of MB;
+        # materializing every nested ChartReading caused RSS spikes near 1 GB.
+        # Observations are loaded bounded and only for symbols with a new
+        # closure, below in _find_*_observation.
         with self._trades_path.open("r", encoding="utf-8") as file:
             for line in file:
                 line = line.strip()
@@ -78,12 +78,8 @@ class TradeFeedbackRecorder:
                 if trade_id in recorded_ids:
                     continue
 
-                entry_obs = self._find_entry_observation(
-                    by_symbol_stage, symbol, position
-                )
-                exit_obs = self._find_exit_observation(
-                    by_symbol_stage, symbol, event
-                )
+                entry_obs = self._find_entry_observation(symbol, position)
+                exit_obs = self._find_exit_observation(symbol, event)
 
                 record = build_trade_record_from_dicts(
                     trade_id=trade_id,
@@ -107,12 +103,11 @@ class TradeFeedbackRecorder:
         return f"{symbol}:{opened}:{closed}"
 
     def _find_entry_observation(
-        self,
-        by_stage: dict[tuple[str, str], list[ChartObservation]],
-        symbol: str,
-        position: dict[str, Any],
+        self, symbol: str, position: dict[str, Any]
     ) -> ChartObservation | None:
-        candidates = by_stage.get((symbol, "ENTRY_CANDIDATE"), [])
+        candidates, _ = self._observations.load_latest(
+            50, stage="ENTRY_CANDIDATE", symbol=symbol
+        )
         if not candidates:
             return None
         opened_at = str(position.get("opened_at", ""))
@@ -123,12 +118,11 @@ class TradeFeedbackRecorder:
         return eligible[-1] if eligible else candidates[0]
 
     def _find_exit_observation(
-        self,
-        by_stage: dict[tuple[str, str], list[ChartObservation]],
-        symbol: str,
-        event: dict[str, Any],
+        self, symbol: str, event: dict[str, Any]
     ) -> ChartObservation | None:
-        candidates = by_stage.get((symbol, "POSITION_MONITOR"), [])
+        candidates, _ = self._observations.load_latest(
+            50, stage="POSITION_MONITOR", symbol=symbol
+        )
         if not candidates:
             return None
         closed_at = str(event.get("timestamp", ""))

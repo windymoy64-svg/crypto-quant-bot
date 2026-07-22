@@ -35,6 +35,7 @@ class AgentPipelineRuntimeConfig:
     enabled: bool = False
     execute_decisions: bool = False
     min_scanner_confidence: float = 90.0
+    min_hold_seconds: float = 300.0
     htf_timeframe: str = "4h"
     mtf_timeframe: str = "1h"
     ltf_timeframe: str = "15m"
@@ -52,6 +53,7 @@ class AgentPipelineRuntimeConfig:
             enabled=bool(data.get("enabled", False)),
             execute_decisions=bool(data.get("execute_decisions", False)),
             min_scanner_confidence=float(data.get("min_scanner_confidence", 90.0)),
+            min_hold_seconds=float(data.get("min_hold_seconds", 300.0)),
             htf_timeframe=str(data.get("htf_timeframe", "4h")),
             mtf_timeframe=str(data.get("mtf_timeframe", "1h")),
             ltf_timeframe=str(data.get("ltf_timeframe", "15m")),

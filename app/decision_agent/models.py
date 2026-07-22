@@ -22,6 +22,9 @@ class EntryPlan:
     take_profit_3: float | None = None
     risk_reward: float = 0.0
     position_size_percent: float = 1.0  # % of balance
+    entry_zone: tuple[float, float] | None = None
+    order_type: Literal["MARKET", "LIMIT"] = "LIMIT"
+    expires_in_seconds: float = 900.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +85,7 @@ class PaperTradingConfig:
     trailing_stop_percent: float | None = None
     leverage: int | None = None
     max_leverage: int = 5  # Cap effective leverage during validation/live.
+    pending_order_ttl_seconds: float = 900.0
 
     @classmethod
     def from_dict(
@@ -127,6 +128,7 @@ class PaperTradingConfig:
             ),
             leverage=_optional_positive_int(data.get("leverage")),
             max_leverage=int(data.get("max_leverage", 5)),
+            pending_order_ttl_seconds=float(data.get("pending_order_ttl_seconds", 900.0)),
         )
 
 
@@ -168,6 +170,7 @@ class RealtimePaperTradingEngine:
         reason: str = "agent_decision_exit",
         urgency: str = "NEXT_CANDLE",
         pnl_ratio: float = 0.0,
+        min_hold_seconds: float = 300.0,
     ) -> dict[str, object] | None:
         """Force-close an open position from an agent pipeline EXIT decision.
 
@@ -175,28 +178,62 @@ class RealtimePaperTradingEngine:
         - IMMEDIATE (CHoCH / structure invalidation): always close. Structure
           is dead — locking profit or cutting loss beats hoping.
         - NEXT_CANDLE (bias flip, confluence degraded): close only when PnL is
-          outside the (0, 1R) "let winners run" band. Cut losers fast, lock
-          big winners; small profits ride the mechanical trailing/TP.
+          outside the (0, 1R) "let winners run" band AND position age exceeds
+          min_hold. Cut losers fast, lock big winners; small profits + fresh
+          positions ride the mechanical trailing/TP.
 
         ``pnl_ratio`` is unrealized PnL divided by risk amount (1R). Positive =
         in profit, negative = in loss.
+
+        ``min_hold_seconds`` is the minimum age (default 300s = 5 min) before
+        NEXT_CANDLE urgency is allowed. Prevents whipsawing fresh entries.
 
         Returns the closed event dict, or None when the position does not exist
         or the EXIT decision is suppressed by the priority gate.
         """
         if not self.config.enabled:
             return None
-        if urgency != "IMMEDIATE":
-            # NEXT_CANDLE: only act on losers or big winners (>1R).
-            # Small profits (0 < pnl_ratio <= 1) stay — trailing handles them.
-            if 0.0 < pnl_ratio <= 1.0:
-                return None
+        
         state = self._load_state()
         open_positions = state.get("open_positions")
         if not isinstance(open_positions, dict):
             return None
         if symbol not in open_positions:
             return None
+        
+        position = open_positions[symbol]
+        
+        # IMMEDIATE: always close (structure invalidation).
+        if urgency == "IMMEDIATE":
+            signal = {"symbol": symbol, "entry": float(exit_price)}
+            event = self._close_position_full(state, symbol, float(exit_price), reason, signal)
+            state["updated_at"] = self._now()
+            self._save_state(state)
+            self._append_trade_event(event)
+            self._send_telegram_report(event, signal)
+            return event
+        
+        # NEXT_CANDLE: apply min-hold + PnL filters.
+        # 1. Check position age.
+        opened_at_str = position.get("opened_at")
+        if opened_at_str:
+            try:
+                opened_at = datetime.fromisoformat(opened_at_str.replace("Z", "+00:00"))
+                now = datetime.now(tz=UTC)
+                age_seconds = (now - opened_at).total_seconds()
+                if age_seconds < min_hold_seconds:
+                    # Position too fresh — let it breathe.
+                    return None
+            except (ValueError, AttributeError):
+                pass  # If timestamp parse fails, proceed (cautious fallback).
+        
+        # 2. Check PnL ratio.
+        # Skip close when -0.3R < pnl_ratio <= 1.0R (let winners run, tolerate tiny drawdown).
+        # Close when pnl_ratio <= -0.3R (meaningful loss) or > 1R (big winner).
+        if -0.3 < pnl_ratio <= 1.0:
+            return None
+        
+        # Passed all gates — close the position.
         signal = {"symbol": symbol, "entry": float(exit_price)}
         event = self._close_position_full(state, symbol, float(exit_price), reason, signal)
         state["updated_at"] = self._now()
@@ -211,6 +248,9 @@ class RealtimePaperTradingEngine:
     ) -> dict[str, object]:
         state = self._load_state()
         events: list[dict[str, object]] = []
+
+        # Pending chart-agent limit orders are evaluated before new orders.
+        events.extend(self._process_pending_orders(state, signals))
 
         for signal in signals:
             events.extend(self._update_position(state, signal))
@@ -243,6 +283,7 @@ class RealtimePaperTradingEngine:
             "open_positions": list(
                 state["open_positions"].values()
             ),
+            "pending_orders": list(state.get("pending_orders", {}).values()),
             "events": events,
             "state_path": self.config.state_path,
             "trades_path": self.config.trades_path,
@@ -262,6 +303,42 @@ class RealtimePaperTradingEngine:
 
         side = "BUY" if action == "BUY" else "SHORT"
         symbol = str(signal["symbol"])
+
+        # Chart Agent can provide an entry zone and explicit market/limit mode.
+        # A limit order is persisted instead of being chased at the current close.
+        entry_mode = str(signal.get("entry_mode", "MARKET")).upper()
+        zone = signal.get("entry_zone")
+        if entry_mode == "LIMIT" and isinstance(zone, (list, tuple)) and len(zone) == 2:
+            current = float(signal.get("current_price", signal.get("entry", 0.0)))
+            low, high = sorted((float(zone[0]), float(zone[1])))
+            if not low <= current <= high:
+                pending = state.setdefault("pending_orders", {})
+                if not isinstance(pending, dict):
+                    pending = {}
+                    state["pending_orders"] = pending
+                if symbol in pending:
+                    return None
+                pending[symbol] = {
+                    "symbol": symbol,
+                    "side": "LONG" if action == "BUY" else "SHORT",
+                    "action": action,
+                    "entry": float(signal["entry"]),
+                    "current_price": current,
+                    "last_price_at": self._now(),
+                    "entry_zone": [low, high],
+                    "stop_loss": signal.get("stop_loss"),
+                    "take_profit": signal.get("take_profit", []),
+                    "status": "PENDING",
+                    "created_at": self._now(),
+                    "expires_at": self._expiry_iso(float(signal.get("expires_in_seconds", self.config.pending_order_ttl_seconds))),
+                    "confidence": signal.get("confidence"),
+                    "reason": signal.get("entry_reason", "chart_agent_zone"),
+                    "signal": dict(signal),
+                }
+                return self._event("pending_order", symbol, "limit_order_created", signal)
+            # Price is already inside the zone: convert to market fill.
+            signal = dict(signal)
+            signal["entry"] = current
 
         open_positions = state["open_positions"]
         if not isinstance(open_positions, dict):
@@ -388,6 +465,46 @@ class RealtimePaperTradingEngine:
             signal,
             position=position,
         )
+
+    def _process_pending_orders(self, state: dict[str, object], signals: list[dict[str, object]]) -> list[dict[str, object]]:
+        pending = state.get("pending_orders")
+        if not isinstance(pending, dict):
+            return []
+        now = datetime.now(tz=UTC)
+        events: list[dict[str, object]] = []
+        for symbol, order in list(pending.items()):
+            if not isinstance(order, dict):
+                pending.pop(symbol, None)
+                continue
+            try:
+                expires = datetime.fromisoformat(str(order.get("expires_at")).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                expires = now
+            if now >= expires:
+                pending.pop(symbol, None)
+                events.append(self._event("order_expired", symbol, "limit_order_ttl", order))
+                continue
+            signal = next((s for s in signals if str(s.get("symbol")) == symbol), None)
+            if not isinstance(signal, dict):
+                continue
+            current = float(signal.get("current_price", signal.get("entry", 0.0)))
+            order["current_price"] = current
+            order["last_price_at"] = self._now()
+            low, high = order.get("entry_zone", [0.0, 0.0])
+            if float(low) <= current <= float(high):
+                filled = dict(order.get("signal") or signal)
+                filled["entry"] = current
+                filled["entry_mode"] = "MARKET"
+                pending.pop(symbol, None)
+                event = self._maybe_open_position(state, filled)
+                if event:
+                    events.append(event)
+                    events.append(self._event("order_filled", symbol, "limit_zone_touched", filled))
+        return events
+
+    def _expiry_iso(self, seconds: float | None = None) -> str:
+        ttl = float(seconds if seconds is not None else self.config.pending_order_ttl_seconds)
+        return (datetime.now(tz=UTC) + timedelta(seconds=max(ttl, 1.0))).isoformat()
 
     def _update_position(
         self,
@@ -977,6 +1094,7 @@ class RealtimePaperTradingEngine:
                 "starting_balance": self.config.starting_balance,
                 "balance": self.config.starting_balance,
                 "open_positions": {},
+                "pending_orders": {},
             }
 
         state = json.loads(
@@ -987,6 +1105,9 @@ class RealtimePaperTradingEngine:
 
         if not isinstance(open_positions, dict):
             raise TypeError("open_positions must be a dict")
+
+        if not isinstance(state.get("pending_orders"), dict):
+            state["pending_orders"] = {}
 
         return state
 

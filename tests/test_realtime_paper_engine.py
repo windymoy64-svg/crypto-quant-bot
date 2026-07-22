@@ -247,6 +247,7 @@ def test_close_from_decision_next_candle_skips_small_profit(tmp_path: Path) -> N
         symbol="BTC/USDT", exit_price=102.5,
         reason="bias_reversal", urgency="NEXT_CANDLE",
         pnl_ratio=0.5,
+        min_hold_seconds=0,
     )
     assert closed is None
     import json
@@ -256,7 +257,7 @@ def test_close_from_decision_next_candle_skips_small_profit(tmp_path: Path) -> N
 
 
 def test_close_from_decision_next_candle_closes_loser(tmp_path: Path) -> None:
-    """NEXT_CANDLE urgency closes the position when PnL < 0 (cut loss)."""
+    """NEXT_CANDLE urgency closes the position when PnL < -0.3R (cut loss)."""
     config = PaperTradingConfig(
         enabled=True,
         starting_balance=10_000,
@@ -276,6 +277,7 @@ def test_close_from_decision_next_candle_closes_loser(tmp_path: Path) -> None:
         symbol="BTC/USDT", exit_price=97.0,
         reason="bias_reversal", urgency="NEXT_CANDLE",
         pnl_ratio=-0.6,
+        min_hold_seconds=0,
     )
     assert closed is not None
     assert closed["type"] == "closed"
@@ -302,9 +304,110 @@ def test_close_from_decision_next_candle_closes_big_winner(tmp_path: Path) -> No
         symbol="BTC/USDT", exit_price=108.0,
         reason="bias_reversal", urgency="NEXT_CANDLE",
         pnl_ratio=1.6,
+        min_hold_seconds=0,
     )
     assert closed is not None
     assert closed["type"] == "closed"
+
+
+def test_close_from_decision_next_candle_skips_fresh_position(tmp_path: Path) -> None:
+    """NEXT_CANDLE is suppressed when position age < min_hold_seconds."""
+    config = PaperTradingConfig(
+        enabled=True,
+        starting_balance=10_000,
+        risk_percent=1,
+        max_open_positions=3,
+        state_path=str(tmp_path / "paper_state.json"),
+        trades_path=str(tmp_path / "paper_trades.jsonl"),
+    )
+    engine = RealtimePaperTradingEngine(config)
+    engine.process_signals(
+        [{
+            "symbol": "BTC/USDT", "action": "BUY", "entry": 100.0,
+            "stop_loss": 95.0, "take_profit": [110.0], "confidence": 95.0,
+        }]
+    )
+    # Fresh position (just opened), even with -0.6R loss → skip.
+    closed = engine.close_from_decision(
+        symbol="BTC/USDT", exit_price=97.0,
+        reason="bias_reversal", urgency="NEXT_CANDLE",
+        pnl_ratio=-0.6,
+        min_hold_seconds=300.0,
+    )
+    assert closed is None
+    import json
+    with open(config.state_path) as f:
+        data = json.load(f)
+    assert "BTC/USDT" in data["open_positions"]
+
+
+def test_close_from_decision_next_candle_skips_flat_pnl(tmp_path: Path) -> None:
+    """NEXT_CANDLE is suppressed when PnL is flat/tiny drawdown (not meaningful loss)."""
+    config = PaperTradingConfig(
+        enabled=True,
+        starting_balance=10_000,
+        risk_percent=1,
+        max_open_positions=3,
+        state_path=str(tmp_path / "paper_state.json"),
+        trades_path=str(tmp_path / "paper_trades.jsonl"),
+    )
+    engine = RealtimePaperTradingEngine(config)
+    engine.process_signals(
+        [{
+            "symbol": "BTC/USDT", "action": "BUY", "entry": 100.0,
+            "stop_loss": 95.0, "take_profit": [110.0], "confidence": 95.0,
+        }]
+    )
+    # Flat PnL (0.0) with min_hold=0 → still skip (not meaningful loss).
+    closed = engine.close_from_decision(
+        symbol="BTC/USDT", exit_price=100.0,
+        reason="bias_reversal", urgency="NEXT_CANDLE",
+        pnl_ratio=0.0,
+        min_hold_seconds=0,
+    )
+    assert closed is None
+
+
+def test_chart_agent_limit_order_pending_then_fills_in_zone(tmp_path: Path) -> None:
+    config = PaperTradingConfig(
+        enabled=True, starting_balance=10_000, risk_percent=1,
+        max_open_positions=3, state_path=str(tmp_path / "state.json"),
+        trades_path=str(tmp_path / "trades.jsonl"), pending_order_ttl_seconds=900,
+    )
+    engine = RealtimePaperTradingEngine(config)
+    result = engine.process_signals([{
+        "symbol": "BTC/USDT", "action": "BUY", "entry": 95.0,
+        "current_price": 100.0, "entry_zone": [94.0, 96.0],
+        "entry_mode": "LIMIT", "stop_loss": 92.0,
+        "take_profit": [101.0, 104.0, 107.0], "confidence": 90.0,
+    }])
+    assert not result["open_positions"]
+    assert result["pending_orders"][0]["status"] == "PENDING"
+    assert result["pending_orders"][0]["current_price"] == 100.0
+
+    result = engine.process_signals([{
+        "symbol": "BTC/USDT", "action": "SKIP", "entry": 95.0,
+        "current_price": 95.0, "confidence": 0.0,
+    }])
+    assert result["open_positions"][0]["entry"] == 95.0
+    assert result["pending_orders"] == []
+
+
+def test_chart_agent_market_entry_when_price_inside_zone(tmp_path: Path) -> None:
+    config = PaperTradingConfig(
+        enabled=True, starting_balance=10_000, risk_percent=1,
+        max_open_positions=3, state_path=str(tmp_path / "state.json"),
+        trades_path=str(tmp_path / "trades.jsonl"),
+    )
+    engine = RealtimePaperTradingEngine(config)
+    result = engine.process_signals([{
+        "symbol": "BTC/USDT", "action": "BUY", "entry": 95.0,
+        "current_price": 95.5, "entry_zone": [94.0, 96.0],
+        "entry_mode": "LIMIT", "stop_loss": 92.0,
+        "take_profit": [102.5], "confidence": 90.0,
+    }])
+    assert result["open_positions"][0]["entry"] == 95.5
+    assert result["pending_orders"] == []
 
 
 def test_update_tp1_flag_sets_position_field(tmp_path: Path) -> None:

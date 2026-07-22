@@ -308,6 +308,9 @@ class DecisionMakerAgent:
             take_profit_2=round(tp2, 8),
             take_profit_3=round(tp3, 8),
             risk_reward=2.0,
+            entry_zone=(round(reading.entry_zone[0], 8), round(reading.entry_zone[1], 8)),
+            order_type="LIMIT",
+            expires_in_seconds=900.0,
         )
 
     def _skip(self, reading: ChartReading, reasons: list[str]) -> Decision:

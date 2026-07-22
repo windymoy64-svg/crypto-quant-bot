@@ -4,6 +4,7 @@
   "risk_percent": 0.5,
   "max_open_positions": 20,
   "max_position_size_percent": 10.0,
+  "pending_order_ttl_seconds": 900.0,
   "state_path": "logs/paper_state.json",
   "trades_path": "logs/paper_trades.jsonl",
   "auto_exit": {

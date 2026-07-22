@@ -93,7 +93,8 @@ def confirm_signal(
       - ``alignment`` : ``align`` / ``neutral`` / ``conflict``.
       - ``veto`` : True jika sinyal harus di-tolak.
       - ``confidence_multiplier`` : faktor pengali untuk confidence (1.0 = tidak
-        berubah, 1.15 = ada konfirmasi ACR+ searah, 0.85 = neutral).
+        berubah, 1.15 = ada konfirmasi ACR+ searah). Neutral yang tidak diveto
+        tidak menurunkan confidence karena Chart Agent masih menjadi gate akhir.
       - ``reasons`` : daftar alasan deterministic.
       - ``acr_decision`` : payload ``ACRPlusDecision.to_dict()`` untuk audit.
     """
@@ -135,7 +136,10 @@ def confirm_signal(
     elif decision.action == "HOLD":
         alignment = "neutral"
         veto = veto_on_neutral
-        multiplier = 0.85
+        # ``veto_on_neutral=False`` means neutral is explicitly allowed. Do not
+        # silently turn a qualified 90-94% scanner candidate into <80% and drop
+        # it before Chart Agent gets a chance to validate confluence/entry zone.
+        multiplier = 1.0
         reasons.append("acr_neutral_hold")
     else:
         # Lawan arah

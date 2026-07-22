@@ -774,6 +774,24 @@ class ChartReaderAgent:
                     else nearest.top * 1.002
                 )
 
+        # Support/resistance fallback: when no liquidity/OB zone exists, build
+        # a narrow ATR-like zone around the nearest directional key level.
+        if entry_zone is None and key_levels and ltf_candles:
+            current_price = float(ltf_candles[-1].close)
+            directional = [
+                level for level in key_levels
+                if (bias == "BULLISH" and level.kind == "support" and level.price <= current_price)
+                or (bias == "BEARISH" and level.kind == "resistance" and level.price >= current_price)
+            ]
+            if directional:
+                nearest_level = min(directional, key=lambda level: abs(level.price - current_price))
+                width = max(abs(current_price - nearest_level.price) * 0.15, current_price * 0.001)
+                entry_zone = (nearest_level.price - width, nearest_level.price + width)
+                invalidation = (
+                    entry_zone[0] - width if bias == "BULLISH"
+                    else entry_zone[1] + width
+                )
+
         # Collect reasons
         reasons: list[str] = []
         for sig in all_signals:

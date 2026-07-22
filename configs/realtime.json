@@ -18,13 +18,14 @@
     "ltf_limit": 300,
     "min_rr": 2.0,
     "veto_on_conflict": true,
-    "veto_on_neutral": true,
+    "veto_on_neutral": false,
     "inject_ltf_candles": true
   },
   "agent_pipeline": {
     "enabled": true,
     "execute_decisions": true,
     "min_scanner_confidence": 80.0,
+    "min_hold_seconds": 300.0,
     "htf_timeframe": "4h",
     "mtf_timeframe": "1h",
     "ltf_timeframe": "15m",
