@@ -1037,6 +1037,7 @@ def run_once(
                 current = current_by_symbol.get(symbol, float(plan.get("entry_price", 0.0)))
                 low, high = sorted((float(zone[0]), float(zone[1])))
                 mode = "MARKET"
+                dmeta = decision.get("meta") or {}
                 agent_entry_signals.append({
                     "symbol": symbol,
                     "action": "BUY" if action == "ENTRY_BUY" else "SELL",
@@ -1053,6 +1054,10 @@ def run_once(
                     "score": float(decision.get("confluence_score", 0.0)),
                     "entry_reason": "chart_agent_zone",
                     "expires_in_seconds": float(plan.get("expires_in_seconds", 900.0)),
+                    # Trend-hold at open: skip fixed TP ladder until HTF flips.
+                    "tp1_enabled": bool(dmeta.get("tp1_enabled", True)),
+                    "hold_mode": bool(dmeta.get("hold_mode", False)),
+                    "skip_fixed_tp": bool(dmeta.get("skip_fixed_tp", False)),
                 })
             if agent_entry_signals:
                 paper = paper_engine.process_signals(agent_entry_signals)

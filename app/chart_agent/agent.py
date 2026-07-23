@@ -51,6 +51,7 @@ from app.chart_agent.confluence_engine import (
     get_regime_weight,
     meets_confluence_threshold,
 )
+from app.chart_agent.level_placement import atr_from_candles, select_entry_invalidation
 
 
 # ---------------------------------------------------------------------------
@@ -753,81 +754,39 @@ class ChartReaderAgent:
             bias, confluence_score, regime_name, all_signals, patterns, breaks
         )
 
-        # 12. Determine suggested entry zone and invalidation
-        # Collect all candidate zones from multiple sources, then pick nearest to price.
+        # 12. Structure + ATR entry zone / invalidation (not nearest-noise SL)
         entry_zone: tuple[float, float] | None = None
         invalidation: float | None = None
-        
-        if not ltf_candles:
-            pass  # skip zone selection if no price reference
-        else:
+        level_meta: dict[str, Any] = {}
+        if ltf_candles:
             current_price = float(ltf_candles[-1].close)
-            candidates: list[tuple[tuple[float, float], float, str]] = []  # (zone, inval, source)
-
-            # Candidate 1: liquidity_sr
-            if liq_signal.meta.get("entry") and liq_signal.meta.get("stop_loss"):
-                entry_price = liq_signal.meta["entry"]
-                sl = liq_signal.meta["stop_loss"]
-                zone = (min(entry_price, sl), max(entry_price, sl))
-                candidates.append((zone, sl, "liquidity_sr"))
-
-            # Candidate 2: fresh order blocks
-            if obs:
-                fresh_obs = [ob for ob in obs if not ob.mitigated]
-                for ob in fresh_obs:
-                    # Filter by bias direction
-                    if (bias == "BULLISH" and ob.direction == "BULLISH" and ob.top <= current_price) or \
-                       (bias == "BEARISH" and ob.direction == "BEARISH" and ob.bottom >= current_price):
-                        zone = (ob.bottom, ob.top)
-                        inval = ob.bottom * 0.998 if ob.direction == "BULLISH" else ob.top * 1.002
-                        candidates.append((zone, inval, f"order_block_{ob.direction}"))
-
-            # Candidate 3: key levels (S/R)
-            if key_levels:
-                directional = [
-                    level for level in key_levels
-                    if (bias == "BULLISH" and level.kind == "support" and level.price <= current_price)
-                    or (bias == "BEARISH" and level.kind == "resistance" and level.price >= current_price)
-                ]
-                for level in directional:
-                    width = max(abs(current_price - level.price) * 0.15, current_price * 0.001)
-                    zone = (level.price - width, level.price + width)
-                    inval = zone[0] - width if bias == "BULLISH" else zone[1] + width
-                    candidates.append((zone, inval, f"key_level_{level.kind}"))
-
-            # Rank by distance to current price, pick nearest
-            if candidates:
-                def zone_distance(item):
-                    z, _, _ = item
-                    mid = (z[0] + z[1]) / 2
-                    return abs(mid - current_price)
-                
-                candidates.sort(key=zone_distance)
-                best = candidates[0]
-                entry_zone, invalidation, source = best
-                
-                # Apply max distance gate: skip if zone > 2% away
-                zone_mid = (entry_zone[0] + entry_zone[1]) / 2
-                distance_pct = abs(zone_mid - current_price) / current_price * 100
-                
-                if distance_pct > 2.0:
-                    # Too far — clear zone to trigger SKIP later
-                    entry_zone = None
-                    invalidation = None
+            atr_value = atr_from_candles(ltf_candles, current_price)
+            entry_zone, invalidation, _source, level_meta = select_entry_invalidation(
+                bias=bias,
+                current_price=current_price,
+                atr_value=atr_value,
+                liq_signal=liq_signal,
+                obs=obs,
+                key_levels=key_levels,
+                htf_candles=htf_candles,
+                mtf_candles=mtf_candles,
+                ltf_candles=ltf_candles,
+            )
 
         # Collect reasons
         reasons: list[str] = []
         for sig in all_signals:
             if sig.confidence >= 50:
                 reasons.append(f"{sig.technique}:{sig.bias}")
-        
-        # Add zone selection reason if we picked one
-        if entry_zone is not None and ltf_candles:
-            current_price = float(ltf_candles[-1].close)
-            zone_mid = (entry_zone[0] + entry_zone[1]) / 2
-            distance_pct = abs(zone_mid - current_price) / current_price * 100
-            # Source stored earlier would need separate tracking; for now just note distance
-            reasons.append(f"entry_zone_dist={distance_pct:.2f}%")
+
+        if entry_zone is not None and level_meta:
+            reasons.append(f"entry_zone_dist={level_meta.get('zone_dist_pct', 0):.2f}%")
+            reasons.append(f"sl_atr={level_meta.get('sl_atr', 0):.2f}")
+            reasons.append(f"sl_pct={level_meta.get('sl_pct', 0):.2f}%")
+            if level_meta.get("source"):
+                reasons.append(f"level_source={level_meta['source']}")
+        elif level_meta.get("reject"):
+            reasons.append(f"level_reject={level_meta['reject']}")
 
         return ChartReading(
             symbol=symbol,
@@ -856,6 +815,7 @@ class ChartReaderAgent:
                 "meets_threshold": meets_confluence_threshold(
                     confluence_score, regime_name
                 ),
+                "level_placement": level_meta,
             },
         )
 

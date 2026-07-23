@@ -156,9 +156,17 @@ class RealtimePaperTradingEngine:
         position = open_positions.get(symbol)
         if not isinstance(position, dict):
             return False
-        if position.get("tp1_enabled") == enabled:
+        hold_mode = not enabled
+        changed = (
+            position.get("tp1_enabled") != enabled
+            or bool(position.get("hold_mode")) != hold_mode
+            or bool(position.get("skip_fixed_tp")) != hold_mode
+        )
+        if not changed:
             return False  # no change, avoid redundant write
         position["tp1_enabled"] = enabled
+        position["hold_mode"] = hold_mode
+        position["skip_fixed_tp"] = hold_mode
         state["updated_at"] = self._now()
         self._save_state(state)
         return True
@@ -448,6 +456,12 @@ class RealtimePaperTradingEngine:
             "confidence": float(signal["confidence"]),
             "entry_reason": self._build_entry_reason(signal, side),
             "configured_leverage": self.config.leverage,
+            # Default True = legacy partial TP1. False = trend-hold (skip fixed TPs).
+            "tp1_enabled": bool(signal.get("tp1_enabled", True)),
+            "hold_mode": bool(signal.get("hold_mode", False)),
+            "skip_fixed_tp": bool(
+                signal.get("skip_fixed_tp", signal.get("hold_mode", False))
+            ),
         }
 
         open_positions[symbol] = position
@@ -553,6 +567,9 @@ class RealtimePaperTradingEngine:
         )
         entry_price = float(position["entry"])
 
+        # Trend-hold: after +1R, lock BE and trail — never wait for fixed TP1.
+        self._maybe_hold_mode_breakeven(position, current_price, entry_price)
+
         self._activate_trailing(
             position,
             current_price,
@@ -628,9 +645,16 @@ class RealtimePaperTradingEngine:
                 )
             ]
 
+        # Trend-hold: never force-close on fixed TP1 in legacy path either.
+        skip_fixed_tp = bool(
+            position.get("skip_fixed_tp")
+            or position.get("hold_mode")
+            or not bool(position.get("tp1_enabled", True))
+        )
         targets = position.get("take_profit", [])
         if (
-            isinstance(targets, list)
+            not skip_fixed_tp
+            and isinstance(targets, list)
             and targets
             and self._is_tp_hit(
                 position,
@@ -737,6 +761,36 @@ class RealtimePaperTradingEngine:
                     8,
                 )
 
+
+    def _maybe_hold_mode_breakeven(
+        self,
+        position: dict[str, object],
+        current_price: float,
+        entry_price: float,
+    ) -> None:
+        """In trend-hold, move SL to entry once unrealized >= 1R."""
+        hold = bool(
+            position.get("skip_fixed_tp")
+            or position.get("hold_mode")
+            or not bool(position.get("tp1_enabled", True))
+        )
+        if not hold or entry_price <= 0:
+            return
+        static = float(position.get("static_stop_loss") or position.get("stop_loss") or 0.0)
+        risk = abs(entry_price - static) if static > 0 else 0.0
+        if risk <= 0:
+            return
+        if self._is_short(position):
+            already_be = static <= entry_price
+            favorable = (entry_price - current_price) >= risk
+        else:
+            already_be = static >= entry_price
+            favorable = (current_price - entry_price) >= risk
+        if already_be or not favorable:
+            return
+        position["static_stop_loss"] = round(entry_price, 8)
+        position["trailing_active"] = True
+
     def _update_effective_stop(
         self,
         position: dict[str, object],
@@ -780,17 +834,25 @@ class RealtimePaperTradingEngine:
         if not isinstance(hits, list) or len(hits) < 3:
             hits = [False, False, False]
 
-        # Dynamic TP1: when a HOLD decision marks structure as strong, the
-        # Decision Agent sets ``tp1_enabled=False`` so the runner is not cut at
-        # TP1. TP2/TP3 and the trailing stop still apply. Default True keeps
-        # legacy behavior for positions without the flag.
+        # Trend-hold mode: skip the entire fixed TP ladder (TP1/2/3). Position
+        # rides SL/trailing until HTF structure flips (agent EXIT). Weak
+        # structure keeps tp1_enabled=True for partial locks.
         tp1_enabled = bool(position.get("tp1_enabled", True))
+        skip_fixed_tp = bool(
+            position.get("skip_fixed_tp")
+            or position.get("hold_mode")
+            or not tp1_enabled
+        )
 
         for index in range(min(3, len(targets))):
             if hits[index]:
                 continue
 
-            # Skip the TP1 partial when structure is strong (let it run).
+            # Hold mode: do not close/partial on any fixed TP level.
+            if skip_fixed_tp:
+                continue
+
+            # Legacy: skip only TP1 when flag false (keep for safety).
             if index == 0 and not tp1_enabled:
                 continue
 

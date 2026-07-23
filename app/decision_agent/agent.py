@@ -25,6 +25,13 @@ from app.decision_agent.models import (
 DEFAULT_MIN_CONFLUENCE = 55.0
 DEFAULT_MIN_CONFIDENCE_ENTRY = 70.0
 DEFAULT_MIN_RR = 2.0
+# Structural SL must clear noise; reject paper-thin invalidation.
+MIN_SL_PCT = 0.35
+MAX_SL_PCT = 4.5
+# Prefer real HTF target when it clears min RR; else fall back to R-multiples.
+TP1_R = 2.0
+TP2_R = 3.0
+TP3_R = 4.0
 LEARNING_BOOST_HOT_PATTERN = 8.0
 LEARNING_PENALTY_COLD_PATTERN = -12.0
 LEARNING_REGIME_PENALTY = -10.0
@@ -35,6 +42,51 @@ HOLD_INVALIDATION_THRESHOLD = 40.0
 TP1_STRONG_CONFLUENCE = 50.0
 TP1_WEAK_CONFLUENCE = 40.0
 TP1_STRONG_REGIMES = ("TRENDING_BULLISH", "TRENDING_BEARISH")
+
+
+def _select_take_profits(
+    reading: ChartReading,
+    entry_price: float,
+    risk: float,
+) -> tuple[float, float | None, float | None]:
+    """Pick TP1/2/3: prefer real HTF structure targets, fall back to R-multiples.
+
+    Pro rule: TP must be a place price *should* go (liquidity / swing), not a
+    fixed multiple. We still anchor TP1 to 2R (lock partial), but try to snap
+    TP2/TP3 to HTF swing/liquidity levels when they clear the corresponding R.
+    """
+    long_side = reading.bias == "BULLISH"
+    sign = 1.0 if long_side else -1.0
+    tp1 = entry_price + sign * risk * TP1_R
+
+    # Candidate structural targets from HTF/MTF (swings + key levels).
+    structural: list[float] = []
+    for level in reading.key_levels:
+        if long_side and level.kind == "resistance" and level.price > entry_price:
+            structural.append(level.price)
+        if (not long_side) and level.kind == "support" and level.price < entry_price:
+            structural.append(level.price)
+
+    # Targets must be in trade direction and beyond their R-multiple floor.
+    def _snap(floor_r: float, fallback_r: float) -> float | None:
+        floor = entry_price + sign * risk * floor_r
+        candidates = [p for p in structural if (p > floor if long_side else p < floor)]
+        if candidates:
+            # Nearest structural target beyond floor = most likely to be reached.
+            return min(candidates, key=lambda p: abs(p - entry_price))
+        return entry_price + sign * risk * fallback_r
+
+    tp2 = _snap(TP2_R, TP2_R)
+    tp3 = _snap(TP3_R, TP3_R)
+    return tp1, tp2, tp3
+
+
+def is_trend_hold_mode(reading: ChartReading, position_side: str) -> bool:
+    """True when HTF/MTF trend-following is intact → skip fixed TPs, hold runner.
+
+    Opposite of weak-structure TP1 locking. Used at entry and on HOLD ticks.
+    """
+    return not should_enable_tp1(reading, position_side)
 
 
 def should_enable_tp1(reading: ChartReading, position_side: str) -> bool:
@@ -156,9 +208,18 @@ class DecisionMakerAgent:
 
         # APPROVED
         action: ActionType = "ENTRY_BUY" if reading.bias == "BULLISH" else "ENTRY_SELL"
+        side = "BUY" if reading.bias == "BULLISH" else "SELL"
+        # Trend-hold at entry: disable fixed TP ladder so paper does not
+        # partial/close at TP1 before the first monitor tick.
+        hold_mode = is_trend_hold_mode(reading, side)
+        tp1_enabled = not hold_mode
         reasons.insert(0, f"bias={reading.bias}")
         reasons.append(f"confluence={reading.confluence_score:.0f}")
         reasons.append(f"regime={reading.regime}")
+        if hold_mode:
+            reasons.append("trend_hold_mode_skip_fixed_tp")
+        else:
+            reasons.append("tp1_enabled_at_entry")
 
         return Decision(
             action=action,
@@ -172,6 +233,11 @@ class DecisionMakerAgent:
             regime=reading.regime,
             confluence_score=reading.confluence_score,
             timestamp=reading.timestamp,
+            meta={
+                "tp1_enabled": tp1_enabled,
+                "hold_mode": hold_mode,
+                "skip_fixed_tp": hold_mode,
+            },
         )
 
     def decide_hold(
@@ -252,7 +318,11 @@ class DecisionMakerAgent:
             confidence_score=reading.bias_confidence, reasons=reasons,
             regime=reading.regime, confluence_score=reading.confluence_score,
             timestamp=reading.timestamp,
-            meta={"tp1_enabled": tp1_enabled},
+            meta={
+                "tp1_enabled": tp1_enabled,
+                "hold_mode": not tp1_enabled,
+                "skip_fixed_tp": not tp1_enabled,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -291,34 +361,34 @@ class DecisionMakerAgent:
         if risk <= 0:
             return None
 
-        if reading.bias == "BULLISH":
-            tp1 = entry_price + risk * 2
-            tp2 = entry_price + risk * 3
-            tp3 = entry_price + risk * 4
-        else:
-            tp1 = entry_price - risk * 2
-            tp2 = entry_price - risk * 3
-            tp3 = entry_price - risk * 4
+        # Gate: reject paper-thin noise stops and absurdly wide stops.
+        sl_pct = risk / entry_price * 100
+        if sl_pct < MIN_SL_PCT:
+            return None  # invalidation too tight — noise stop, skip trade
+        if sl_pct > MAX_SL_PCT:
+            return None  # invalidation too wide — bad R per unit risk
+
+        # Prefer real HTF liquidity / swing targets when they clear min RR.
+        # Falls back to R-multiples when no clean structural target exists.
+        targets = _select_take_profits(reading, entry_price, risk)
+        tp1, tp2, tp3 = targets
 
         # Determine order type: MARKET if price already in zone, else LIMIT
         order_type: str = "MARKET"
-        # Check if we have a recent price to compare (from meta or another source)
-        # For now, use a simple heuristic: if entry_zone is very tight (< 0.5% width),
-        # assume we're close enough for MARKET. A more robust check would require
-        # passing current_price explicitly, but that's not in ChartReading yet.
         zone_width_pct = abs(reading.entry_zone[1] - reading.entry_zone[0]) / entry_price * 100
         if zone_width_pct < 0.3:
             # Very tight zone = likely already at level → MARKET
             order_type = "MARKET"
 
+        rr = abs(tp1 - entry_price) / risk if risk > 0 else 0.0
         return EntryPlan(
             side="BUY" if reading.bias == "BULLISH" else "SELL",
             entry_price=round(entry_price, 8),
             stop_loss=round(stop_loss, 8),
             take_profit_1=round(tp1, 8),
-            take_profit_2=round(tp2, 8),
-            take_profit_3=round(tp3, 8),
-            risk_reward=2.0,
+            take_profit_2=round(tp2, 8) if tp2 is not None else None,
+            take_profit_3=round(tp3, 8) if tp3 is not None else None,
+            risk_reward=round(rr, 2),
             entry_zone=(round(reading.entry_zone[0], 8), round(reading.entry_zone[1], 8)),
             order_type=order_type,  # type: ignore[arg-type]
             expires_in_seconds=900.0,
