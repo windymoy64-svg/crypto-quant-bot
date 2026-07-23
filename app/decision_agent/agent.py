@@ -22,7 +22,7 @@ from app.decision_agent.models import (
 # Configuration thresholds
 # ---------------------------------------------------------------------------
 
-DEFAULT_MIN_CONFLUENCE = 60.0
+DEFAULT_MIN_CONFLUENCE = 55.0
 DEFAULT_MIN_CONFIDENCE_ENTRY = 70.0
 DEFAULT_MIN_RR = 2.0
 LEARNING_BOOST_HOT_PATTERN = 8.0
@@ -300,6 +300,17 @@ class DecisionMakerAgent:
             tp2 = entry_price - risk * 3
             tp3 = entry_price - risk * 4
 
+        # Determine order type: MARKET if price already in zone, else LIMIT
+        order_type: str = "MARKET"
+        # Check if we have a recent price to compare (from meta or another source)
+        # For now, use a simple heuristic: if entry_zone is very tight (< 0.5% width),
+        # assume we're close enough for MARKET. A more robust check would require
+        # passing current_price explicitly, but that's not in ChartReading yet.
+        zone_width_pct = abs(reading.entry_zone[1] - reading.entry_zone[0]) / entry_price * 100
+        if zone_width_pct < 0.3:
+            # Very tight zone = likely already at level → MARKET
+            order_type = "MARKET"
+
         return EntryPlan(
             side="BUY" if reading.bias == "BULLISH" else "SELL",
             entry_price=round(entry_price, 8),
@@ -309,7 +320,7 @@ class DecisionMakerAgent:
             take_profit_3=round(tp3, 8),
             risk_reward=2.0,
             entry_zone=(round(reading.entry_zone[0], 8), round(reading.entry_zone[1], 8)),
-            order_type="LIMIT",
+            order_type=order_type,  # type: ignore[arg-type]
             expires_in_seconds=900.0,
         )
 

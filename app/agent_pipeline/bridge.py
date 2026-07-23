@@ -201,12 +201,23 @@ def run_pipeline_bridge(
         result = coordinator.process_entry_candidate(
             candidate, htf_candles=htf, mtf_candles=mtf, ltf_candles=ltf,
         )
-        entries.append({
+        entry_item = {
             "symbol": candidate.symbol,
             "scanner_confidence": candidate.confidence,
             "result": result.to_dict(),
-        })
+        }
+        entries.append(entry_item)
         scanned += 1
+        
+        # Publish realtime event for immediate UI update
+        from app.events.publisher import publish
+        publish({
+            "event_type": "entry_candidate_processed",
+            "symbol": candidate.symbol,
+            "scanner_confidence": candidate.confidence,
+            "result": result.to_dict(),
+            "timestamp": result.to_dict().get("timestamp") or "",
+        })
 
     # Monitor open positions.
     monitor: list[dict[str, Any]] = []

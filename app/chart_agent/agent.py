@@ -754,49 +754,80 @@ class ChartReaderAgent:
         )
 
         # 12. Determine suggested entry zone and invalidation
+        # Collect all candidate zones from multiple sources, then pick nearest to price.
         entry_zone: tuple[float, float] | None = None
         invalidation: float | None = None
-
-        # Use liquidity_sr if it has a clear signal
-        if liq_signal.meta.get("entry") and liq_signal.meta.get("stop_loss"):
-            entry_price = liq_signal.meta["entry"]
-            sl = liq_signal.meta["stop_loss"]
-            entry_zone = (min(entry_price, sl), max(entry_price, sl))
-            invalidation = sl
-        elif obs:
-            # Use nearest fresh OB as entry zone
-            fresh_obs = [ob for ob in obs if not ob.mitigated]
-            if fresh_obs:
-                nearest = fresh_obs[-1]
-                entry_zone = (nearest.bottom, nearest.top)
-                invalidation = (
-                    nearest.bottom * 0.998 if nearest.direction == "BULLISH"
-                    else nearest.top * 1.002
-                )
-
-        # Support/resistance fallback: when no liquidity/OB zone exists, build
-        # a narrow ATR-like zone around the nearest directional key level.
-        if entry_zone is None and key_levels and ltf_candles:
+        
+        if not ltf_candles:
+            pass  # skip zone selection if no price reference
+        else:
             current_price = float(ltf_candles[-1].close)
-            directional = [
-                level for level in key_levels
-                if (bias == "BULLISH" and level.kind == "support" and level.price <= current_price)
-                or (bias == "BEARISH" and level.kind == "resistance" and level.price >= current_price)
-            ]
-            if directional:
-                nearest_level = min(directional, key=lambda level: abs(level.price - current_price))
-                width = max(abs(current_price - nearest_level.price) * 0.15, current_price * 0.001)
-                entry_zone = (nearest_level.price - width, nearest_level.price + width)
-                invalidation = (
-                    entry_zone[0] - width if bias == "BULLISH"
-                    else entry_zone[1] + width
-                )
+            candidates: list[tuple[tuple[float, float], float, str]] = []  # (zone, inval, source)
+
+            # Candidate 1: liquidity_sr
+            if liq_signal.meta.get("entry") and liq_signal.meta.get("stop_loss"):
+                entry_price = liq_signal.meta["entry"]
+                sl = liq_signal.meta["stop_loss"]
+                zone = (min(entry_price, sl), max(entry_price, sl))
+                candidates.append((zone, sl, "liquidity_sr"))
+
+            # Candidate 2: fresh order blocks
+            if obs:
+                fresh_obs = [ob for ob in obs if not ob.mitigated]
+                for ob in fresh_obs:
+                    # Filter by bias direction
+                    if (bias == "BULLISH" and ob.direction == "BULLISH" and ob.top <= current_price) or \
+                       (bias == "BEARISH" and ob.direction == "BEARISH" and ob.bottom >= current_price):
+                        zone = (ob.bottom, ob.top)
+                        inval = ob.bottom * 0.998 if ob.direction == "BULLISH" else ob.top * 1.002
+                        candidates.append((zone, inval, f"order_block_{ob.direction}"))
+
+            # Candidate 3: key levels (S/R)
+            if key_levels:
+                directional = [
+                    level for level in key_levels
+                    if (bias == "BULLISH" and level.kind == "support" and level.price <= current_price)
+                    or (bias == "BEARISH" and level.kind == "resistance" and level.price >= current_price)
+                ]
+                for level in directional:
+                    width = max(abs(current_price - level.price) * 0.15, current_price * 0.001)
+                    zone = (level.price - width, level.price + width)
+                    inval = zone[0] - width if bias == "BULLISH" else zone[1] + width
+                    candidates.append((zone, inval, f"key_level_{level.kind}"))
+
+            # Rank by distance to current price, pick nearest
+            if candidates:
+                def zone_distance(item):
+                    z, _, _ = item
+                    mid = (z[0] + z[1]) / 2
+                    return abs(mid - current_price)
+                
+                candidates.sort(key=zone_distance)
+                best = candidates[0]
+                entry_zone, invalidation, source = best
+                
+                # Apply max distance gate: skip if zone > 2% away
+                zone_mid = (entry_zone[0] + entry_zone[1]) / 2
+                distance_pct = abs(zone_mid - current_price) / current_price * 100
+                
+                if distance_pct > 2.0:
+                    # Too far — clear zone to trigger SKIP later
+                    entry_zone = None
+                    invalidation = None
 
         # Collect reasons
         reasons: list[str] = []
         for sig in all_signals:
             if sig.confidence >= 50:
                 reasons.append(f"{sig.technique}:{sig.bias}")
+        
+        # Add zone selection reason if we picked one
+        if entry_zone is not None and ltf_candles:
+            current_price = float(ltf_candles[-1].close)
+            zone_mid = (entry_zone[0] + entry_zone[1]) / 2
+            distance_pct = abs(zone_mid - current_price) / current_price * 100
+            # Source stored earlier would need separate tracking; for now just note distance
+            reasons.append(f"entry_zone_dist={distance_pct:.2f}%")
 
         return ChartReading(
             symbol=symbol,

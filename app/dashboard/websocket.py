@@ -91,6 +91,13 @@ class DashboardEventHub:
         if self._loop and self._queue:
             try:
                 self._loop.call_soon_threadsafe(self._enqueue_latest, message)
+                # Broadcast entry_candidate_processed with dedicated type for realtime UI
+                if payload.get("event_type") == "entry_candidate_processed":
+                    realtime_msg = {
+                        "type": "entry_candidate_processed",
+                        "payload": payload,
+                    }
+                    self._loop.call_soon_threadsafe(self._enqueue_latest, realtime_msg)
             except RuntimeError:
                 logger.exception("Dashboard websocket event loop is unavailable")
 
@@ -180,22 +187,23 @@ class DashboardEventHub:
                 logger.exception("Realtime price stream sync failed")
 
     def _open_position_symbols(self) -> list[str]:
-        # Pemeriksaan ini berjalan tiap 10 detik dan hanya membutuhkan posisi;
-        # jangan ikut membangun market, analytics, health, dan backtest snapshot.
+        # Open positions + pending limit orders (Harga Kini realtime for WAIT rows).
         paper = dashboard_service.paper()
-        positions = paper.get("open_positions", []) if isinstance(paper, dict) else []
-        if not isinstance(positions, list):
+        if not isinstance(paper, dict):
             return []
         symbols: list[str] = []
         seen: set[str] = set()
-        for position in positions:
-            if not isinstance(position, dict):
+        for bucket in (paper.get("open_positions"), paper.get("pending_orders")):
+            if not isinstance(bucket, list):
                 continue
-            symbol = str(position.get("symbol") or "").strip().upper().replace("-", "/")
-            if not symbol or symbol in seen:
-                continue
-            seen.add(symbol)
-            symbols.append(symbol)
+            for row in bucket:
+                if not isinstance(row, dict):
+                    continue
+                symbol = str(row.get("symbol") or "").strip().upper().replace("-", "/")
+                if not symbol or symbol in seen:
+                    continue
+                seen.add(symbol)
+                symbols.append(symbol)
         return symbols
 
     def _restart_price_stream(self, symbols: list[str]) -> None:

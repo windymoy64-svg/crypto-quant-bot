@@ -686,3 +686,81 @@ def _perform_bitunix_test(
         "testnet": testnet,
     }
 
+
+# ---------------------------------------------------------------------------
+# Bot service restart — used by Settings > Restart Bot button.
+# Runs ``systemctl restart`` via subprocess so operator tidak perlu SSH.
+# A file lock (atomic create) mencegah double-klik trigger restart ganda.
+# ---------------------------------------------------------------------------
+import os
+import tempfile
+
+_RESTART_LOCK = os.path.join(tempfile.gettempdir(), "crypto-quant-bot-restart.lock")
+
+
+@router.post("/settings/restart")
+def restart_bot_services() -> dict[str, Any]:
+    """Restart both systemd services (realtime + api) without spawning doubles.
+
+    Mengandalkan ``systemctl restart`` yang idempotent: jika service sedang
+    berjalan, ia direstart; jika berhenti, ia di-start. Tidak ada duplikat
+    proses karena systemd menjamin satu instance per unit.
+    """
+    import subprocess
+
+    # Lock: cegah double-klik. Auto-expire 60s kalau process crash & lock nyangkut.
+    import time
+    try:
+        if os.path.exists(_RESTART_LOCK):
+            age = time.time() - os.path.getmtime(_RESTART_LOCK)
+            if age > 60:
+                os.unlink(_RESTART_LOCK)
+        fd = os.open(_RESTART_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+    except FileExistsError:
+        return {
+            "ok": False,
+            "error": "restart_already_in_progress",
+            "hint": "Tunggu restart sebelumnya selesai (~5-10 detik).",
+        }
+
+    # ponytail: API process akan terbunuh saat crypto-quant-bot-api restart.
+    # Jadi restart crypto-quant-bot dulu, LALU api terakhir (request ini).
+    results: dict[str, str] = {}
+    try:
+        for service in ("crypto-quant-bot.service",):
+            try:
+                proc = subprocess.run(
+                    ["systemctl", "restart", service],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                results[service] = "ok" if proc.returncode == 0 else (
+                    f"error: {proc.stderr.strip() or proc.stdout.strip() or 'unknown'}"
+                )
+            except FileNotFoundError:
+                results[service] = "error: systemctl not found"
+            except subprocess.TimeoutExpired:
+                results[service] = "error: timeout"
+
+        # Restart api service terpisah (process ini akan terbunuh).
+        try:
+            subprocess.Popen(
+                ["systemctl", "restart", "crypto-quant-bot-api.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            results["crypto-quant-bot-api.service"] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            results["crypto-quant-bot-api.service"] = f"error: {exc}"
+
+        ok = all(v == "ok" for v in results.values())
+        return {"ok": ok, "services": results}
+    finally:
+        try:
+            os.unlink(_RESTART_LOCK)
+        except OSError:
+            pass
+

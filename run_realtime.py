@@ -1036,7 +1036,7 @@ def run_once(
                 zone = plan.get("entry_zone") or [plan.get("entry_price"), plan.get("entry_price")]
                 current = current_by_symbol.get(symbol, float(plan.get("entry_price", 0.0)))
                 low, high = sorted((float(zone[0]), float(zone[1])))
-                mode = "MARKET" if low <= current <= high else "LIMIT"
+                mode = "MARKET"
                 agent_entry_signals.append({
                     "symbol": symbol,
                     "action": "BUY" if action == "ENTRY_BUY" else "SELL",
