@@ -4,6 +4,17 @@ Starter project untuk platform trading crypto deterministik berbasis rule engine
 
 Proyek ini sengaja belum melakukan live trading. Tahap awal dibuat aman: semua sinyal dihitung dari data contoh, lalu dibaca oleh paper broker. Live execution baru ditambahkan setelah rule, risk, dan backtest stabil.
 
+## Status pengerjaan (baca dulu)
+
+**→ Lihat [`STATUS.md`](./STATUS.md)** untuk:
+
+- sampai mana pengerjaan terakhir
+- file penting yang baru diubah
+- cara update status di GitHub
+- follow-up yang masih terbuka
+
+Update `STATUS.md` setiap selesai batch kerja agar programmer berikutnya tidak menebak-nebak.
+
 ## Cara menjalankan
 
 ```powershell
