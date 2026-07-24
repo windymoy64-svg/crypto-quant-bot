@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import socket
-from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from urllib.error import URLError
 from urllib.parse import urlencode
@@ -10,36 +9,6 @@ from urllib.request import Request, urlopen
 
 from app.core.models import Candle
 from app.exchange.base import ExchangeClient
-
-
-@dataclass(frozen=True)
-class TickerSnapshot:
-    """24h ticker fields used for universe prefilter and market context."""
-
-    symbol: str
-    market_symbol: str
-    last_price: float
-    change_24h_pct: float
-    vol_coin_24h: float
-    vol_usdt_24h: float
-    trade_count_24h: int = 0
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-    def liquidity_quality(
-        self,
-        *,
-        high_usdt: float = 50_000_000.0,
-        med_usdt: float = 10_000_000.0,
-    ) -> str:
-        if self.vol_usdt_24h >= high_usdt:
-            return "high"
-        if self.vol_usdt_24h >= med_usdt:
-            return "med"
-        if self.vol_usdt_24h > 0:
-            return "low"
-        return "none"
 
 
 class PublicHttpExchangeClient(ExchangeClient):
@@ -64,7 +33,11 @@ class PublicHttpExchangeClient(ExchangeClient):
         only_trading: bool = True,
         spot_only: bool = True,
     ) -> list[str]:
-        """Ambil semua simbol dari Binance secara dinamis."""
+        """Ambil semua simbol dari Binance secara dinamis.
+
+        Coin baru otomatis muncul, coin yang delisting otomatis hilang,
+        karena sumbernya langsung exchangeInfo.
+        """
         if self.exchange_id != "binance":
             raise ValueError(f"fetch_all_symbols belum didukung untuk {self.exchange_id}")
 
@@ -82,20 +55,21 @@ class PublicHttpExchangeClient(ExchangeClient):
             if base and quote:
                 symbols.append(f"{base}/{quote}")
         return sorted(symbols)
-
-    def fetch_24h_ticker_snapshots(
+    
+    def fetch_top_symbols_by_volume(
         self,
         *,
         quote_asset: str = "USDT",
+        top_n: int = 100,
         only_trading: bool = True,
-        min_quote_volume_usdt: float = 0.0,
-        excluded_base_assets: set[str] | frozenset[str] | None = None,
-    ) -> list[TickerSnapshot]:
-        """Ambil snapshot 24h (price, % change, dual volume) untuk prefilter."""
+    ) -> list[str]:
+        """Ambil top-N simbol paling likuid berdasarkan quoteVolume 24h.
+
+        Ini prefilter penting: menyaring coin dead/ilikuid, dan menghemat
+        jumlah request klines saat scanning.
+        """
         if self.exchange_id != "binance":
-            raise ValueError(
-                f"fetch_24h_ticker_snapshots belum didukung untuk {self.exchange_id}"
-            )
+            raise ValueError(f"fetch_top_symbols_by_volume belum didukung untuk {self.exchange_id}")
 
         info = self._get_json("https://api.binance.com/api/v3/exchangeInfo", {})
         allowed: set[str] = set()
@@ -106,146 +80,25 @@ class PublicHttpExchangeClient(ExchangeClient):
                 continue
             if not row.get("isSpotTradingAllowed", False):
                 continue
-            allowed.add(str(row.get("symbol", "")))
-
-        excluded = {
-            str(value).strip().upper()
-            for value in (excluded_base_assets or set())
-            if str(value).strip()
-        }
+            allowed.add(row.get("symbol", ""))
 
         tickers = self._get_json("https://api.binance.com/api/v3/ticker/24hr", {})
-        snapshots: list[TickerSnapshot] = []
-        for row in tickers if isinstance(tickers, list) else []:
-            market_symbol = str(row.get("symbol", ""))
-            if market_symbol not in allowed:
-                continue
-            if not market_symbol.endswith(quote_asset):
-                continue
-            base = market_symbol[: -len(quote_asset)]
-            if base.upper() in excluded:
+        rows: list[tuple[str, str, float]] = []
+        for t in tickers if isinstance(tickers, list) else []:
+            sym = t.get("symbol", "")
+            if sym not in allowed:
                 continue
             try:
-                quote_vol = float(row.get("quoteVolume") or 0)
+                quote_vol = float(t.get("quoteVolume") or 0)
             except (TypeError, ValueError):
                 quote_vol = 0.0
             if quote_vol <= 0:
                 continue
-            if min_quote_volume_usdt > 0 and quote_vol < min_quote_volume_usdt:
-                continue
-            try:
-                last_price = float(row.get("lastPrice") or 0)
-            except (TypeError, ValueError):
-                last_price = 0.0
-            try:
-                change_pct = float(row.get("priceChangePercent") or 0)
-            except (TypeError, ValueError):
-                change_pct = 0.0
-            try:
-                vol_coin = float(row.get("volume") or 0)
-            except (TypeError, ValueError):
-                vol_coin = 0.0
-            try:
-                trade_count = int(float(row.get("count") or 0))
-            except (TypeError, ValueError):
-                trade_count = 0
+            base = sym[: -len(quote_asset)] if sym.endswith(quote_asset) else sym
+            rows.append((f"{base}/{quote_asset}", sym, quote_vol))
 
-            snapshots.append(
-                TickerSnapshot(
-                    symbol=f"{base}/{quote_asset}",
-                    market_symbol=market_symbol,
-                    last_price=last_price,
-                    change_24h_pct=change_pct,
-                    vol_coin_24h=vol_coin,
-                    vol_usdt_24h=quote_vol,
-                    trade_count_24h=trade_count,
-                )
-            )
-        return snapshots
-
-
-    def prefilter_symbols(
-        self,
-        *,
-        quote_asset: str = "USDT",
-        top_n: int = 100,
-        only_trading: bool = True,
-        min_quote_volume_usdt: float = 0.0,
-        min_move_pct: float = 0.0,
-        mode: str = "top_volume",
-        momentum_sort: str = "quote_volume",
-        excluded_base_assets: set[str] | frozenset[str] | None = None,
-    ) -> tuple[list[str], list[TickerSnapshot], dict[str, TickerSnapshot]]:
-        """Prefilter universe dari ticker 24h.
-
-        Modes:
-          - top_volume: sort quoteVolume desc
-          - top_gainer: sort change_24h_pct desc
-          - top_loser: sort change_24h_pct asc
-          - momentum_liquid: |change| >= min_move_pct, then sort by momentum_sort
-        """
-        snapshots = self.fetch_24h_ticker_snapshots(
-            quote_asset=quote_asset,
-            only_trading=only_trading,
-            min_quote_volume_usdt=min_quote_volume_usdt,
-            excluded_base_assets=excluded_base_assets,
-        )
-        if not snapshots:
-            return [], [], {}
-
-        mode_key = str(mode or "top_volume").strip().lower()
-        rows = list(snapshots)
-
-        if mode_key == "top_gainer":
-            rows.sort(key=lambda item: item.change_24h_pct, reverse=True)
-        elif mode_key == "top_loser":
-            rows.sort(key=lambda item: item.change_24h_pct)
-        elif mode_key == "momentum_liquid":
-            move_floor = float(min_move_pct or 0.0)
-            sort_key = str(momentum_sort or "quote_volume").strip().lower()
-
-            def _sort_key(item: TickerSnapshot) -> float:
-                if sort_key == "abs_change":
-                    return abs(item.change_24h_pct)
-                return item.vol_usdt_24h
-
-            # Prefer movers, then pad with liquid non-movers so top_n stays full.
-            if move_floor > 0:
-                movers = [item for item in rows if abs(item.change_24h_pct) >= move_floor]
-                rest = [item for item in rows if abs(item.change_24h_pct) < move_floor]
-                movers.sort(key=_sort_key, reverse=True)
-                rest.sort(key=_sort_key, reverse=True)
-                rows = movers + rest
-            else:
-                rows.sort(key=_sort_key, reverse=True)
-        else:
-            rows.sort(key=lambda item: item.vol_usdt_24h, reverse=True)
-
-        selected = rows[: max(0, int(top_n))] if top_n > 0 else rows
-        symbols = [item.symbol for item in selected]
-        by_symbol = {item.symbol: item for item in selected}
-        return symbols, snapshots, by_symbol
-
-    def fetch_top_symbols_by_volume(
-        self,
-        *,
-        quote_asset: str = "USDT",
-        top_n: int = 100,
-        only_trading: bool = True,
-        min_quote_volume_usdt: float = 0.0,
-        excluded_base_assets: set[str] | frozenset[str] | None = None,
-    ) -> list[str]:
-        """Ambil top-N simbol paling likuid berdasarkan quoteVolume 24h."""
-        symbols, _, _ = self.prefilter_symbols(
-            quote_asset=quote_asset,
-            top_n=top_n,
-            only_trading=only_trading,
-            min_quote_volume_usdt=min_quote_volume_usdt,
-            mode="top_volume",
-            excluded_base_assets=excluded_base_assets,
-        )
-        return symbols
-
+        rows.sort(key=lambda r: r[2], reverse=True)
+        return [r[0] for r in rows[:top_n]]
 
     def fetch_ticker(self, symbol: str) -> dict[str, float | str]:
         if self.exchange_id == "binance":
@@ -260,8 +113,6 @@ class PublicHttpExchangeClient(ExchangeClient):
                 "ask": float(data.get("askPrice") or 0),
                 "last": float(data.get("lastPrice") or 0),
                 "volume": float(data.get("volume") or 0),
-                "change_24h_pct": float(data.get("priceChangePercent") or 0),
-                "quote_volume": float(data.get("quoteVolume") or 0),
             }
         if self.exchange_id == "okx":
             market_symbol = self._okx_symbol(symbol)
@@ -311,7 +162,6 @@ class PublicHttpExchangeClient(ExchangeClient):
             )
             for row in rows
         ]
-
 
     def _fetch_bitunix_candles(self, symbol: str, timeframe: str, limit: int) -> list[Candle]:
         payload = self._get_json(
@@ -383,6 +233,7 @@ class PublicHttpExchangeClient(ExchangeClient):
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 return json.loads(response.read().decode("utf-8"))
         except (socket.timeout, URLError) as exc:
+            # Return empty dict on timeout - caller handles it
             print(f"API timeout/error {url}: {exc}", flush=True)
             return {}
 
@@ -394,4 +245,3 @@ class PublicHttpExchangeClient(ExchangeClient):
 
     def _okx_symbol(self, symbol: str) -> str:
         return symbol.replace("/", "-").upper()
-

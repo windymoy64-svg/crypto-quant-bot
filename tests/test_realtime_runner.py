@@ -102,7 +102,7 @@ def test_run_once_reuses_market_data_service_cache(tmp_path: Path) -> None:
         "latest_output": str(tmp_path / "latest.json"),
         "history_output": str(tmp_path / "history.jsonl"),
     }
-    rankings = Mock(long=[], short=[], tracked=[])
+    rankings = Mock(long=[], short=[], tracked=[], market_breadth={}, move_alerts=[])
     cache: dict = {}
 
     with patch("run_realtime.MarketDataService") as service_type, patch(

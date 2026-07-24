@@ -179,22 +179,6 @@ class DashboardService:
 
         symbols = self.symbols()
 
-        market_breadth = (
-            latest.get("market_breadth", {})
-            if isinstance(latest, dict)
-            else {}
-        )
-        if not isinstance(market_breadth, dict):
-            market_breadth = {}
-
-        move_alerts = (
-            latest.get("move_alerts", [])
-            if isinstance(latest, dict)
-            else []
-        )
-        if not isinstance(move_alerts, list):
-            move_alerts = []
-
         return {
             "timestamp": (
                 latest.get("timestamp")
@@ -207,8 +191,6 @@ class DashboardService:
             "short_count": len(short_signals),
             "tracked_signals": tracked_signals,
             "tracked_count": len(tracked_signals),
-            "market_breadth": market_breadth,
-            "move_alerts": move_alerts,
             "symbols": symbols["symbols"],
             "symbol_count": symbols["count"],
             "configured_symbols": symbols["configured_symbols"],

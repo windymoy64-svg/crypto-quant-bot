@@ -13,7 +13,45 @@
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="stylesheet" href="/static/dashboard.css?v={{ asset_version }}" />
-  </head>
+              <style id="scanner-terminal-critical">
+      .scanner-layout{display:grid!important;grid-template-columns:minmax(0,1fr) 300px!important;gap:14px!important}
+      .scanner-main{min-width:0;overflow:visible!important}
+      .scanner-table-head{display:none!important}
+      .scanner-terminal .signal-rows{display:flex!important;flex-direction:column!important;gap:10px!important;margin-top:0!important;max-height:none!important;overflow:visible!important}
+      .scanner-terminal .st-row,.st-row{display:flex!important;flex-direction:column!important;gap:10px!important;padding:14px!important;border:1px solid var(--border);border-left:3px solid transparent;border-radius:16px;background:var(--bg-2);box-sizing:border-box}
+      .st-row.long{border-left-color:rgba(34,197,94,.55)}.st-row.short{border-left-color:rgba(244,63,94,.55)}
+      .st-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+      .st-pair{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0}
+      .st-sym{color:var(--txt);font-size:14px;font-weight:800;white-space:nowrap}
+      .st-dir{width:fit-content;padding:3px 7px;border-radius:6px;font-size:9px;font-weight:800;letter-spacing:.04em}
+      .st-dir.long{color:var(--green);background:var(--green-bg);border:1px solid var(--green-br)}
+      .st-dir.short{color:var(--red);background:var(--red-bg);border:1px solid var(--red-br)}
+      .st-conf{text-align:right;min-width:64px}
+      .st-conf strong{display:block;color:var(--txt);font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1}
+      .st-conf small{display:block;margin-top:3px;color:var(--txt-mute);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+      .st-body{display:flex!important;align-items:flex-start;justify-content:space-between;gap:12px}
+      .st-metrics{flex:1 1 auto;min-width:0;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px 16px}
+      .st-metric{min-width:0;color:var(--txt);font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+      .st-metric::before{content:attr(data-label);display:block;margin-bottom:2px;color:var(--txt-mute);font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+      .st-metric.pos{color:var(--green)}.st-metric.neg{color:var(--red)}
+      .st-metric.liq-high{color:var(--green)}.st-metric.liq-med{color:var(--amber,#f59e0b)}.st-metric.liq-low{color:var(--red)}
+      .st-status{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:5px;min-width:96px;padding-top:2px}
+      .st-status .sig-reason{justify-content:flex-end}
+      .st-status .sig-reason-ok{text-align:right;font-size:10px}
+      .st-row .sig-badge{white-space:nowrap}
+      .scanner-alerts-panel{border:1px solid var(--border);border-radius:16px;background:var(--bg-2);padding:12px}
+      @media (max-width:1100px){
+        html,body{height:auto!important;min-height:100%!important;overflow-y:auto!important}
+        .app-shell,.terminal,.workspace.view-section[data-view-section="scanner"],.scanner-terminal,.scanner-main,#scanner{overflow:visible!important;max-height:none!important;height:auto!important}
+        .scanner-terminal .signal-rows,#signal-list{max-height:none!important;overflow:visible!important;touch-action:auto!important}
+        .view-section[data-view-section="scanner"]{padding-bottom:96px!important}
+        .scanner-layout{grid-template-columns:1fr!important}
+      }
+      @media (min-width:1101px){
+        .scanner-terminal .signal-rows{max-height:min(62vh,640px)!important;overflow-y:auto!important}
+      }
+    </style>
+</head>
   <body>
     <div class="app-shell">
       <aside id="sidebar" class="sidebar">
@@ -150,7 +188,7 @@
                     <span>Vol USDT</span>
                     <span>Liq</span>
                   </span>
-                  <span class="sth-right"><span>Status</span><span>Conf</span></span>
+                  <span class="sth-right">Status / Conf</span>
                 </div>
                 <div id="signal-list" class="signal-rows"></div>
               </div>
@@ -958,10 +996,7 @@
                         <div class="st-metric ${liqCls}" data-label="Liq"><span>${liq}</span></div>
                       </div>
                       <div class="st-status">
-                        <span class="st-field-label st-label-status">Status</span>
                         <span class="sig-badge ${actionClass}">${actionLabel}</span>
-                        <span class="st-conf-inline">${s.confidence.toFixed(1)}%</span>
-                        <span class="st-field-label st-label-reason">Reason</span>
                         ${reason}
                       </div>
                     </div>

@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.dashboard.services import dashboard_service, utc_now_iso
+from app.dashboard.routes.multi_portfolio import multi_portfolio
 from app.dashboard.routes.agent import synchronized_snapshot
 from app.events.subscriber import subscribe
 from app.exchange.binance.stream import BinanceStreamCallbacks
@@ -187,23 +188,36 @@ class DashboardEventHub:
                 logger.exception("Realtime price stream sync failed")
 
     def _open_position_symbols(self) -> list[str]:
-        # Open positions + pending limit orders (Harga Kini realtime for WAIT rows).
-        paper = dashboard_service.paper()
-        if not isinstance(paper, dict):
-            return []
+        """Symbols that need live price ticks (paper + multi-portfolio)."""
         symbols: list[str] = []
         seen: set[str] = set()
-        for bucket in (paper.get("open_positions"), paper.get("pending_orders")):
-            if not isinstance(bucket, list):
-                continue
-            for row in bucket:
-                if not isinstance(row, dict):
+
+        def _add(raw: object) -> None:
+            symbol = str(raw or "").strip().upper().replace("-", "/")
+            if not symbol or symbol in seen:
+                return
+            seen.add(symbol)
+            symbols.append(symbol)
+
+        paper = dashboard_service.paper()
+        if isinstance(paper, dict):
+            for bucket in (paper.get("open_positions"), paper.get("pending_orders")):
+                if not isinstance(bucket, list):
                     continue
-                symbol = str(row.get("symbol") or "").strip().upper().replace("-", "/")
-                if not symbol or symbol in seen:
-                    continue
-                seen.add(symbol)
-                symbols.append(symbol)
+                for row in bucket:
+                    if isinstance(row, dict):
+                        _add(row.get("symbol"))
+
+        # Real / multi-account positions (same source as Overview P&L Stream).
+        try:
+            multi = multi_portfolio()
+        except Exception:
+            multi = None
+        if isinstance(multi, dict):
+            for row in multi.get("positions") or []:
+                if isinstance(row, dict):
+                    _add(row.get("symbol"))
+
         return symbols
 
     def _restart_price_stream(self, symbols: list[str]) -> None:

@@ -349,8 +349,6 @@ def write_scan_outputs(
     history_output: str,
     paper: dict[str, object] | None = None,
     tracked_results: list[dict[str, object]] | None = None,
-    market_breadth: dict[str, object] | None = None,
-    move_alerts: list[dict[str, object]] | None = None,
 ) -> None:
     now = datetime.now(tz=UTC).isoformat()
     payload = {
@@ -360,8 +358,6 @@ def write_scan_outputs(
         # Simbol posisi terbuka yang keluar dari top N tetap dikirim ke
         # dashboard agar harganya ikut realtime setiap siklus scan.
         "tracked_signals": tracked_results or [],
-        "market_breadth": market_breadth or {},
-        "move_alerts": move_alerts or [],
     }
     if paper is not None:
         payload["paper"] = paper
@@ -950,16 +946,6 @@ def run_once(
         history_output,
         paper=paper,
         tracked_results=tracked_results,
-        market_breadth=(
-            rankings.market_breadth
-            if isinstance(getattr(rankings, "market_breadth", None), dict)
-            else {}
-        ),
-        move_alerts=(
-            rankings.move_alerts
-            if isinstance(getattr(rankings, "move_alerts", None), list)
-            else []
-        ),
     )
 
     # --- Multi-agent pipeline bridge (advisory, off by default) ---

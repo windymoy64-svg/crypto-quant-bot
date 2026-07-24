@@ -90,12 +90,42 @@ def _scanner_action(raw_item: dict[str, Any]) -> Literal["BUY", "SELL", "WATCH",
 
 
 def _to_candidate(raw_item: dict[str, Any]) -> ScannerCandidate:
+    """Map scanner row (long or short) into a pipeline candidate.
+
+    Short shadow rows store direction in ``short_action`` / ``short_confidence``
+    / ``short_failed_gates``. Prefer those when present so SHORT setups can
+    reach Entry Candidates the same way LONG BUY rows do.
+    """
+    short_action = str(raw_item.get("short_action") or "").upper()
+    long_action = str(raw_item.get("action") or "SKIP").upper()
+
+    if short_action in {"SELL", "BUY", "WATCH", "SKIP"} and long_action not in {"BUY", "SELL"}:
+        action_raw = {"SELL": "SELL", "BUY": "SELL"}.get(short_action, short_action)
+        conf = float(raw_item.get("short_confidence") or raw_item.get("confidence") or 0.0)
+        short_gates = raw_item.get("short_failed_gates")
+        gates = list(short_gates) if isinstance(short_gates, list) else list(raw_item.get("failed_gates") or [])
+    else:
+        action_raw = long_action
+        conf = float(raw_item.get("confidence") or 0.0)
+        gates = list(raw_item.get("failed_gates") or [])
+
+    # Prefer explicit short SELL when it is the stronger actionable side.
+    if short_action == "SELL":
+        short_conf = float(raw_item.get("short_confidence") or 0.0)
+        if long_action not in {"BUY", "SELL"} or short_conf >= conf:
+            action_raw = "SELL"
+            conf = short_conf if short_conf else conf
+            short_gates = raw_item.get("short_failed_gates")
+            if isinstance(short_gates, list):
+                gates = list(short_gates)
+
+    action = action_raw if action_raw in {"BUY", "SELL", "WATCH", "SKIP"} else "SKIP"
     return ScannerCandidate(
         symbol=str(raw_item.get("symbol", "")),
-        action=_scanner_action(raw_item),
-        confidence=float(raw_item.get("confidence", 0.0)),
-        failed_gates=[str(g) for g in raw_item.get("failed_gates", []) or []],
-        meta=raw_item.get("meta") or {},
+        action=cast(Literal["BUY", "SELL", "WATCH", "SKIP"], action),
+        confidence=conf,
+        failed_gates=[str(g) for g in gates],
+        meta=raw_item.get("meta") or raw_item.get("short_meta") or {},
     )
 
 

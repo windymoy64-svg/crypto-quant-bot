@@ -121,50 +121,12 @@
         </section>
 
         <section class="workspace view-section" data-view-section="scanner">
-          <article id="scanner" class="panel xwide scanner-terminal">
+          <article id="scanner" class="panel xwide">
             <div class="panel-head">
-              <div><p>Scanner</p><h2>Market Terminal</h2></div>
+              <div><p>Scanner</p><h2>Sinyal per Coin</h2></div>
               <span id="signal-list-count" class="pill">0 sinyal</span>
             </div>
-            <div id="scanner-breadth" class="scanner-breadth" aria-live="polite"></div>
-            <div class="scanner-toolbar">
-              <div class="scanner-tabs" id="scanner-tabs" role="tablist">
-                <button type="button" class="scan-tab active" data-scan-tab="all">All</button>
-                <button type="button" class="scan-tab" data-scan-tab="long">Long</button>
-                <button type="button" class="scan-tab" data-scan-tab="short">Short</button>
-              </div>
-              <div class="scanner-sort" id="scanner-sort">
-                <span class="scanner-sort-label">Sort</span>
-                <button type="button" class="scan-sort active" data-scan-sort="confidence">Score</button>
-                <button type="button" class="scan-sort" data-scan-sort="change">24H</button>
-                <button type="button" class="scan-sort" data-scan-sort="volume">Vol</button>
-              </div>
-            </div>
-            <div class="scanner-layout">
-              <div class="scanner-main">
-                <div class="scanner-table-head" aria-hidden="true">
-                  <span class="sth-pair">Pair</span>
-                  <span class="sth-metrics">
-                    <span>Price</span>
-                    <span>24H</span>
-                    <span>Vol USDT</span>
-                    <span>Liq</span>
-                  </span>
-                  <span class="sth-right"><span>Status</span><span>Conf</span></span>
-                </div>
-                <div id="signal-list" class="signal-rows"></div>
-              </div>
-              <aside class="scanner-alerts-panel" aria-label="Move alerts">
-                <div class="scanner-alerts-head">
-                  <div>
-                    <p>Watch</p>
-                    <h3>Move Alerts</h3>
-                  </div>
-                  <span id="move-alerts-count" class="pill">0</span>
-                </div>
-                <div id="move-alerts-list" class="move-alerts-list"></div>
-              </aside>
-            </div>
+            <div id="signal-list" class="signal-rows"></div>
           </article>
           <article id="events-card" class="panel"><div class="panel-head"><div><p>Event Bus</p><h2>Event Stream</h2></div><span id="toast" class="toast">Realtime ready</span></div><div id="events" class="events"></div></article>
         </section>
@@ -655,33 +617,6 @@
           function setText(id, val){ const n = document.getElementById(id); if(n) n.textContent = val; }
 
           // Panel LIVE — sinkron dengan POSISI TERBUKA (bukan trade tertutup)
-
-          // Scanner terminal controls (tab + sort) — re-render without full refresh.
-          if (!window.__scannerUiBound) {
-            window.__scannerUiBound = true;
-            document.addEventListener("click", (ev) => {
-              const tab = ev.target.closest("[data-scan-tab]");
-              const sort = ev.target.closest("[data-scan-sort]");
-              if (!tab && !sort) return;
-              if (!window.__scannerUi) window.__scannerUi = { tab: "all", sort: "confidence" };
-              if (tab) {
-                window.__scannerUi.tab = tab.getAttribute("data-scan-tab") || "all";
-                document.querySelectorAll(".scan-tab").forEach((el) => {
-                  el.classList.toggle("active", el === tab);
-                });
-              }
-              if (sort) {
-                window.__scannerUi.sort = sort.getAttribute("data-scan-sort") || "confidence";
-                document.querySelectorAll(".scan-sort").forEach((el) => {
-                  el.classList.toggle("active", el === sort);
-                });
-              }
-              if (typeof liveCache !== "undefined") {
-                renderStats(liveCache.market || {}, liveCache.paper || {}, liveCache.analytics || {});
-              }
-            });
-          }
-
           function renderStats(market, paper, analytics){
             const summaryBox = document.getElementById("signal-terminal");
             const summaryCount = document.getElementById("signal-terminal-count");
@@ -767,211 +702,111 @@
               `;
             }
 
-            // Scanner terminal: breadth header + score-first table + move alerts.
-            const breadthBox = document.getElementById("scanner-breadth");
-            const alertsBox = document.getElementById("move-alerts-list");
-            const alertsCount = document.getElementById("move-alerts-count");
-            if (!window.__scannerUi) {
-              window.__scannerUi = { tab: "all", sort: "confidence" };
-            }
-            const ui = window.__scannerUi;
-
-            const fmtPct = (v) => {
-              const n = Number(v);
-              if (!Number.isFinite(n)) return "—";
-              const sign = n > 0 ? "+" : "";
-              return sign + n.toFixed(2) + "%";
-            };
-            const fmtPrice = (v) => {
-              const n = Number(v);
-              if (!Number.isFinite(n) || n <= 0) return "—";
-              if (n >= 1000) return "$" + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
-              if (n >= 1) return "$" + n.toFixed(4);
-              if (n >= 0.01) return "$" + n.toFixed(5);
-              return "$" + n.toPrecision(4);
-            };
-            const fmtVol = (v) => {
-              const n = Number(v);
-              if (!Number.isFinite(n) || n <= 0) return "—";
-              if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
-              if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
-              if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
-              return n.toFixed(0);
-            };
-            const metaOf = (s) => (s && typeof s.meta === "object" && s.meta) || {};
-            const relTime = (ts) => {
-              if (!ts) return "just now";
-              const t = Date.parse(ts);
-              if (!Number.isFinite(t)) return "just now";
-              const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
-              if (sec < 60) return "less than a minute ago";
-              if (sec < 3600) return Math.floor(sec / 60) + "m ago";
-              return Math.floor(sec / 3600) + "h ago";
-            };
-
-
-            if (breadthBox) {
-              const b = market?.market_breadth || {};
-              const tickers = Number(b.tickers_count || 0);
-              const avg = Number(b.avg_change_24h);
-              const med = Number(b.median_change_24h);
-              const up = Number(b.up_count || 0);
-              const down = Number(b.down_count || 0);
-              const g = b.top_gainer || null;
-              const l = b.top_loser || null;
-              const avgCls = Number.isFinite(avg) ? (avg >= 0 ? "pos" : "neg") : "";
-              const has = tickers > 0 || up + down > 0;
-              breadthBox.innerHTML = has ? `
-                <div class="breadth-bar">
-                  <span class="breadth-live"><i></i> LIVE</span>
-                  <span class="breadth-chip"><em>Tickers</em><strong>${tickers || "—"}</strong></span>
-                  <span class="breadth-chip ${avgCls}"><em>Avg Δ</em><strong>${fmtPct(avg)}</strong></span>
-                  <span class="breadth-chip"><em>Median</em><strong>${fmtPct(med)}</strong></span>
-                  <span class="breadth-chip breadth-ud"><em>Breadth</em><strong><span class="pos">↑${up}</span> <span class="neg">↓${down}</span></strong></span>
-                  <span class="breadth-chip pos"><em>Top</em><strong>${g ? (g.symbol || "—").replace("/USDT","") + " " + fmtPct(g.change_24h_pct) : "—"}</strong></span>
-                  <span class="breadth-chip neg"><em>Loser</em><strong>${l ? (l.symbol || "—").replace("/USDT","") + " " + fmtPct(l.change_24h_pct) : "—"}</strong></span>
-                </div>` : `
-                <div class="breadth-bar breadth-empty">
-                  <span class="breadth-live dim"><i></i> SCAN</span>
-                  <span class="breadth-chip"><em>Context</em><strong>Menunggu data breadth cycle berikutnya</strong></span>
-                </div>`;
-            }
-
-            if (alertsBox) {
-              const alerts = Array.isArray(market?.move_alerts) ? market.move_alerts.slice() : [];
-              alerts.sort((a, b) => Math.abs(Number(b.change_24h_pct||0)) - Math.abs(Number(a.change_24h_pct||0)));
-              if (alertsCount) alertsCount.textContent = String(alerts.length);
-              alertsBox.innerHTML = alerts.length ? alerts.slice(0, 40).map(a => {
-                const ch = Number(a.change_24h_pct || 0);
-                const side = ch >= 0 ? "up" : "down";
-                const sym = String(a.symbol || "—");
-                return `<div class="move-alert ${side}">
-                  <div class="ma-top">
-                    <strong>${sym}</strong>
-                    <span class="ma-time">${relTime(a.timestamp)}</span>
-                  </div>
-                  <div class="ma-mid">
-                    <span class="ma-price">${fmtPrice(a.last_price)}</span>
-                    <span class="ma-chg ${side}">${fmtPct(ch)}</span>
-                  </div>
-                  <div class="ma-sub">Threshold crossed: ${Number(a.threshold||5)}% · Vol ${fmtVol(a.vol_usdt_24h)}</div>
-                </div>`;
-              }).join("") : `<div class="stream-empty">Belum ada move alert (≥ threshold).</div>`;
-            }
-
+            // Daftar per-coin (Scanner) — dari market.signals
+            // Daftar Scanner: ranking LONG dan SHORT.
             if (listBox) {
-              const longSignals = Array.isArray(market?.signals) ? market.signals : [];
-              const shortSignals = Array.isArray(market?.short_signals) ? market.short_signals : [];
+              const longSignals = Array.isArray(market?.signals)
+                ? market.signals
+                : [];
+              const shortSignals = Array.isArray(market?.short_signals)
+                ? market.short_signals
+                : [];
 
-              let scannerRows = [
-                ...longSignals.map(s => {
-                  const m = metaOf(s);
-                  return {
-                    symbol: s.symbol,
-                    direction: "LONG",
-                    action: String(s.action || "SKIP").toUpperCase(),
-                    confidence: Number(s.confidence || 0),
-                    failedGates: Array.isArray(s.failed_gates) ? s.failed_gates : [],
-                    price: Number(m.last_price_24h ?? s.entry ?? s.price ?? 0),
-                    change24h: Number(m.change_24h_pct),
-                    volUsdt: Number(m.vol_usdt_24h),
-                    liq: String(m.liquidity_quality || ""),
-                  };
-                }),
-                ...shortSignals.map(s => {
-                  const m = metaOf(s) || ((s.short_meta && typeof s.short_meta === "object") ? s.short_meta : {});
-                  return {
-                    symbol: s.symbol,
-                    direction: "SHORT",
-                    action: String(s.short_action || "SKIP").toUpperCase(),
-                    confidence: Number(s.short_confidence || 0),
-                    failedGates: Array.isArray(s.short_failed_gates) ? s.short_failed_gates : [],
-                    price: Number(m.last_price_24h ?? s.short_entry ?? s.entry ?? 0),
-                    change24h: Number(m.change_24h_pct),
-                    volUsdt: Number(m.vol_usdt_24h),
-                    liq: String(m.liquidity_quality || ""),
-                  };
-                }),
+              const scannerRows = [
+                ...longSignals.map(s => ({
+                  symbol: s.symbol,
+                  direction: "LONG",
+                  action: String(s.action || "SKIP").toUpperCase(),
+                  confidence: Number(s.confidence || 0),
+                  failedGates: Array.isArray(s.failed_gates)
+                    ? s.failed_gates
+                    : [],
+                  rawConfidence: s.raw_confidence,
+                })),
+                ...shortSignals.map(s => ({
+                  symbol: s.symbol,
+                  direction: "SHORT",
+                  action: String(
+                    s.short_action || "SKIP"
+                  ).toUpperCase(),
+                  confidence: Number(
+                    s.short_confidence || 0
+                  ),
+                  failedGates: Array.isArray(
+                    s.short_failed_gates
+                  )
+                    ? s.short_failed_gates
+                    : [],
+                  rawConfidence: null,
+                })),
               ];
 
-              if (ui.tab === "long") scannerRows = scannerRows.filter(r => r.direction === "LONG");
-              if (ui.tab === "short") scannerRows = scannerRows.filter(r => r.direction === "SHORT");
-
-              const sortKey = ui.sort || "confidence";
-              scannerRows.sort((a, b) => {
-                if (sortKey === "change") {
-                  const av = Number.isFinite(a.change24h) ? a.change24h : -Infinity;
-                  const bv = Number.isFinite(b.change24h) ? b.change24h : -Infinity;
-                  return bv - av;
-                }
-                if (sortKey === "volume") {
-                  const av = Number.isFinite(a.volUsdt) ? a.volUsdt : -1;
-                  const bv = Number.isFinite(b.volUsdt) ? b.volUsdt : -1;
-                  return bv - av;
-                }
-                return b.confidence - a.confidence;
-              });
+              // Ranking tertinggi ditampilkan lebih dahulu.
+              scannerRows.sort(
+                (a, b) => b.confidence - a.confidence
+              );
 
               if (listCount) {
-                listCount.textContent = longSignals.length + " long · " + shortSignals.length + " short";
+                listCount.textContent =
+                  longSignals.length +
+                  " long · " +
+                  shortSignals.length +
+                  " short";
               }
 
-
               const rows = scannerRows.map(s => {
-                const rawAction = String(s.action || "SKIP").toUpperCase();
-                const actionClass = rawAction === "BUY" ? "buy"
-                  : rawAction === "SELL" ? (s.direction === "SHORT" ? "short" : "buy")
-                  : rawAction === "WATCH" ? "watch"
-                  : "skip";
-                const actionLabel = s.direction === "SHORT"
-                  ? (rawAction === "SELL" ? "SHORT" : "SHORT " + rawAction)
-                  : (rawAction === "BUY" ? "LONG" : rawAction);
-                const ch = s.change24h;
-                const chCls = Number.isFinite(ch) ? (ch >= 0 ? "pos" : "neg") : "";
-                const liq = s.liq || "—";
-                const liqCls = liq === "high" ? "liq-high" : liq === "med" ? "liq-med" : liq === "low" ? "liq-low" : "";
+                const actionClass =
+                  s.direction === "SHORT"
+                    ? "short"
+                    : String(s.action).toLowerCase();
+
+                const actionLabel =
+                  s.direction === "SHORT"
+                    ? (
+                        s.action === "SELL"
+                          ? "SHORT"
+                          : "SHORT " + s.action
+                      )
+                    : (
+                        s.action === "BUY"
+                          ? "LONG"
+                          : s.action
+                      );
+
                 const reason = s.failedGates.length
-                  ? ('<div class="sig-reason">' +
+                  ? (
+                      '<div class="sig-reason">' +
                       s.failedGates.map(g =>
                         `<span class="sig-reason-chip">✕ ${String(g).replaceAll("_", " ")}</span>`
                       ).join("") +
-                    "</div>")
-                  : '<span class="sig-reason-ok">✓ gates ok</span>';
+                      "</div>"
+                    )
+                  : '<span class="sig-reason-ok">✓ semua gate lolos</span>';
 
-                                return `
-                  <div class="st-row ${s.direction.toLowerCase()}">
-                    <div class="st-top">
-                      <div class="st-pair">
-                        <span class="st-sym">${s.symbol || "-"}</span>
-                        <span class="st-dir ${s.direction.toLowerCase()}">${s.direction}</span>
+                return `
+                  <div class="signal-row ${s.direction.toLowerCase()}">
+                    <div class="sig-main">
+                      <div class="sig-title">
+                        <span class="sig-sym">${s.symbol || "-"}</span>
+                        <span class="sig-badge ${actionClass}">
+                          ${actionLabel}
+                        </span>
                       </div>
-                      <div class="st-conf" data-label="Conf">
-                        <strong>${s.confidence.toFixed(1)}%</strong>
-                        <small>conf</small>
-                      </div>
+
+                      ${reason}
                     </div>
-                    <div class="st-body">
-                      <div class="st-metrics">
-                        <div class="st-metric" data-label="Price"><span>${fmtPrice(s.price)}</span></div>
-                        <div class="st-metric ${chCls}" data-label="24H"><span>${fmtPct(ch)}</span></div>
-                        <div class="st-metric" data-label="Vol USDT"><span>${fmtVol(s.volUsdt)}</span></div>
-                        <div class="st-metric ${liqCls}" data-label="Liq"><span>${liq}</span></div>
-                      </div>
-                      <div class="st-status">
-                        <span class="st-field-label st-label-status">Status</span>
-                        <span class="sig-badge ${actionClass}">${actionLabel}</span>
-                        <span class="st-conf-inline">${s.confidence.toFixed(1)}%</span>
-                        <span class="st-field-label st-label-reason">Reason</span>
-                        ${reason}
-                      </div>
+
+                    <div class="sig-conf">
+                      ${s.confidence.toFixed(1)}%
+                      <small>${s.direction} confidence</small>
                     </div>
-                  </div>`;
+                  </div>
+                `;
               }).join("");
 
               listBox.innerHTML = rows ||
                 '<div class="stream-empty">Belum ada sinyal aktif.</div>';
             }
-
           }
 
           // KPI atas — Trade Hari Ini, Profit Hari Ini, Total Profit/Loss/Winrate (dari trade tertutup)
