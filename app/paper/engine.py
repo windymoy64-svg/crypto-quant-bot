@@ -42,7 +42,7 @@ class PaperEngineConfig:
     market_regime: str | None = None
     state_path: str = "logs/paper_state.json"
     events_path: str = "logs/paper_events.jsonl"
-    fallback_to_sample_data: bool = True
+    fallback_to_sample_data: bool = False  # FIXED: Production should not fall back to sample data
     maker_fee_rate: float = 0.0002
     taker_fee_rate: float = 0.001
     slippage_basis_points: float = 5.0
@@ -84,11 +84,11 @@ class PaperEngineConfig:
             max_fill_ratio=float(data.get("max_fill_ratio", 1.0)),
             min_fill_ratio=float(data.get("min_fill_ratio", 0.25)),
             risk_per_trade_percent=float(data.get("risk_per_trade_percent", 1.0)),
-            max_position_size_percent=float(data.get("max_position_size_percent", 95.0)),
+            max_position_size_percent=float(data.get("max_position_size_percent", 15.0)),
             max_exposure_percent=float(data.get("max_exposure_percent", 95.0)),
             max_open_positions=int(data.get("max_open_positions", 3)),
             max_daily_drawdown_percent=float(data.get("max_daily_drawdown_percent", 5.0)),
-            min_risk_reward=float(data.get("min_risk_reward", 1.2)),
+            min_risk_reward=float(data.get("min_risk_reward", 2.0)),
             min_atr_percent=float(data.get("min_atr_percent", 0.0)),
             max_atr_percent=float(data.get("max_atr_percent", 25.0)),
             realtime_timeframe=str(data.get("realtime_timeframe", "1m")),

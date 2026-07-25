@@ -73,13 +73,22 @@ class ScoreEngine:
         # --- Tahap 2: gate kualitas per kategori ---
         gate_status: dict[str, dict[str, float | bool]] = {}
         all_gates_passed = True
+        max_points_by_category: dict[str, float] = {}
+        for rule in self.rules:
+            cat = str(rule.get("category", "general"))
+            max_points_by_category[cat] = max_points_by_category.get(cat, 0.0) + float(rule["weight"])
+
         for category, gate in self.quality_gates.items():
-            actual = buckets.get(category, 0.0)
-            required = float(gate.get("min_score", 0))
-            passed = actual >= required
+            actual_raw = buckets.get(category, 0.0)
+            max_raw = max_points_by_category.get(category, 1.0)
+            actual_pct = (actual_raw / max_raw * 100) if max_raw > 0 else 0.0
+            required_pct = float(gate.get("min_score", 0))
+            passed = actual_pct >= required_pct
             gate_status[category] = {
-                "actual": round(actual, 2),
-                "required": required,
+                "actual_raw": round(actual_raw, 2),
+                "max_raw": round(max_raw, 2),
+                "actual_pct": round(actual_pct, 2),
+                "required_raw": required_pct,
                 "passed": passed,
             }
             if not passed:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.chart_agent.models import ChartReading
@@ -38,6 +38,9 @@ class PipelineResult:
     chart_reading: ChartReading | None
     decision: Decision | None
     execution: ExecutionReport | None
+    risk_approval: dict[str, Any] | None = None
+    learning_advisory: dict[str, Any] | None = None
+    scanner_chart_conflict: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -47,4 +50,7 @@ class PipelineResult:
             "chart_reading": self.chart_reading.to_dict() if self.chart_reading else None,
             "decision": self.decision.to_dict() if self.decision else None,
             "execution": self.execution.to_dict() if self.execution else None,
+            "risk_approval": self.risk_approval,
+            "learning_advisory": self.learning_advisory,
+            "scanner_chart_conflict": self.scanner_chart_conflict,
         }

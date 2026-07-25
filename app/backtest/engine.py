@@ -100,7 +100,7 @@ class HistoricalBacktestEngine:
             ),
             risk_settings=RiskSettings(
                 risk_per_trade_percent=config.risk_per_trade_percent,
-                max_position_size_percent=config.position_size_percent,
+                max_position_size_percent=config.max_position_size_percent,  # FIXED: Use max_position_size_percent, not position_size_percent
                 max_exposure_percent=config.max_exposure_percent,
                 max_open_positions=config.max_open_positions,
                 max_daily_drawdown_percent=config.max_daily_drawdown_percent,

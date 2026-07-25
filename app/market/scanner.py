@@ -233,6 +233,8 @@ class ScanRankings:
     market_breadth: dict[str, object] = field(default_factory=dict)
     move_alerts: list[dict[str, object]] = field(default_factory=list)
     ticker_meta: dict[str, dict[str, object]] = field(default_factory=dict)
+    long_actionable: list[ScanItem] = field(default_factory=list)
+    short_actionable: list[ScanItem] = field(default_factory=list)
 
     def __iter__(self):
         # Kompatibilitas opsional jika ada kode yang ingin membongkar dua hasil.
@@ -493,21 +495,41 @@ def scan_symbol_rankings(
         if not _is_excluded_entry_symbol(item.symbol, config)
     ]
 
+    ACTION_PRIORITY = {"BUY": 3, "SELL": 3, "WATCH": 2, "SKIP": 1, "DISABLED": 0}
+
     long_ranked = sorted(
         rankable_results,
-        key=lambda item: (item.score, item.confidence),
+        key=lambda item: (
+            ACTION_PRIORITY.get(item.action, 0),
+            item.confidence,
+            item.score,
+            float((item.meta or {}).get("rs_vs_market", 0.0) or 0.0),
+            float((item.meta or {}).get("vol_usdt_24h", 0.0) or 0.0),
+        ),
         reverse=True,
     )
     short_ranked = sorted(
         rankable_results,
-        key=lambda item: (item.short_score, item.short_confidence),
+        key=lambda item: (
+            ACTION_PRIORITY.get(item.short_action, 0),
+            item.short_confidence,
+            item.short_score,
+            -float((item.meta or {}).get("rs_vs_market", 0.0) or 0.0),
+            float((item.meta or {}).get("vol_usdt_24h", 0.0) or 0.0),
+        ),
         reverse=True,
     )
 
+    # Actionable = only directional signals (not SKIP)
+    long_actionable = [item for item in long_ranked if item.action in {"BUY", "WATCH"}]
+    short_actionable = [item for item in short_ranked if item.short_action in {"SELL", "WATCH"}]
+
     if long_top_n > 0:
         long_ranked = long_ranked[:long_top_n]
+        long_actionable = long_actionable[:long_top_n]
     if short_top_n > 0:
         short_ranked = short_ranked[:short_top_n]
+        short_actionable = short_actionable[:short_top_n]
 
     tracked_results = [
         item for item in all_results if item.symbol in tracked_set
@@ -520,6 +542,8 @@ def scan_symbol_rankings(
         market_breadth=market_breadth,
         move_alerts=move_alerts,
         ticker_meta=ticker_meta,
+        long_actionable=long_actionable,
+        short_actionable=short_actionable,
     )
 
 

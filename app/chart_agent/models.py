@@ -97,6 +97,7 @@ class BreakerBlock:
 # ---------------------------------------------------------------------------
 
 BiasDirection = Literal["BULLISH", "BEARISH", "NEUTRAL"]
+AnalysisStatus = Literal["OK", "INSUFFICIENT_DATA", "ERROR"]
 
 
 @dataclass(frozen=True)
@@ -109,11 +110,17 @@ class TechniqueSignal:
     weight: float  # importance in current regime
     reasons: list[str]
     meta: dict[str, Any] = field(default_factory=dict)
+    # ERROR means system/analysis failure — not a market NEUTRAL signal.
+    analysis_status: AnalysisStatus = "OK"
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["reasons"] = list(self.reasons)
         return data
+
+    @property
+    def eligible_for_confluence(self) -> bool:
+        return self.analysis_status == "OK"
 
 
 @dataclass(frozen=True)

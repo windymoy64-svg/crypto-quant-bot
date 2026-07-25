@@ -1,9 +1,7 @@
 """Bridge between the existing realtime scanner and the multi-agent coordinator.
 
 Runs the coordinator on qualified scanner candidates and open positions,
-writing results to an audit artifact. This module never mutates paper or
-live state — it produces an advisory JSON output that the operator can review
-before deciding to enable ``execute_decisions``.
+writing results to an audit artifact. Never mutates paper/live state by itself.
 """
 
 from __future__ import annotations
@@ -28,12 +26,17 @@ from app.market.data_service import MarketDataService
 class AgentPipelineRuntimeConfig:
     """Runtime configuration for the pipeline bridge.
 
-    The pipeline is disabled by default. When enabled, it still runs entirely
-    read-only unless ``execute_decisions`` is also true.
+    Live orders require ALL of:
+    - enabled
+    - execute_decisions
+    - allow_live_orders
+    - executor.live
+    - risk gate approval
     """
 
     enabled: bool = False
     execute_decisions: bool = False
+    allow_live_orders: bool = False
     min_scanner_confidence: float = 90.0
     min_hold_seconds: float = 300.0
     htf_timeframe: str = "4h"
@@ -52,6 +55,7 @@ class AgentPipelineRuntimeConfig:
         return cls(
             enabled=bool(data.get("enabled", False)),
             execute_decisions=bool(data.get("execute_decisions", False)),
+            allow_live_orders=bool(data.get("allow_live_orders", False)),
             min_scanner_confidence=float(data.get("min_scanner_confidence", 90.0)),
             min_hold_seconds=float(data.get("min_hold_seconds", 300.0)),
             htf_timeframe=str(data.get("htf_timeframe", "4h")),
@@ -66,68 +70,65 @@ class AgentPipelineRuntimeConfig:
         )
 
 
-def _candle_fetcher(
-    market_data: MarketDataService,
-    timeframe: str,
-    limit: int,
-):
+def _candle_fetcher(market_data: MarketDataService, timeframe: str, limit: int):
     def _fetch(symbol: str) -> list[Candle]:
         try:
-            loaded = market_data.fetch_ohlcv(
-                symbol=symbol, timeframe=timeframe, limit=limit
-            )
+            loaded = market_data.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
             return list(loaded.candles)
         except Exception:
             return []
     return _fetch
 
 
-def _scanner_action(raw_item: dict[str, Any]) -> Literal["BUY", "SELL", "WATCH", "SKIP"]:
-    action = str(raw_item.get("action", "SKIP")).upper()
-    if action not in {"BUY", "SELL", "WATCH", "SKIP"}:
-        return "SKIP"
-    return cast(Literal["BUY", "SELL", "WATCH", "SKIP"], action)
-
-
 def _to_candidate(raw_item: dict[str, Any]) -> ScannerCandidate:
-    """Map scanner row (long or short) into a pipeline candidate.
-
-    Short shadow rows store direction in ``short_action`` / ``short_confidence``
-    / ``short_failed_gates``. Prefer those when present so SHORT setups can
-    reach Entry Candidates the same way LONG BUY rows do.
-    """
     short_action = str(raw_item.get("short_action") or "").upper()
     long_action = str(raw_item.get("action") or "SKIP").upper()
-
+    meta: dict[str, Any] = dict(raw_item.get("meta") or raw_item.get("short_meta") or {})
+    action_raw = long_action
+    conf = float(raw_item.get("confidence") or 0.0)
+    gates = list(raw_item.get("failed_gates") or [])
+    source = "long"
     if short_action in {"SELL", "BUY", "WATCH", "SKIP"} and long_action not in {"BUY", "SELL"}:
-        action_raw = {"SELL": "SELL", "BUY": "SELL"}.get(short_action, short_action)
-        conf = float(raw_item.get("short_confidence") or raw_item.get("confidence") or 0.0)
+        conf = float(raw_item.get("short_confidence") or conf or 0.0)
         short_gates = raw_item.get("short_failed_gates")
-        gates = list(short_gates) if isinstance(short_gates, list) else list(raw_item.get("failed_gates") or [])
-    else:
-        action_raw = long_action
-        conf = float(raw_item.get("confidence") or 0.0)
-        gates = list(raw_item.get("failed_gates") or [])
-
-    # Prefer explicit short SELL when it is the stronger actionable side.
-    if short_action == "SELL":
-        short_conf = float(raw_item.get("short_confidence") or 0.0)
-        if long_action not in {"BUY", "SELL"} or short_conf >= conf:
+        gates = list(short_gates) if isinstance(short_gates, list) else gates
+        source = "short"
+        if short_action in {"SELL", "BUY"}:
             action_raw = "SELL"
-            conf = short_conf if short_conf else conf
-            short_gates = raw_item.get("short_failed_gates")
-            if isinstance(short_gates, list):
-                gates = list(short_gates)
-
+            meta["position_side"] = "SHORT"
+            meta["order_side"] = "SELL"
+            meta["short_action_raw"] = short_action
+            meta["intent"] = "OPEN"
+        else:
+            action_raw = short_action
+    else:
+        if short_action == "SELL":
+            short_conf = float(raw_item.get("short_confidence") or 0.0)
+            if long_action not in {"BUY", "SELL"} or short_conf >= conf:
+                action_raw = "SELL"
+                conf = short_conf if short_conf else conf
+                short_gates = raw_item.get("short_failed_gates")
+                if isinstance(short_gates, list):
+                    gates = list(short_gates)
+                source = "short"
+                meta["position_side"] = "SHORT"
+                meta["order_side"] = "SELL"
+                meta["short_action_raw"] = short_action
+                meta["intent"] = "OPEN"
+        elif long_action == "BUY":
+            meta.setdefault("position_side", "LONG")
+            meta.setdefault("order_side", "BUY")
+            meta.setdefault("intent", "OPEN")
+            source = "long"
+    meta["candidate_source"] = source
     action = action_raw if action_raw in {"BUY", "SELL", "WATCH", "SKIP"} else "SKIP"
     return ScannerCandidate(
         symbol=str(raw_item.get("symbol", "")),
         action=cast(Literal["BUY", "SELL", "WATCH", "SKIP"], action),
         confidence=conf,
         failed_gates=[str(g) for g in gates],
-        meta=raw_item.get("meta") or raw_item.get("short_meta") or {},
+        meta=meta,
     )
-
 
 def _position_context(raw: dict[str, Any]) -> PositionContext | None:
     side = str(raw.get("side", "BUY")).upper()
@@ -138,20 +139,31 @@ def _position_context(raw: dict[str, Any]) -> PositionContext | None:
     return PositionContext(
         side=normalized,
         quantity=quantity,
-        current_price=float(raw.get("last_price") or raw.get("entry") or 0.0) or None,
-        position_id=(
-            str(raw.get("position_id") or raw.get("positionId") or "").strip()
-            or None
-        ),
+        current_price=float(raw.get("last_price") or raw.get("current_price") or 0.0) or None,
+        position_id=str(raw.get("position_id") or raw.get("id") or "") or None,
     )
-
 
 def _write_output(path: str, payload: dict[str, Any]) -> None:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as file:
         json.dump(payload, file, indent=2)
-
+    history = (
+        output.with_name(output.stem + "_history.jsonl")
+        if output.suffix == ".json"
+        else output.parent / "agent_pipeline_history.jsonl"
+    )
+    event = {
+        "generated_at": payload.get("generated_at"),
+        "execute_decisions": payload.get("execute_decisions"),
+        "executor_mode": payload.get("executor_mode"),
+        "live_ready": payload.get("live_ready"),
+        "summary": payload.get("summary"),
+        "entry_count": len(payload.get("entries") or []),
+        "monitor_count": len(payload.get("monitor") or []),
+    }
+    with history.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 def run_pipeline_bridge(
     *,
@@ -161,12 +173,7 @@ def run_pipeline_bridge(
     market_data: MarketDataService,
     coordinator: AgentPipelineCoordinator | None = None,
 ) -> dict[str, Any]:
-    """Run the multi-agent pipeline on scanner output and open positions.
-
-    Returns an audit payload describing every entry evaluation and every
-    monitored position, then persists it to ``config.output_path``.
-    Never triggers real orders unless ``config.execute_decisions`` is true.
-    """
+    """Run multi-agent pipeline on scanner output and open positions."""
     if not config.enabled:
         return {"enabled": False, "reason": "pipeline_disabled_by_config"}
 
@@ -180,9 +187,7 @@ def run_pipeline_bridge(
         executor_llm_client, executor_llm_model, executor_llm_base_url = build_agent_llm("executor")
         coordinator = AgentPipelineCoordinator(
             learning_agent=LearningAgent(
-                llm_client=llm_client,
-                llm_model=llm_model,
-                llm_base_url=llm_base_url,
+                llm_client=llm_client, llm_model=llm_model, llm_base_url=llm_base_url
             ),
             chart_llm_client=chart_llm_client,
             chart_llm_model=chart_llm_model,
@@ -199,11 +204,16 @@ def run_pipeline_bridge(
             ),
         )
 
+    executor_live = bool(getattr(coordinator.executor_agent, "live", False))
+    if executor_live and not config.allow_live_orders:
+        coordinator.executor_agent.live = False
+        executor_live = False
+    live_ready = bool(config.execute_decisions and config.allow_live_orders and executor_live)
+
     fetch_htf = _candle_fetcher(market_data, config.htf_timeframe, config.htf_limit)
     fetch_mtf = _candle_fetcher(market_data, config.mtf_timeframe, config.mtf_limit)
     fetch_ltf = _candle_fetcher(market_data, config.ltf_timeframe, config.ltf_limit)
 
-    # Process entry candidates. Coordinator filters out low-confidence ones.
     entries: list[dict[str, Any]] = []
     scanned = 0
     for raw in scanner_results:
@@ -216,7 +226,6 @@ def run_pipeline_bridge(
             continue
         if candidate.failed_gates:
             continue
-
         htf = fetch_htf(candidate.symbol)
         mtf = fetch_mtf(candidate.symbol)
         ltf = fetch_ltf(candidate.symbol)
@@ -227,29 +236,27 @@ def run_pipeline_bridge(
                 "reason": "missing_multi_timeframe_candles",
             })
             continue
-
         result = coordinator.process_entry_candidate(
-            candidate, htf_candles=htf, mtf_candles=mtf, ltf_candles=ltf,
+            candidate, htf_candles=htf, mtf_candles=mtf, ltf_candles=ltf
         )
-        entry_item = {
+        entries.append({
             "symbol": candidate.symbol,
             "scanner_confidence": candidate.confidence,
             "result": result.to_dict(),
-        }
-        entries.append(entry_item)
-        scanned += 1
-        
-        # Publish realtime event for immediate UI update
-        from app.events.publisher import publish
-        publish({
-            "event_type": "entry_candidate_processed",
-            "symbol": candidate.symbol,
-            "scanner_confidence": candidate.confidence,
-            "result": result.to_dict(),
-            "timestamp": result.to_dict().get("timestamp") or "",
         })
+        scanned += 1
+        try:
+            from app.events.publisher import publish
+            publish({
+                "event_type": "entry_candidate_processed",
+                "symbol": candidate.symbol,
+                "scanner_confidence": candidate.confidence,
+                "result": result.to_dict(),
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+            })
+        except Exception:
+            pass
 
-    # Monitor open positions.
     monitor: list[dict[str, Any]] = []
     if config.monitor_positions:
         for symbol, raw_position in open_positions.items():
@@ -273,18 +280,15 @@ def run_pipeline_bridge(
                 mtf_candles=mtf,
                 ltf_candles=ltf,
             )
-            monitor.append({
-                "symbol": symbol,
-                "result": result.to_dict(),
-            })
+            monitor.append({"symbol": symbol, "result": result.to_dict()})
 
     payload: dict[str, Any] = {
         "enabled": True,
         "generated_at": datetime.now(tz=UTC).isoformat(),
         "execute_decisions": config.execute_decisions,
-        "executor_mode": (
-            "live" if coordinator.executor_agent.live else "dry_run"
-        ),
+        "allow_live_orders": config.allow_live_orders,
+        "executor_mode": "live" if executor_live else "dry_run",
+        "live_ready": live_ready,
         "entries": entries,
         "monitor": monitor,
         "summary": {
@@ -294,6 +298,5 @@ def run_pipeline_bridge(
             "position_symbols": list(open_positions),
         },
     }
-
     _write_output(config.output_path, payload)
     return payload

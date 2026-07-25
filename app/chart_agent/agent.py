@@ -89,13 +89,15 @@ def _run_regime_analysis(candles: list[Candle]) -> TechniqueSignal:
             ],
             meta=regime.to_dict(),
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — isolate analyzer failures
         return TechniqueSignal(
             technique="regime_indicators",
             bias="NEUTRAL",
             confidence=0.0,
-            weight=0.5,
-            reasons=["regime_analysis_unavailable"],
+            weight=0.0,
+            reasons=["regime_analysis_error"],
+            meta={"error_code": "REGIME_ANALYSIS_FAILED", "error": str(exc)},
+            analysis_status="ERROR",
         )
 
 
@@ -324,13 +326,15 @@ def _run_acr_analysis(candles: list[Candle]) -> TechniqueSignal:
             reasons=reasons,
             meta=meta,
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         return TechniqueSignal(
             technique="acr_plus",
             bias="NEUTRAL",
             confidence=0.0,
-            weight=0.5,
-            reasons=["acr_analysis_unavailable"],
+            weight=0.0,
+            reasons=["acr_analysis_error"],
+            meta={"error_code": "ACR_ANALYSIS_FAILED", "error": str(exc)},
+            analysis_status="ERROR",
         )
 
 
@@ -370,13 +374,15 @@ def _run_liquidity_sr_analysis(
                 "stop_loss": decision.stop_loss,
             },
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         return TechniqueSignal(
             technique="liquidity_sr_mtf",
             bias="NEUTRAL",
             confidence=0.0,
-            weight=0.5,
-            reasons=["liquidity_sr_analysis_unavailable"],
+            weight=0.0,
+            reasons=["liquidity_sr_analysis_error"],
+            meta={"error_code": "LIQUIDITY_SR_ANALYSIS_FAILED", "error": str(exc)},
+            analysis_status="ERROR",
         )
 
 
@@ -460,13 +466,15 @@ def _run_liquidity_pools_analysis(candles: list[Candle]) -> TechniqueSignal:
                 "active_resistance": len(active_resist),
             },
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         return TechniqueSignal(
             technique="liquidity_pools",
             bias="NEUTRAL",
             confidence=0.0,
-            weight=0.5,
-            reasons=["liquidity_pools_analysis_unavailable"],
+            weight=0.0,
+            reasons=["liquidity_pools_analysis_error"],
+            meta={"error_code": "LIQUIDITY_POOLS_ANALYSIS_FAILED", "error": str(exc)},
+            analysis_status="ERROR",
         )
 
 
@@ -532,10 +540,15 @@ def _run_momentum_analysis(candles: list[Candle]) -> TechniqueSignal:
             technique="momentum", bias=bias,
             confidence=round(confidence, 1), weight=1.0, reasons=reasons,
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         return TechniqueSignal(
-            technique="momentum", bias="NEUTRAL",
-            confidence=0.0, weight=0.5, reasons=["momentum_unavailable"],
+            technique="momentum",
+            bias="NEUTRAL",
+            confidence=0.0,
+            weight=0.0,
+            reasons=["momentum_analysis_error"],
+            meta={"error_code": "MOMENTUM_ANALYSIS_FAILED", "error": str(exc)},
+            analysis_status="ERROR",
         )
 
 
