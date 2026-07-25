@@ -53,6 +53,34 @@ Dokumen ini menjadi pegangan sprint berikutnya. Status saat ini: Sprint 23 (Stra
 
 Setiap kandidat berikut hanya untuk brainstorm. Tidak boleh diimplementasikan tanpa scope dan persetujuan eksplisit.
 
+### Kandidat E - Ops MCP Read-Only (Operator AI)
+
+Ruang lingkup:
+
+- Package `app/mcp/` + Python MCP SDK di project venv.
+- Tools read-only: bot status, portfolio/PnL, open positions, latest signals,
+  agent pipeline, learning insights, trade journal / chart observations.
+- Guards: no order placement, no credential mutation, path allowlist
+  (`logs/`, `data/`, configs read), secrets tidak pernah di-return.
+- Dokumentasi peta lengkap: `docs/MCP_MAP.md`.
+- Tidak mengubah scoring, signals, risk, paper engine, live gates, atau
+  hot path `MarketDataService` untuk scanner.
+
+Kriteria selesai:
+
+- `./.venv/bin/python -m app.mcp.server` start via stdio.
+- Unit test tool shapes + graceful degrade saat file artifact hilang.
+- Contoh config Cline/Claude Desktop di docs.
+- Suite existing tidak regres; live trading tetap terkunci.
+
+Catatan:
+
+- Ini lapisan **operator AI** (Cline), bukan pengganti agent pipeline internal.
+- Market wrap / backtest trigger / execution MCP adalah fase belakangan
+  (lihat urutan di `docs/MCP_MAP.md`). Jangan digabung ke sprint ini.
+
+Status: **MCP-1 diimplementasikan** di `app/mcp/` (lihat `docs/MCP_CLINE_CONFIG.md`).
+
 ### Kandidat A - Batch Backtest Runner
 
 Ruang lingkup:
@@ -109,7 +137,7 @@ Kriteria selesai:
 - Dokumentasi `docs/DEPENDENCY_LOCK.md` menjelaskan cara refresh lock.
 - Tidak ada perubahan versi dependency runtime yang belum diuji manual.
 
-### Kandidat E - Implementasi Strategi Liquidity + S/R + Trend + MTF
+### Kandidat F - Implementasi Strategi Liquidity + S/R + Trend + MTF
 
 Spesifikasi lengkap di `docs/strategy_liquidity_sr_mtf.md`. Dipecah menjadi
 empat sprint terpisah agar tiap sprint hanya menyelesaikan satu area.

@@ -58,6 +58,9 @@ class AgentPipelineRuntimeConfig:
     adopt_chart_proposal_levels: bool = True
     decision_llm_can_veto: bool = True
     decision_llm_veto_min_confidence: float = 0.75
+    # Learning Journal Coach PolicyPatch (shadow by default).
+    apply_llm_policy: bool = False
+    policy_min_confidence: float = 0.6
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "AgentPipelineRuntimeConfig":
@@ -86,6 +89,8 @@ class AgentPipelineRuntimeConfig:
             decision_llm_veto_min_confidence=float(
                 data.get("decision_llm_veto_min_confidence", 0.75)
             ),
+            apply_llm_policy=bool(data.get("apply_llm_policy", False)),
+            policy_min_confidence=float(data.get("policy_min_confidence", 0.6)),
         )
 
 
@@ -226,6 +231,8 @@ def run_pipeline_bridge(
                 adopt_chart_proposal_levels=config.adopt_chart_proposal_levels,
                 decision_llm_can_veto=config.decision_llm_can_veto,
                 decision_llm_veto_min_confidence=config.decision_llm_veto_min_confidence,
+                apply_llm_policy=config.apply_llm_policy,
+                policy_min_confidence=config.policy_min_confidence,
             ),
         )
 

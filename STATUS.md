@@ -138,6 +138,40 @@ Baik:
 
 ## Log batch terbaru
 
+### [2026-07-25] — LLM agents LIVE ON (chart/decision/learning apply)
+- **Siapa:** agent
+- **Apa:**
+  - Fix bug: `run_realtime.build_runtime_agent_coordinator` now wires Chart/Learning/Decision/Executor LLM clients + full AgentPipelineConfig flags
+  - Chart LLM free-technique proposal ON at ENTRY; skipped on POSITION_MONITOR for latency
+  - Decision LLM audit ON; monitor audits only non-HOLD actions
+  - Learning PolicyPatch: `apply_llm_policy=true` (applied live: confluence delta, size mult, prefer/avoid patterns)
+  - Models: chart/learning/decision=`wr/gpt-5.6-sol`, executor=None; live orders still off
+- **File utama:** `run_realtime.py`, `app/agent_pipeline/coordinator.py`, `app/decision_agent/agent.py`, `configs/realtime.json`
+- **Verifikasi:** live `logs/agent_pipeline.json` shows llm_proposal + llm_audit + policy_patch.applied=true; pytest decision+policy 18 passed
+- **Catatan:** Policy size_multiplier now scales EntryPlan.position_size_percent; prefer +5 / avoid -8 score nudge
+
+### [2026-07-25] — Learning Journal Coach → PolicyPatch (shadow)
+- **Siapa:** agent
+- **Apa:**
+  - `app/learning_agent/policy.py` (baru): `PolicyPatch` + `parse_policy_patch` + `validate_policy_patch` + prompt. LLM baca statistik jurnal → usul patch bounded (min_confluence_delta -5..+15, size_multiplier 0.5..1.0, block_regimes max 3 known, prefer/avoid patterns, max_entries_per_cycle). Semua di-CLAMP di Python.
+  - Decision Agent: `decide_entry(..., policy=None)` — gate baru `policy_block_regime` + `policy_min_confluence_delta`. Tidak pernah memaksa entry.
+  - Coordinator: `_load_policy` (shadow-first) baca `insight.meta["llm"].latest` → parse/validate → hanya diterapkan bila `apply_llm_policy=true` + confidence ≥ `policy_min_confidence` + sampel ≥ `requires_min_samples`. Hasil validasi selalu dicatat di `decision.meta["policy_patch"]` untuk audit.
+  - Config: `apply_llm_policy` (default false = SHADOW), `policy_min_confidence` (0.6). Ditambahkan ke `configs/realtime.json` + bridge.
+- **File utama:** `app/learning_agent/policy.py`, `app/decision_agent/agent.py`, `app/agent_pipeline/coordinator.py`, `bridge.py`, `configs/realtime.json`, `tests/test_policy_patch.py`
+- **Verifikasi:** pytest policy+chart_proposal+decision+agent_pipeline = 34 passed; config JSON valid; `apply_llm_policy=false` (shadow) terbaca bridge
+- **Catatan:** SHADOW dulu — patch dihitung & dilog tapi TIDAK mengubah keputusan sampai operator set `apply_llm_policy=true` setelah cukup data paper
+
+### [2026-07-25] — Chart LLM free-technique proposal + Decision veto
+- **Siapa:** agent
+- **Apa:**
+  - `ChartProposal` schema: LLM chart boleh metode/indikator/teknik **bebas** (open vocabulary, tidak terkunci indikator tertentu)
+  - Validator geometry (SL side, RR ≥ 1.5, drift entry vs zone Python) di `app/chart_agent/proposal.py`
+  - Coordinator: `_propose_chart` → Decision → `_adopt_chart_proposal` (opsional pakai level LLM tervalidasi) → Decision LLM audit/VETO → Risk → Executor non-LLM
+  - Config: `chart_llm_propose`, `adopt_chart_proposal_levels`, `decision_llm_can_veto`, `decision_llm_veto_min_confidence`
+- **File utama:** `app/chart_agent/proposal.py`, `app/agent_pipeline/coordinator.py`, `app/agent_pipeline/bridge.py`, `tests/test_chart_proposal.py`
+- **Verifikasi:** pytest test_chart_proposal + test_agent_pipeline = 16 passed
+- **Catatan:** LLM tidak boleh force ENTRY dari SKIP; level LLM hanya dipakai bila lolos validator; Risk tetap final gate uang; eksekusi order non-LLM
+
 ### [2026-07-25] — Soft-entry WATCH (agent P1)
 - **Siapa:** agent
 - **Apa:**
@@ -176,6 +210,7 @@ Baik:
 - [x] Restart bot production agar prefilter pad aktif; verifikasi pill ≈ `20 long · 20 short`
 - [x] Log jumlah `scanned / skipped / ranked` per siklus di bot log
 - [x] Soft-entry WATCH (top conf ≥ 75, max 3) lewat Chart/Decision
+- [x] Chart LLM free-technique proposal + Decision veto (geometry validated)
 - [ ] (Opsional) Tuning `min_watch_confidence` / `max_watch_soft_entry` dari hasil paper 1–2 minggu
 - [ ] (Opsional) Retry/backoff `PublicHttpExchangeClient._get_json`
 - [ ] Rapikan commit message historis yang masih "Deskripsi perubahan" (opsional)

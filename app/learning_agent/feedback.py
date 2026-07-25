@@ -146,6 +146,9 @@ def _build(
             # entry context fell back to neutral defaults.  Lets consumers
             # distinguish fully-contextualized records from blind ones.
             "entry_context_missing": _is_empty_context(entry_context),
+            # Full LLM chart analysis at entry (methods/indicators/narrative/
+            # levels) so the journal keeps the reasoning, not just the outcome.
+            "entry_llm_proposal": entry_context.get("llm_proposal") or {},
         },
     )
 
@@ -166,14 +169,18 @@ def _is_empty_context(context: dict[str, Any]) -> bool:
 
 
 def _context_from_reading(reading: ChartReading) -> dict[str, Any]:
+    techniques = list(reading.techniques_used)
+    proposal = _llm_proposal_from_meta(reading.meta if isinstance(reading.meta, dict) else {})
+    techniques.extend(_llm_technique_tags(proposal))
     return {
         "regime": reading.regime,
         "bias": reading.bias,
         "confluence": reading.confluence_score,
         "htf_trend": reading.htf_trend,
         "patterns": [p.name for p in reading.candle_patterns],
-        "techniques": list(reading.techniques_used),
+        "techniques": _dedupe(techniques),
         "key_levels": [level.price for level in reading.key_levels],
+        "llm_proposal": proposal,
     }
 
 
@@ -189,15 +196,61 @@ def _context_from_observation(obs: dict[str, Any] | None) -> dict[str, Any]:
         for level in key_levels_raw
         if isinstance(level, dict)
     ]
+    techniques = [str(t) for t in reading.get("techniques_used") or []]
+    proposal = _llm_proposal_from_meta(reading.get("meta") or {})
+    techniques.extend(_llm_technique_tags(proposal))
     return {
         "regime": str(reading.get("regime", "MIXED")),
         "bias": str(reading.get("bias", "NEUTRAL")),
         "confluence": float(reading.get("confluence_score", 0.0)),
         "htf_trend": str(reading.get("htf_trend", "SIDE")),
         "patterns": patterns,
-        "techniques": [str(t) for t in reading.get("techniques_used") or []],
+        "techniques": _dedupe(techniques),
         "key_levels": key_levels,
+        "llm_proposal": proposal,
     }
+
+
+def _llm_proposal_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    """Extract the parsed LLM chart proposal from a ChartReading meta blob."""
+    if not isinstance(meta, dict):
+        return {}
+    block = meta.get("llm_proposal")
+    if not isinstance(block, dict):
+        return {}
+    proposal = block.get("proposal")
+    return proposal if isinstance(proposal, dict) else {}
+
+
+def _llm_technique_tags(proposal: dict[str, Any]) -> list[str]:
+    """Namespace LLM-declared methods/indicators/techniques for learning stats.
+
+    Prefixing keeps them distinct from deterministic engine techniques so the
+    Learning Agent can measure win rate of each LLM technique separately.
+    """
+    if not proposal:
+        return []
+    tags: list[str] = []
+    for key, prefix in (
+        ("methods_used", "llm_method:"),
+        ("techniques_used", "llm_technique:"),
+        ("indicators_used", "llm_indicator:"),
+    ):
+        for item in proposal.get(key) or []:
+            text = str(item).strip()
+            if text:
+                tags.append(f"{prefix}{text}")
+    return tags
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
 
 
 def _empty_context() -> dict[str, Any]:
@@ -209,6 +262,7 @@ def _empty_context() -> dict[str, Any]:
         "patterns": [],
         "techniques": [],
         "key_levels": [],
+        "llm_proposal": {},
     }
 
 

@@ -22,6 +22,7 @@ from app.learning_agent.models import (
 )
 from app.learning_agent.store import ChartObservationStore, TradeStore
 from app.learning_agent.insight_store import LLMInsightRecord, LLMInsightStore
+from app.learning_agent.policy import policy_system_prompt
 
 
 class LearningAgent:
@@ -165,12 +166,7 @@ class LearningAgent:
 
         try:
             output = self._llm_client.chat_json(
-                system=(
-                    "You are a read-only trading Learning Agent. Analyze only the "
-                    "provided deterministic trade statistics. Do not issue direct "
-                    "buy/sell orders. Return compact JSON with keys: summary, "
-                    "strengths, weaknesses, recommendations, requires_backtest."
-                ),
+                system=policy_system_prompt(),
                 user=json.dumps(summary, ensure_ascii=False),
                 max_tokens=900,
                 temperature=0.2,
@@ -209,8 +205,10 @@ class LearningAgent:
             "recent_trades": [r.to_dict() for r in recent],
             "record_count": len(records),
             "instructions": (
-                "Explain patterns and propose hypotheses only. Any recommendation "
-                "must be marked as advisory and requiring backtest before trading."
+                "Produce a BOUNDED policy_patch JSON from these stats. "
+                "Include human_summary of what worked/failed. "
+                "Do not issue buy/sell. Recommendations must stay within "
+                "clamp ranges and require samples before live apply."
             ),
         }
 

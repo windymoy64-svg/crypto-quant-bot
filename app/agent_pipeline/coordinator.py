@@ -34,6 +34,7 @@ from app.decision_agent.models import Decision, EntryPlan
 from app.executor_agent.agent import ExecutorAgent
 from app.executor_agent.models import PositionContext
 from app.learning_agent.agent import LearningAgent
+from app.learning_agent.policy import parse_policy_patch, validate_policy_patch
 from app.risk.risk_agent import RiskAgent, RiskApproval
 
 
@@ -57,6 +58,10 @@ class AgentPipelineConfig:
     # Decision LLM may VETO entry/exit; never force ENTRY.
     decision_llm_can_veto: bool = True
     decision_llm_veto_min_confidence: float = 0.75
+    # Learning Journal Coach: LLM PolicyPatch tuning of Decision gates.
+    # Shadow by default: computed + logged, but NOT applied to decisions.
+    apply_llm_policy: bool = False
+    policy_min_confidence: float = 0.6
 
 class AgentPipelineCoordinator:
     """Wires specialist agents without mixing responsibilities."""
@@ -123,9 +128,22 @@ class AgentPipelineCoordinator:
                 scanner_chart_conflict=conflict,
             )
         insight, learning_advisory = self._load_learning()
-        decision = self.decision_agent.decide_entry(reading, insight)
+        policy, policy_validation = self._load_policy(insight)
+        # Statistical learning adjustments only when explicitly enabled.
+        decision_insight = insight if self.config.apply_learning_to_decision else None
+        try:
+            decision = self.decision_agent.decide_entry(
+                reading, decision_insight, policy=policy
+            )
+        except TypeError:
+            # Backward-compat: decision agents without policy kwarg.
+            decision = self.decision_agent.decide_entry(reading, decision_insight)
         decision = self._adopt_chart_proposal(reading, decision)
         decision = self._audit_decision(reading, insight, decision, stage="ENTRY")
+        if policy_validation is not None:
+            meta = dict(decision.meta)
+            meta["policy_patch"] = policy_validation
+            decision = replace(decision, meta=meta)
         self.learning_agent.record_chart_reading(
             reading, stage="ENTRY_CANDIDATE",
             scanner_confidence=candidate.confidence, scanner_gates_passed=True,
@@ -151,10 +169,15 @@ class AgentPipelineCoordinator:
 
     def monitor_position(self, *, symbol: str, position: PositionContext, htf_candles: list[Candle], mtf_candles: list[Candle], ltf_candles: list[Candle]) -> PipelineResult:
         reading = self.chart_agent.read(symbol, htf_candles, mtf_candles, ltf_candles)
-        reading = self._propose_chart(reading, stage="POSITION_MONITOR")
+        # POSITION_MONITOR: skip Chart LLM propose to keep cycle latency safe
+        # (9+ open positions * multi-second LLM calls stalls realtime). Entry path
+        # still uses free-technique proposal. Decision audit remains available.
         insight, learning_advisory = self._load_learning()
-        decision = self.decision_agent.decide_hold(reading, position.side, insight)
-        decision = self._audit_decision(reading, insight, decision, stage="POSITION_MONITOR")
+        decision_insight = insight if self.config.apply_learning_to_decision else None
+        decision = self.decision_agent.decide_hold(reading, position.side, decision_insight)
+        # Audit only non-HOLD monitor decisions to cut LLM load (EXIT/etc.).
+        if decision.action != "HOLD":
+            decision = self._audit_decision(reading, insight, decision, stage="POSITION_MONITOR")
         self.learning_agent.record_chart_reading(reading, stage="POSITION_MONITOR", decision=decision.to_dict())
         risk = self._run_risk_gate(decision, position=position, candles=ltf_candles or mtf_candles or htf_candles)
         execution = None
@@ -200,6 +223,16 @@ class AgentPipelineCoordinator:
         return None
 
     def _load_learning(self) -> tuple[Any, dict[str, Any] | None]:
+        """Load learning insight for Decision + LLM Journal Coach.
+
+        Always return the raw LearningInsight object so PolicyPatch can be
+        parsed/shadow-logged from ``insight.meta["llm"]``.
+
+        Statistical score adjustments (hot/cold pattern boosts) are still
+        gated by ``apply_learning_to_decision`` inside DecisionAgent callers:
+        we pass ``insight`` only when that flag is on; otherwise callers get
+        raw for policy loading then may choose not to apply stats.
+        """
         try:
             raw = self.learning_agent.learn()
             advisory = {
@@ -209,10 +242,13 @@ class AgentPipelineCoordinator:
                 "worst_regime": raw.worst_regime,
                 "min_confluence_recommended": raw.min_confluence_recommended,
                 "applied_to_decision": self.config.apply_learning_to_decision,
+                "llm_enabled": bool((raw.meta or {}).get("llm", {}).get("enabled")),
+                "llm_model": (raw.meta or {}).get("llm", {}).get("model"),
             }
-            if self.config.apply_learning_to_decision:
-                return raw, advisory
-            return None, advisory
+            # Always return raw so Journal Coach / PolicyPatch can run in shadow.
+            # Decision score adjustments remain controlled by apply_learning_to_decision
+            # via a separate flag checked by decide_entry consumers if needed.
+            return raw, advisory
         except Exception as exc:
             return None, {"error": str(exc), "applied_to_decision": False}
 
@@ -220,6 +256,42 @@ class AgentPipelineCoordinator:
         if decision.action in {"SKIP", "HOLD"}:
             return RiskApproval(approved=True, reason=f"noop_allowed={decision.action}", checks={"action": decision.action, "noop": True})
         return self.risk_agent.approve_execution(decision, position=position, candles=candles)
+
+    def _load_policy(self, insight):
+        """Learning Journal Coach: parse+validate LLM PolicyPatch (shadow-first).
+
+        Returns (patch_or_None_for_decision, validation_dict_for_audit).
+        A patch only reaches Decision when validation.applied is True
+        (requires apply_llm_policy=True + confidence + sample threshold).
+        """
+        if insight is None:
+            return None, None
+        block = None
+        meta = getattr(insight, "meta", None)
+        if isinstance(meta, dict):
+            block = meta.get("llm")
+        raw_output = block.get("latest") if isinstance(block, dict) else None
+        if not isinstance(raw_output, dict):
+            return None, None
+        try:
+            patch = parse_policy_patch(raw_output)
+            if patch is None:
+                return None, None
+            validation = validate_policy_patch(
+                patch,
+                total_trades=getattr(insight, "total_trades", 0),
+                apply_enabled=self.config.apply_llm_policy,
+                min_confidence=self.config.policy_min_confidence,
+            )
+            audit = {
+                "patch": patch.to_dict(),
+                "validation": validation.to_dict(),
+                "apply_enabled": self.config.apply_llm_policy,
+            }
+            return (patch if validation.applied else None), audit
+        except Exception as exc:  # noqa: BLE001 - policy must never break pipeline
+            return None, {"error": str(exc), "apply_enabled": self.config.apply_llm_policy}
+
 
     def _propose_chart(self, reading, *, stage: str):
         """Chart LLM free-technique proposal; falls back to explain-only storage."""

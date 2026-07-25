@@ -9,6 +9,7 @@ from typing import Any
 
 from app.chart_agent.models import ChartReading
 from app.learning_agent.models import LearningInsight
+from app.learning_agent.policy import PolicyPatch
 from app.decision_agent.models import (
     ActionType,
     Decision,
@@ -157,8 +158,13 @@ class DecisionMakerAgent:
         self,
         reading: ChartReading,
         insight: LearningInsight | None = None,
+        policy: "PolicyPatch | None" = None,
     ) -> Decision:
-        """Decide whether to enter a new position."""
+        """Decide whether to enter a new position.
+
+        ``policy`` is an optional, already-validated Learning PolicyPatch. It may
+        only tighten/nudge gates (bounded upstream). It never forces an entry.
+        """
         reasons: list[str] = []
         learning_reasons: list[str] = []
         score = reading.bias_confidence
@@ -167,11 +173,18 @@ class DecisionMakerAgent:
         if reading.bias == "NEUTRAL":
             return self._skip(reading, ["no_directional_bias"])
 
+        # Gate 1b: policy regime block (Journal Coach)
+        if policy is not None and reading.regime in policy.block_regimes:
+            return self._skip(reading, [f"policy_block_regime={reading.regime}"])
+
         # Gate 2: confluence threshold (calibrated by learning)
         effective_min = self.min_confluence
         if insight and insight.min_confluence_recommended > 0:
             effective_min = max(self.min_confluence, insight.min_confluence_recommended)
             learning_reasons.append(f"min_confluence_calibrated={effective_min:.0f}")
+        if policy is not None and policy.min_confluence_delta != 0.0:
+            effective_min = max(0.0, effective_min + policy.min_confluence_delta)
+            learning_reasons.append(f"policy_min_confluence_delta={policy.min_confluence_delta:+.0f}")
 
         if reading.confluence_score < effective_min:
             return self._skip(reading, [
@@ -188,6 +201,23 @@ class DecisionMakerAgent:
         if insight:
             boost = self._apply_learning(reading, insight, learning_reasons)
             score += boost
+
+        # Policy pattern prefer/avoid (Journal Coach) — bounded score nudge only.
+        if policy is not None:
+            detected = {p.name for p in reading.candle_patterns}
+            # Also honor LLM technique tags if present on reading meta techniques.
+            tech = set(reading.techniques_used or [])
+            labels = detected | tech
+            prefer_hit = [p for p in policy.prefer_patterns if p in labels]
+            avoid_hit = [p for p in policy.avoid_patterns if p in labels]
+            if prefer_hit:
+                boost += 5.0
+                score += 5.0
+                learning_reasons.append(f"policy_prefer_pattern={prefer_hit[0]}")
+            if avoid_hit:
+                boost -= 8.0
+                score -= 8.0
+                learning_reasons.append(f"policy_avoid_pattern={avoid_hit[0]}")
 
         # Gate 4: final confidence
         if score < self.min_confidence_entry:
@@ -221,6 +251,13 @@ class DecisionMakerAgent:
         else:
             reasons.append("tp1_enabled_at_entry")
 
+        # Apply policy size multiplier to entry plan (0.5..1.0 clamped upstream).
+        if policy is not None and policy.size_multiplier != 1.0 and entry_plan is not None:
+            from dataclasses import replace as _replace
+            sized = max(0.01, float(entry_plan.position_size_percent) * float(policy.size_multiplier))
+            entry_plan = _replace(entry_plan, position_size_percent=round(sized, 4))
+            learning_reasons.append(f"policy_size_multiplier={policy.size_multiplier:.2f}")
+
         return Decision(
             action=action,
             symbol=reading.symbol,
@@ -237,6 +274,9 @@ class DecisionMakerAgent:
                 "tp1_enabled": tp1_enabled,
                 "hold_mode": hold_mode,
                 "skip_fixed_tp": hold_mode,
+                "policy_size_multiplier": (
+                    policy.size_multiplier if policy is not None else 1.0
+                ),
             },
         )
 

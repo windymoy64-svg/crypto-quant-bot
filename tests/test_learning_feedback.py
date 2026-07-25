@@ -143,6 +143,46 @@ def test_build_trade_record_from_observation_dict() -> None:
     assert record.regime_at_entry == "TRENDING_BULLISH"
 
 
+def test_llm_proposal_techniques_enter_learning_journal() -> None:
+    """Chart LLM free-technique tags must be learned as techniques_at_entry."""
+    reading_dict = _reading().to_dict()
+    reading_dict["meta"] = {
+        "llm_proposal": {
+            "proposal": {
+                "methods_used": ["Wyckoff"],
+                "techniques_used": ["order_block_retest"],
+                "indicators_used": ["fib_0.618"],
+                "narrative": "HTF bull pullback retest",
+                "stance": "LONG",
+                "proposed_entry": 100.5,
+                "proposed_sl": 98.5,
+                "proposed_tp1": 106.0,
+                "setup_quality": 82,
+            }
+        }
+    }
+    record = build_trade_record_from_dicts(
+        trade_id="llm-1",
+        position=_position(),
+        close_event={
+            "close_reason": "take_profit_1",
+            "position": {"exit": 106.0, "realized_pnl": 12.0},
+            "timestamp": "2024-01-01T14:00:00+00:00",
+        },
+        entry_observation={"chart_reading": reading_dict},
+        exit_observation={"chart_reading": reading_dict},
+    )
+    assert "llm_method:Wyckoff" in record.techniques_at_entry
+    assert "llm_technique:order_block_retest" in record.techniques_at_entry
+    assert "llm_indicator:fib_0.618" in record.techniques_at_entry
+    # Deterministic techniques still present.
+    assert any(not t.startswith("llm_") for t in record.techniques_at_entry)
+    # Full analysis kept for journal audit.
+    assert record.meta["entry_llm_proposal"]["narrative"] == "HTF bull pullback retest"
+    assert record.meta["entry_llm_proposal"]["setup_quality"] == 82
+
+
+
 def test_build_trade_record_missing_observation_uses_neutral_context() -> None:
     record = build_trade_record_from_dicts(
         trade_id="obs-2", position=_position(),

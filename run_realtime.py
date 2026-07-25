@@ -290,7 +290,15 @@ def apply_entry_guards(
 def build_runtime_agent_coordinator(
     *, config: AgentPipelineRuntimeConfig, exchange: str,
 ) -> AgentPipelineCoordinator:
-    """Build the selected exchange executor from persisted operator mode."""
+    """Build coordinator with optional per-agent LLM + exchange executor.
+
+    LLM clients are loaded from operator settings (dashboard). Missing model /
+    key means that agent stays deterministic. Chart/Learning/Decision can be
+    active LLM agents; Executor LLM remains explain-only when configured.
+    """
+
+    from app.learning_agent.agent import LearningAgent
+    from app.llm.factory import build_agent_llm
 
     execution = load_execution_preferences()
     coordinator_config = AgentPipelineConfig(
@@ -298,23 +306,56 @@ def build_runtime_agent_coordinator(
         execute_decisions=config.execute_decisions,
         allow_watch_soft_entry=bool(getattr(config, "allow_watch_soft_entry", False)),
         min_watch_confidence=float(getattr(config, "min_watch_confidence", 75.0)),
+        chart_llm_propose=bool(getattr(config, "chart_llm_propose", True)),
+        adopt_chart_proposal_levels=bool(getattr(config, "adopt_chart_proposal_levels", True)),
+        decision_llm_can_veto=bool(getattr(config, "decision_llm_can_veto", True)),
+        decision_llm_veto_min_confidence=float(
+            getattr(config, "decision_llm_veto_min_confidence", 0.75)
+        ),
+        apply_llm_policy=bool(getattr(config, "apply_llm_policy", False)),
+        policy_min_confidence=float(getattr(config, "policy_min_confidence", 0.6)),
     )
+
+    chart_llm_client, chart_llm_model, chart_llm_base_url = build_agent_llm("chart")
+    learning_llm_client, learning_llm_model, learning_llm_base_url = build_agent_llm("learning")
+    decision_llm_client, decision_llm_model, decision_llm_base_url = build_agent_llm("decision")
+    executor_llm_client, executor_llm_model, executor_llm_base_url = build_agent_llm("executor")
+
+    learning_agent = LearningAgent(
+        llm_client=learning_llm_client,
+        llm_model=learning_llm_model,
+        llm_base_url=learning_llm_base_url or "",
+    )
+    llm_kwargs = {
+        "learning_agent": learning_agent,
+        "chart_llm_client": chart_llm_client,
+        "chart_llm_model": chart_llm_model,
+        "chart_llm_base_url": chart_llm_base_url or "",
+        "decision_llm_client": decision_llm_client,
+        "decision_llm_model": decision_llm_model,
+        "decision_llm_base_url": decision_llm_base_url or "",
+        "executor_llm_client": executor_llm_client,
+        "executor_llm_model": executor_llm_model,
+        "executor_llm_base_url": executor_llm_base_url or "",
+        "config": coordinator_config,
+    }
+
     if execution.mode == "paper":
         return AgentPipelineCoordinator(
-            executor_agent=ExecutorAgent(), config=coordinator_config,
+            executor_agent=ExecutorAgent(), **llm_kwargs,
         )
 
     credentials = load_exchange_credentials(exchange=exchange)
     if credentials is None or not credentials.is_configured:
         return AgentPipelineCoordinator(
-            executor_agent=ExecutorAgent(live=True), config=coordinator_config,
+            executor_agent=ExecutorAgent(live=True), **llm_kwargs,
         )
 
     if exchange != "bitunix":
         # Binance live wiring remains fail-closed until the selected futures
         # account config and endpoint are built through the same runtime path.
         return AgentPipelineCoordinator(
-            executor_agent=ExecutorAgent(live=True), config=coordinator_config,
+            executor_agent=ExecutorAgent(live=True), **llm_kwargs,
         )
 
     network_enabled = execution.network_enabled
@@ -341,7 +382,7 @@ def build_runtime_agent_coordinator(
             live=True,
             exchange_adapter=adapter,
         ),
-        config=coordinator_config,
+        **llm_kwargs,
     )
 
 def write_scan_outputs(

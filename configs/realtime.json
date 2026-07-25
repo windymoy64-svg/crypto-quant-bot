@@ -40,7 +40,13 @@
     "monitor_positions": true,
     "allow_watch_soft_entry": true,
     "min_watch_confidence": 75.0,
-    "max_watch_soft_entry": 3
+    "max_watch_soft_entry": 3,
+    "chart_llm_propose": true,
+    "adopt_chart_proposal_levels": true,
+    "decision_llm_can_veto": true,
+    "decision_llm_veto_min_confidence": 0.75,
+    "apply_llm_policy": true,
+    "policy_min_confidence": 0.6
   },
   "learning_recorder": {
     "enabled": true,
