@@ -8,6 +8,7 @@ from app.market.scanner import (
     _is_excluded_entry_symbol,
     compute_market_breadth,
     detect_move_alerts,
+    scan_symbol_rankings,
     scan_symbols,
 )
 
@@ -52,6 +53,29 @@ def test_load_market_candles_uses_live_client() -> None:
 
     assert loaded.source == "live"
     assert loaded.candles[-1].close == 101
+
+
+def test_scan_symbol_rankings_includes_scan_stats() -> None:
+    config = {
+        "exchange": "binance",
+        "timeframe": "1m",
+        "limit": 100,
+        "symbols": ["BTC/USDT"],
+        "fallback_to_sample_data": True,
+        "symbol_mode": "static",
+        "top_n": 20,
+    }
+
+    rankings = scan_symbol_rankings(config)
+
+    assert rankings.long
+    stats = rankings.scan_stats
+    assert stats["mode"] == "static"
+    assert stats["prefilter_count"] >= 1
+    assert stats["scanned_count"] >= 1
+    assert stats["ranked_long"] >= 1
+    assert "duration_ms" in stats
+    assert "skipped_count" in stats
 
 
 def test_scan_symbols_returns_json_ready_items() -> None:

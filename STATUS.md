@@ -3,7 +3,7 @@
 > Update file ini setiap selesai batch kerja (atau setiap merge ke `main`).  
 > Tujuan: programmer berikutnya langsung tahu **sampai mana**, **apa yang aman disentuh**, dan **apa yang masih terbuka**.
 
-**Terakhir di-update:** 2026-07-24  
+**Terakhir di-update:** 2026-07-25  
 **Branch utama:** `main`  
 **Environment production:** `/opt/crypto-quant-bot` (VPS Linux)
 
@@ -14,6 +14,7 @@
 Bot quant deterministik (rule engine + paper/live path) dengan dashboard read-only.  
 Scanner market terminal + ranking long/short dari Binance public API.  
 Dashboard responsive: **desktop = tabel**, **mobile = kartu**.
+Observability P0: `scan_stats` per siklus + agent entry filter counters.
 
 ---
 
@@ -32,8 +33,17 @@ Dashboard responsive: **desktop = tabel**, **mobile = kartu**.
   - Prioritas coin gerak ≥ `min_move_pct`
   - **Pad** sisa slot sampai `prefilter_top_n` dengan coin liquid volume tertinggi
   - Supaya ranking bisa penuh ke `top_n: 20` saat market sepi movers
-- Output scan: `logs/latest_signals.json` (`signals`, `short_signals`, `market_breadth`, `move_alerts`)
+- Output scan: `logs/latest_signals.json` (`signals`, `short_signals`, `market_breadth`, `move_alerts`, **`scan_stats`**)
 - Pill dashboard `N long · N short` = `len(signals)` / `len(short_signals)` dari file itu (bukan hardcode UI)
+
+
+### Observability (2026-07-25)
+- `ScanRankings.scan_stats`: `prefilter_count`, `scanned_count`, `skipped_count`, `ranked_long/short`, `long/short_actionable`, `mode`, `exchange`, `timeframe`, `duration_ms`
+- Ditulis ke `logs/latest_signals.json` via `write_scan_outputs(..., scan_stats=...)`
+- Log baris `scan_stats mode=...` + ringkasan di loop `run_realtime`
+- Agent bridge summary: `entry_filter_counts` (`low_confidence`, `failed_gates`, `action_*`, `evaluated`, cap), plus counters monitor
+- Log baris `agent_pipeline in=... filters=...`
+- Soft-entry WATCH: `allow_watch_soft_entry`, `min_watch_confidence`, `max_watch_soft_entry`
 
 ### Dashboard UI
 - Desktop scanner: baris tabel + header Pair / Price / 24H / Vol / Liq / Status · Conf
@@ -50,7 +60,9 @@ Dashboard responsive: **desktop = tabel**, **mobile = kartu**.
 | `app/dashboard/templates/index.html` | Markup + render scanner rows |
 | `app/dashboard/static/dashboard.js` | Orders cards, realtime helpers |
 | `app/exchange/public_http_client.py` | Prefilter Binance ticker |
-| `app/market/scanner.py` | Ranking long/short `top_n` |
+| `app/market/scanner.py` | Ranking long/short `top_n` + `scan_stats` |
+| `app/agent_pipeline/bridge.py` | Agent filter/skip counters |
+| `run_realtime.py` | Wire stats ke output + log siklus |
 | `configs/market_scan.json` | Parameter scan |
 
 ---
@@ -62,6 +74,8 @@ Dashboard responsive: **desktop = tabel**, **mobile = kartu**.
 3. Setelah ubah prefilter/scanner: **restart bot realtime** agar proses lama tidak pakai kode lama.
 4. Asset dashboard di-cache lewat `asset_version` (mtime CSS/JS) — hard refresh browser setelah deploy.
 5. Python production: `./.venv/bin/python` (lihat `CLINE_RULES.md`).
+6. Cek health scan: `scan_stats` di `latest_signals.json` atau `journalctl -u crypto-quant-bot -n 30`.
+7. Cek kenapa agent `entries` sepi: lihat `logs/agent_pipeline.json` → `summary.entry_filter_counts`.
 
 ---
 
@@ -124,6 +138,29 @@ Baik:
 
 ## Log batch terbaru
 
+### [2026-07-25] — Soft-entry WATCH (agent P1)
+- **Siapa:** agent
+- **Apa:**
+  - Soft-entry: top WATCH (conf ≥ `min_watch_confidence`, default 75) dievaluasi Chart/Decision
+  - Hard BUY/SELL tetap prioritas; max soft slot `max_watch_soft_entry` (default 3)
+  - Input agent menggabungkan raw scanner WATCH (ACR sering rewrite ke SKIP)
+  - Counters: `watch_soft_evaluated`, `watch_low_confidence`, `max_watch_soft_entry_cap`
+- **Config prod:** `allow_watch_soft_entry=true`, `min_watch_confidence=75`, `max_watch_soft_entry=3`
+- **File utama:** `app/agent_pipeline/bridge.py`, `coordinator.py`, `run_realtime.py`, `configs/realtime.json`, tests
+- **Verifikasi:** service active; log `watch_soft=N`; tests soft-entry + coordinator eligibility
+- **Catatan:** Decision tetap bisa SKIP/HOLD — soft-entry ≠ auto buy
+
+### [2026-07-25] — Observability screener + agent
+- **Siapa:** agent
+- **Apa:**
+  - `scan_stats` di `ScanRankings` + `latest_signals.json`
+  - Log ringkas scan per siklus (`prefilter/scanned/skipped/ranked/actionable/ms`)
+  - Agent bridge: `entry_filter_counts` + summary monitor
+  - Log ringkas agent di `run_realtime` main loop
+- **File utama:** `app/market/scanner.py`, `app/agent_pipeline/bridge.py`, `run_realtime.py`, tests
+- **Verifikasi:** pytest 16 passed; service restart; production log menunjukkan `scan_stats` + `agent_pipeline filters=...`
+- **Temuan live:** ranking 20/20 OK; agent filter dominan `action_SKIP` (bukan crash). Confidence entry config prod `min_scanner_confidence=80`.
+
 ### [2026-07-24] — Dashboard desktop vs mobile + scanner universe
 - Perbaiki desktop yang ikut layout mobile (base card + desktop media query)
 - Desktop Status kiri / Conf kanan (isi kolom, tidak numpuk di ujung)
@@ -136,7 +173,10 @@ Baik:
 ---
 
 ## Masih terbuka / follow-up
-- [ ] Restart bot production agar prefilter pad aktif; verifikasi pill ≈ `20 long · 20 short`
-- [ ] (Opsional) Log jumlah `scanned / skipped / ranked` per siklus di bot log
+- [x] Restart bot production agar prefilter pad aktif; verifikasi pill ≈ `20 long · 20 short`
+- [x] Log jumlah `scanned / skipped / ranked` per siklus di bot log
+- [x] Soft-entry WATCH (top conf ≥ 75, max 3) lewat Chart/Decision
+- [ ] (Opsional) Tuning `min_watch_confidence` / `max_watch_soft_entry` dari hasil paper 1–2 minggu
+- [ ] (Opsional) Retry/backoff `PublicHttpExchangeClient._get_json`
 - [ ] Rapikan commit message historis yang masih "Deskripsi perubahan" (opsional)
 - [ ] README root masih campuran Windows PowerShell; production aktual Linux VPS

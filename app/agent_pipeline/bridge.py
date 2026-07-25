@@ -7,6 +7,7 @@ writing results to an audit artifact. Never mutates paper/live state by itself.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,6 +49,15 @@ class AgentPipelineRuntimeConfig:
     output_path: str = "logs/agent_pipeline.json"
     max_entry_symbols: int = 5
     monitor_positions: bool = True
+    # Soft-entry for WATCH: Chart/Decision may still HOLD/SKIP; not auto-buy.
+    allow_watch_soft_entry: bool = False
+    min_watch_confidence: float = 75.0
+    max_watch_soft_entry: int = 3
+    # Free-technique Chart LLM proposal + Decision veto (executor remains non-LLM).
+    chart_llm_propose: bool = True
+    adopt_chart_proposal_levels: bool = True
+    decision_llm_can_veto: bool = True
+    decision_llm_veto_min_confidence: float = 0.75
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "AgentPipelineRuntimeConfig":
@@ -67,6 +77,15 @@ class AgentPipelineRuntimeConfig:
             output_path=str(data.get("output_path", "logs/agent_pipeline.json")),
             max_entry_symbols=int(data.get("max_entry_symbols", 5)),
             monitor_positions=bool(data.get("monitor_positions", True)),
+            allow_watch_soft_entry=bool(data.get("allow_watch_soft_entry", False)),
+            min_watch_confidence=float(data.get("min_watch_confidence", 75.0)),
+            max_watch_soft_entry=int(data.get("max_watch_soft_entry", 3)),
+            chart_llm_propose=bool(data.get("chart_llm_propose", True)),
+            adopt_chart_proposal_levels=bool(data.get("adopt_chart_proposal_levels", True)),
+            decision_llm_can_veto=bool(data.get("decision_llm_can_veto", True)),
+            decision_llm_veto_min_confidence=float(
+                data.get("decision_llm_veto_min_confidence", 0.75)
+            ),
         )
 
 
@@ -201,6 +220,12 @@ def run_pipeline_bridge(
             config=AgentPipelineConfig(
                 min_scanner_confidence=config.min_scanner_confidence,
                 execute_decisions=config.execute_decisions,
+                allow_watch_soft_entry=config.allow_watch_soft_entry,
+                min_watch_confidence=config.min_watch_confidence,
+                chart_llm_propose=config.chart_llm_propose,
+                adopt_chart_proposal_levels=config.adopt_chart_proposal_levels,
+                decision_llm_can_veto=config.decision_llm_can_veto,
+                decision_llm_veto_min_confidence=config.decision_llm_veto_min_confidence,
             ),
         )
 
@@ -215,58 +240,128 @@ def run_pipeline_bridge(
     fetch_ltf = _candle_fetcher(market_data, config.ltf_timeframe, config.ltf_limit)
 
     entries: list[dict[str, Any]] = []
+    filter_counts: Counter[str] = Counter()
+    candidates_seen = 0
+    candidates_directional = 0
+    candidates_watch = 0
     scanned = 0
+    watch_evaluated = 0
+
+    hard_candidates: list[ScannerCandidate] = []
+    soft_candidates: list[ScannerCandidate] = []
     for raw in scanner_results:
-        if scanned >= config.max_entry_symbols:
-            break
+        candidates_seen += 1
         candidate = _to_candidate(raw)
-        if candidate.action not in {"BUY", "SELL"}:
-            continue
-        if candidate.confidence < config.min_scanner_confidence:
-            continue
+        if candidate.action in {"BUY", "SELL"}:
+            candidates_directional += 1
+            hard_candidates.append(candidate)
+        elif candidate.action == "WATCH":
+            candidates_watch += 1
+            soft_candidates.append(candidate)
+        else:
+            filter_counts[f"action_{candidate.action or 'EMPTY'}"] += 1
+
+    hard_candidates.sort(key=lambda c: c.confidence, reverse=True)
+    soft_candidates.sort(key=lambda c: c.confidence, reverse=True)
+
+    def _evaluate(candidate: ScannerCandidate, *, soft: bool) -> None:
+        nonlocal scanned, watch_evaluated
+        if scanned >= config.max_entry_symbols:
+            filter_counts["max_entry_symbols_cap"] += 1
+            return
+        if soft and watch_evaluated >= config.max_watch_soft_entry:
+            filter_counts["max_watch_soft_entry_cap"] += 1
+            return
+
+        min_conf = (
+            config.min_watch_confidence if soft else config.min_scanner_confidence
+        )
+        if candidate.confidence < min_conf:
+            filter_counts["low_confidence" if not soft else "watch_low_confidence"] += 1
+            return
         if candidate.failed_gates:
-            continue
+            filter_counts["failed_gates"] += 1
+            return
+
         htf = fetch_htf(candidate.symbol)
         mtf = fetch_mtf(candidate.symbol)
         ltf = fetch_ltf(candidate.symbol)
         if not htf or not mtf or not ltf:
+            filter_counts["missing_multi_timeframe_candles"] += 1
             entries.append({
                 "symbol": candidate.symbol,
                 "skipped": True,
                 "reason": "missing_multi_timeframe_candles",
+                "soft_entry": soft,
+                "scanner_action": candidate.action,
             })
-            continue
+            return
+
         result = coordinator.process_entry_candidate(
             candidate, htf_candles=htf, mtf_candles=mtf, ltf_candles=ltf
         )
         entries.append({
             "symbol": candidate.symbol,
             "scanner_confidence": candidate.confidence,
+            "scanner_action": candidate.action,
+            "soft_entry": soft,
             "result": result.to_dict(),
         })
         scanned += 1
+        if soft:
+            watch_evaluated += 1
+            filter_counts["watch_soft_evaluated"] += 1
+        else:
+            filter_counts["evaluated"] += 1
         try:
             from app.events.publisher import publish
             publish({
                 "event_type": "entry_candidate_processed",
                 "symbol": candidate.symbol,
                 "scanner_confidence": candidate.confidence,
+                "scanner_action": candidate.action,
+                "soft_entry": soft,
                 "result": result.to_dict(),
                 "timestamp": datetime.now(tz=UTC).isoformat(),
             })
         except Exception:
             pass
 
+    for candidate in hard_candidates:
+        if scanned >= config.max_entry_symbols:
+            filter_counts["not_evaluated_after_cap"] += 1
+            break
+        _evaluate(candidate, soft=False)
+
+    if config.allow_watch_soft_entry:
+        for candidate in soft_candidates:
+            if scanned >= config.max_entry_symbols:
+                filter_counts["not_evaluated_after_cap"] += 1
+                break
+            if watch_evaluated >= config.max_watch_soft_entry:
+                filter_counts["max_watch_soft_entry_cap"] += max(
+                    0, len(soft_candidates) - watch_evaluated - filter_counts.get("watch_low_confidence", 0)
+                )
+                # Cap hit: stop soft evaluations
+                break
+            _evaluate(candidate, soft=True)
+    else:
+        if soft_candidates:
+            filter_counts["action_WATCH"] += len(soft_candidates)
+
     monitor: list[dict[str, Any]] = []
+    monitor_skipped = 0
     if config.monitor_positions:
         for symbol, raw_position in open_positions.items():
             position = _position_context(raw_position)
             if position is None:
+                monitor_skipped += 1
                 continue
             htf = fetch_htf(symbol)
             mtf = fetch_mtf(symbol)
             ltf = fetch_ltf(symbol)
             if not htf or not mtf or not ltf:
+                monitor_skipped += 1
                 monitor.append({
                     "symbol": symbol,
                     "skipped": True,
@@ -282,6 +377,44 @@ def run_pipeline_bridge(
             )
             monitor.append({"symbol": symbol, "result": result.to_dict()})
 
+    entry_skipped = sum(
+        1 for item in entries if isinstance(item, dict) and item.get("skipped")
+    )
+    entry_evaluated = len(entries) - entry_skipped
+    summary = {
+        "scanner_results_in": len(scanner_results),
+        "candidates_seen": candidates_seen,
+        "candidates_directional": candidates_directional,
+        "candidates_watch": candidates_watch,
+        "entry_evaluations": entry_evaluated,
+        "entry_skipped": entry_skipped,
+        "watch_soft_evaluated": watch_evaluated,
+        "entry_filter_counts": dict(filter_counts),
+        "min_scanner_confidence": config.min_scanner_confidence,
+        "min_watch_confidence": config.min_watch_confidence,
+        "allow_watch_soft_entry": config.allow_watch_soft_entry,
+        "max_entry_symbols": config.max_entry_symbols,
+        "max_watch_soft_entry": config.max_watch_soft_entry,
+        "positions_received": len(open_positions),
+        "positions_monitored": len(monitor) - sum(
+            1 for item in monitor if isinstance(item, dict) and item.get("skipped")
+        ),
+        "positions_skipped": monitor_skipped,
+        "position_symbols": list(open_positions),
+    }
+    print(
+        "agent_pipeline"
+        f" in={summary['scanner_results_in']}"
+        f" directional={candidates_directional}"
+        f" watch={candidates_watch}"
+        f" evaluated={entry_evaluated}"
+        f" watch_soft={watch_evaluated}"
+        f" entry_skip={entry_skipped}"
+        f" filters={dict(filter_counts)}"
+        f" monitor={summary['positions_monitored']}/{len(open_positions)}",
+        flush=True,
+    )
+
     payload: dict[str, Any] = {
         "enabled": True,
         "generated_at": datetime.now(tz=UTC).isoformat(),
@@ -291,12 +424,7 @@ def run_pipeline_bridge(
         "live_ready": live_ready,
         "entries": entries,
         "monitor": monitor,
-        "summary": {
-            "entry_evaluations": len(entries),
-            "positions_received": len(open_positions),
-            "positions_monitored": len(monitor),
-            "position_symbols": list(open_positions),
-        },
+        "summary": summary,
     }
     _write_output(config.output_path, payload)
     return payload

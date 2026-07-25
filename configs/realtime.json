@@ -13,7 +13,10 @@
     "enabled": true,
     "htf_timeframe": "4h",
     "ltf_timeframe": "15m",
-    "entry_timeframes": ["5m", "15m"],
+    "entry_timeframes": [
+      "5m",
+      "15m"
+    ],
     "htf_limit": 200,
     "ltf_limit": 300,
     "min_rr": 2.0,
@@ -34,7 +37,10 @@
     "ltf_limit": 200,
     "output_path": "logs/agent_pipeline.json",
     "max_entry_symbols": 5,
-    "monitor_positions": true
+    "monitor_positions": true,
+    "allow_watch_soft_entry": true,
+    "min_watch_confidence": 75.0,
+    "max_watch_soft_entry": 3
   },
   "learning_recorder": {
     "enabled": true,

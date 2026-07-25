@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import statistics
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -227,14 +228,13 @@ class ScanItem:
 class ScanRankings:
     long: list[ScanItem]
     short: list[ScanItem]
-    # Simbol yang wajib dipantau (misalnya posisi terbuka) disimpan terpisah
-    # agar ranking top N tetap benar-benar berisi kandidat terbaik.
     tracked: list[ScanItem] = field(default_factory=list)
     market_breadth: dict[str, object] = field(default_factory=dict)
     move_alerts: list[dict[str, object]] = field(default_factory=list)
     ticker_meta: dict[str, dict[str, object]] = field(default_factory=dict)
     long_actionable: list[ScanItem] = field(default_factory=list)
     short_actionable: list[ScanItem] = field(default_factory=list)
+    scan_stats: dict[str, object] = field(default_factory=dict)
 
     def __iter__(self):
         # Kompatibilitas opsional jika ada kode yang ingin membongkar dua hasil.
@@ -338,6 +338,8 @@ def scan_symbol_rankings(
     rules_path: str = "configs/rules.json",
     market_data: MarketDataService | None = None,
 ) -> ScanRankings:
+    start_time = time.perf_counter()
+    mode = str(config.get("symbol_mode", "static")).strip().lower()
     exchange = str(config.get("exchange", "binance"))
     timeframe = str(config.get("timeframe", "1m"))
     limit = int(config.get("limit", 100))
@@ -376,8 +378,7 @@ def scan_symbol_rankings(
     all_results: list[ScanItem] = []
     tracked_set = set(tracked_symbols)
     ticker_meta: dict[str, dict[str, object]] = {}
-
-
+    skipped_count = 0
 
     for symbol in symbols:
         try:
@@ -388,6 +389,7 @@ def scan_symbol_rankings(
                 force_refresh=symbol in tracked_set,
             )
         except Exception as exc:
+            skipped_count += 1
             print(f"scan symbol skipped {symbol}: {exc}", flush=True)
             continue
 
@@ -535,6 +537,32 @@ def scan_symbol_rankings(
         item for item in all_results if item.symbol in tracked_set
     ]
 
+    duration_ms = int((time.perf_counter() - start_time) * 1000)
+    scan_stats = {
+        "prefilter_count": len(symbols),
+        "scanned_count": len(all_results),
+        "skipped_count": skipped_count,
+        "ranked_long": len(long_ranked),
+        "ranked_short": len(short_ranked),
+        "long_actionable": len(long_actionable),
+        "short_actionable": len(short_actionable),
+        "mode": mode,
+        "exchange": exchange,
+        "timeframe": timeframe,
+        "duration_ms": duration_ms,
+    }
+    print(
+        "scan_stats"
+        f" mode={mode}"
+        f" prefilter={scan_stats['prefilter_count']}"
+        f" scanned={scan_stats['scanned_count']}"
+        f" skipped={skipped_count}"
+        f" ranked={scan_stats['ranked_long']}/{scan_stats['ranked_short']}"
+        f" actionable={scan_stats['long_actionable']}/{scan_stats['short_actionable']}"
+        f" duration_ms={duration_ms}",
+        flush=True,
+    )
+
     return ScanRankings(
         long=long_ranked,
         short=short_ranked,
@@ -544,6 +572,7 @@ def scan_symbol_rankings(
         ticker_meta=ticker_meta,
         long_actionable=long_actionable,
         short_actionable=short_actionable,
+        scan_stats=scan_stats,
     )
 
 

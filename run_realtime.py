@@ -296,6 +296,8 @@ def build_runtime_agent_coordinator(
     coordinator_config = AgentPipelineConfig(
         min_scanner_confidence=config.min_scanner_confidence,
         execute_decisions=config.execute_decisions,
+        allow_watch_soft_entry=bool(getattr(config, "allow_watch_soft_entry", False)),
+        min_watch_confidence=float(getattr(config, "min_watch_confidence", 75.0)),
     )
     if execution.mode == "paper":
         return AgentPipelineCoordinator(
@@ -351,6 +353,7 @@ def write_scan_outputs(
     tracked_results: list[dict[str, object]] | None = None,
     market_breadth: dict[str, object] | None = None,
     move_alerts: list[dict[str, object]] | None = None,
+    scan_stats: dict[str, object] | None = None,
 ) -> None:
     now = datetime.now(tz=UTC).isoformat()
     payload = {
@@ -362,6 +365,7 @@ def write_scan_outputs(
         "tracked_signals": tracked_results or [],
         "market_breadth": market_breadth or {},
         "move_alerts": move_alerts or [],
+        "scan_stats": scan_stats or {},
     }
     if paper is not None:
         payload["paper"] = paper
@@ -960,6 +964,11 @@ def run_once(
             if isinstance(getattr(rankings, "move_alerts", None), list)
             else []
         ),
+        scan_stats=(
+            rankings.scan_stats
+            if isinstance(getattr(rankings, "scan_stats", None), dict)
+            else {}
+        ),
     )
 
     # --- Multi-agent pipeline bridge (advisory, off by default) ---
@@ -1002,9 +1011,30 @@ def run_once(
                 config=agent_pipeline_config,
                 exchange=exchange.lower(),
             )
+            # Soft-entry needs raw scanner WATCH rows. ACR enrichment often
+            # rewrites non-confirmed directional rows to SKIP, which would hide
+            # WATCH candidates from the agent entirely.
+            agent_scanner_results = list(pipeline_signals)
+            if agent_pipeline_config.allow_watch_soft_entry:
+                seen = {
+                    str(item.get("symbol"))
+                    for item in agent_scanner_results
+                    if isinstance(item, dict)
+                }
+                for item in [*results, *short_results]:
+                    if not isinstance(item, dict):
+                        continue
+                    symbol = str(item.get("symbol") or "")
+                    if not symbol or symbol in seen:
+                        continue
+                    long_action = str(item.get("action") or "").upper()
+                    short_action = str(item.get("short_action") or "").upper()
+                    if long_action == "WATCH" or short_action == "WATCH":
+                        agent_scanner_results.append(item)
+                        seen.add(symbol)
             agent_pipeline_payload = run_pipeline_bridge(
                 config=agent_pipeline_config,
-                scanner_results=pipeline_signals,
+                scanner_results=agent_scanner_results,
                 open_positions=open_positions_map,
                 market_data=market_data,
                 coordinator=coordinator,
@@ -1190,6 +1220,11 @@ def run_once(
         "live_decisions": live_decisions,
         "agent_pipeline": agent_pipeline_payload,
         "learning_recorder": learning_recorder_summary,
+        "scan_stats": (
+            rankings.scan_stats
+            if isinstance(getattr(rankings, "scan_stats", None), dict)
+            else {}
+        ),
     }
 
 
@@ -1237,11 +1272,38 @@ def main() -> None:
         live_summary = ""
         if result.get("live_decisions"):
             live_summary = f" | live decisions={len(result['live_decisions'])}"
+        scan_stats = result.get("scan_stats") if isinstance(result.get("scan_stats"), dict) else {}
+        scan_summary = ""
+        if scan_stats:
+            scan_summary = (
+                f" | scan prefilter={scan_stats.get('prefilter_count', 0)}"
+                f" scanned={scan_stats.get('scanned_count', 0)}"
+                f" skipped={scan_stats.get('skipped_count', 0)}"
+                f" ranked={scan_stats.get('ranked_long', 0)}/{scan_stats.get('ranked_short', 0)}"
+                f" actionable={scan_stats.get('long_actionable', 0)}/{scan_stats.get('short_actionable', 0)}"
+                f" ms={scan_stats.get('duration_ms', 0)}"
+            )
+        agent_summary = ""
+        agent_payload = result.get("agent_pipeline")
+        if isinstance(agent_payload, dict) and agent_payload.get("enabled"):
+            agent_sum = agent_payload.get("summary") if isinstance(agent_payload.get("summary"), dict) else {}
+            filters = agent_sum.get("entry_filter_counts") if isinstance(agent_sum.get("entry_filter_counts"), dict) else {}
+            agent_summary = (
+                f" | agent in={agent_sum.get('scanner_results_in', 0)}"
+                f" directional={agent_sum.get('candidates_directional', 0)}"
+                f" evaluated={agent_sum.get('entry_evaluations', 0)}"
+                f" entry_skip={agent_sum.get('entry_skipped', 0)}"
+                f" monitor={agent_sum.get('positions_monitored', 0)}/{agent_sum.get('positions_received', 0)}"
+            )
+            if filters:
+                agent_summary += f" filters={filters}"
         print(
             f"{datetime.now(tz=UTC).isoformat()} | "
             + ", ".join(summary)
             + paper_summary
             + live_summary
+            + scan_summary
+            + agent_summary
             + (
                 " | short shadow top="
                 + ", ".join(short_summary)

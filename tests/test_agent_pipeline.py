@@ -180,3 +180,42 @@ def test_optional_llm_hooks_do_not_change_pipeline_outputs() -> None:
     if data["execution"] is not None:
         assert data["execution"]["plan"]["meta"]["llm_explanation"]["model"] == "executor-model"
     assert data["decision"]["meta"]["llm_audit"]["final_action_unchanged"] is True
+
+def test_watch_soft_entry_is_eligible_when_enabled(tmp_path: Path) -> None:
+    learning = LearningAgent(
+        store=TradeStore(str(tmp_path / "trades.jsonl")),
+        observation_store=ChartObservationStore(str(tmp_path / "observations.jsonl")),
+    )
+    coordinator = AgentPipelineCoordinator(
+        learning_agent=learning,
+        executor_agent=ExecutorAgent(balance=10_000),
+        config=AgentPipelineConfig(
+            min_scanner_confidence=90.0,
+            allow_watch_soft_entry=True,
+            min_watch_confidence=75.0,
+        ),
+    )
+    result = coordinator.process_entry_candidate(
+        ScannerCandidate(
+            symbol="BTC/USDT", action="WATCH", confidence=78.0,
+            failed_gates=[], meta={},
+        ),
+        htf_candles=_candles(), mtf_candles=_candles(), ltf_candles=_candles(),
+    )
+    assert result.eligible is True
+    assert result.eligibility_reason == "watch_soft_entry"
+    assert result.chart_reading is not None
+    assert result.decision is not None
+
+
+def test_watch_soft_entry_disabled_by_default(tmp_path: Path) -> None:
+    coordinator = _coordinator(tmp_path)
+    result = coordinator.process_entry_candidate(
+        ScannerCandidate(
+            symbol="BTC/USDT", action="WATCH", confidence=95.0,
+            failed_gates=[], meta={},
+        ),
+        htf_candles=_candles(), mtf_candles=_candles(), ltf_candles=_candles(),
+    )
+    assert result.eligible is False
+    assert "scanner_action=WATCH" in result.eligibility_reason

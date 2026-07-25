@@ -7,8 +7,12 @@ P0 safety:
 - Learning is advisory by default (does not change decision scores).
 - RiskAgent veto sits between Decision and Executor for ENTRY/EXIT.
 - HOLD/SKIP reach Executor as dry-run no-ops when execute is on.
-- LLM hooks are read-only explain/audit only.
+- Chart LLM may free-form analyse (any method/indicator) into ChartProposal;
+  geometry is validated in Python; proposal is advisory unless adopted.
+- Decision LLM audits (optional VETO); never bypasses Risk.
+- Executor path remains non-LLM for order placement.
 """
+
 
 from __future__ import annotations
 
@@ -18,12 +22,20 @@ from typing import Any
 
 from app.agent_pipeline.models import PipelineResult, ScannerCandidate
 from app.chart_agent.agent import ChartReaderAgent
+from app.chart_agent.proposal import (
+    parse_chart_proposal,
+    proposal_system_prompt,
+    proposal_user_payload,
+    validate_chart_proposal,
+)
 from app.core.models import Candle
 from app.decision_agent.agent import DecisionMakerAgent
+from app.decision_agent.models import Decision, EntryPlan
 from app.executor_agent.agent import ExecutorAgent
 from app.executor_agent.models import PositionContext
 from app.learning_agent.agent import LearningAgent
 from app.risk.risk_agent import RiskAgent, RiskApproval
+
 
 
 @dataclass(frozen=True)
@@ -35,6 +47,16 @@ class AgentPipelineConfig:
     apply_learning_to_decision: bool = False
     require_risk_gate: bool = True
     scanner_chart_conflict_policy: str = "IGNORE"
+    # Soft-entry: evaluate top WATCH candidates (chart still must approve ENTRY).
+    allow_watch_soft_entry: bool = False
+    min_watch_confidence: float = 75.0
+    # Chart LLM: free-technique proposal (not fixed indicator set).
+    chart_llm_propose: bool = True
+    # When True, validated proposal levels may replace EntryPlan on ENTRY_*.
+    adopt_chart_proposal_levels: bool = True
+    # Decision LLM may VETO entry/exit; never force ENTRY.
+    decision_llm_can_veto: bool = True
+    decision_llm_veto_min_confidence: float = 0.75
 
 class AgentPipelineCoordinator:
     """Wires specialist agents without mixing responsibilities."""
@@ -91,7 +113,7 @@ class AgentPipelineCoordinator:
                 chart_reading=None, decision=None, execution=None,
             )
         reading = self.chart_agent.read(candidate.symbol, htf_candles, mtf_candles, ltf_candles)
-        reading = self._explain_chart(reading, stage="ENTRY")
+        reading = self._propose_chart(reading, stage="ENTRY")
         conflict = self._scanner_chart_conflict(candidate.action, reading.bias)
         if conflict and self.config.scanner_chart_conflict_policy == "REJECT":
             return PipelineResult(
@@ -102,6 +124,7 @@ class AgentPipelineCoordinator:
             )
         insight, learning_advisory = self._load_learning()
         decision = self.decision_agent.decide_entry(reading, insight)
+        decision = self._adopt_chart_proposal(reading, decision)
         decision = self._audit_decision(reading, insight, decision, stage="ENTRY")
         self.learning_agent.record_chart_reading(
             reading, stage="ENTRY_CANDIDATE",
@@ -120,7 +143,7 @@ class AgentPipelineCoordinator:
             decision = replace(decision, meta=meta)
         return PipelineResult(
             stage="ENTRY", eligible=True,
-            eligibility_reason="scanner_gates_passed_and_confidence_qualified",
+            eligibility_reason=reason,
             chart_reading=reading, decision=decision, execution=execution,
             risk_approval=risk.to_dict(), learning_advisory=learning_advisory,
             scanner_chart_conflict=conflict,
@@ -128,7 +151,7 @@ class AgentPipelineCoordinator:
 
     def monitor_position(self, *, symbol: str, position: PositionContext, htf_candles: list[Candle], mtf_candles: list[Candle], ltf_candles: list[Candle]) -> PipelineResult:
         reading = self.chart_agent.read(symbol, htf_candles, mtf_candles, ltf_candles)
-        reading = self._explain_chart(reading, stage="POSITION_MONITOR")
+        reading = self._propose_chart(reading, stage="POSITION_MONITOR")
         insight, learning_advisory = self._load_learning()
         decision = self.decision_agent.decide_hold(reading, position.side, insight)
         decision = self._audit_decision(reading, insight, decision, stage="POSITION_MONITOR")
@@ -144,13 +167,30 @@ class AgentPipelineCoordinator:
         return PipelineResult(stage="POSITION_MONITOR", eligible=True, eligibility_reason="open_position_monitoring", chart_reading=reading, decision=decision, execution=execution, risk_approval=risk.to_dict(), learning_advisory=learning_advisory)
 
     def _entry_eligible(self, candidate: ScannerCandidate) -> tuple[bool, str]:
-        if candidate.action not in {"BUY", "SELL"}:
-            return False, f"scanner_action={candidate.action}"
-        if not candidate.gates_passed:
-            return False, "scanner_gates_failed"
-        if candidate.confidence < self.config.min_scanner_confidence:
-            return False, f"scanner_confidence={candidate.confidence:.1f}<{self.config.min_scanner_confidence:.1f}"
-        return True, "qualified"
+        if candidate.action in {"BUY", "SELL"}:
+            if not candidate.gates_passed:
+                return False, "scanner_gates_failed"
+            if candidate.confidence < self.config.min_scanner_confidence:
+                return False, (
+                    f"scanner_confidence={candidate.confidence:.1f}"
+                    f"<{self.config.min_scanner_confidence:.1f}"
+                )
+            return True, "qualified"
+
+        if (
+            candidate.action == "WATCH"
+            and self.config.allow_watch_soft_entry
+        ):
+            if not candidate.gates_passed:
+                return False, "scanner_gates_failed"
+            if candidate.confidence < self.config.min_watch_confidence:
+                return False, (
+                    f"watch_confidence={candidate.confidence:.1f}"
+                    f"<{self.config.min_watch_confidence:.1f}"
+                )
+            return True, "watch_soft_entry"
+
+        return False, f"scanner_action={candidate.action}"
 
     def _scanner_chart_conflict(self, scanner_action: str, chart_bias: str) -> str | None:
         if scanner_action == "BUY" and chart_bias == "BEARISH":
@@ -181,31 +221,216 @@ class AgentPipelineCoordinator:
             return RiskApproval(approved=True, reason=f"noop_allowed={decision.action}", checks={"action": decision.action, "noop": True})
         return self.risk_agent.approve_execution(decision, position=position, candles=candles)
 
+    def _propose_chart(self, reading, *, stage: str):
+        """Chart LLM free-technique proposal; falls back to explain-only storage."""
+        if self._chart_llm_client is None or not self._chart_llm_model:
+            return reading
+        meta = dict(reading.meta)
+        try:
+            if self.config.chart_llm_propose:
+                output = self._chart_llm_client.chat_json(
+                    system=proposal_system_prompt(),
+                    user=json.dumps(
+                        proposal_user_payload(reading, stage=stage), ensure_ascii=False
+                    ),
+                    max_tokens=1200,
+                    temperature=0.2,
+                )
+            else:
+                payload = {
+                    "stage": stage,
+                    "chart_reading": reading.to_dict(),
+                    "instruction": "Explain chart reading. Do not change bias or levels.",
+                }
+                output = self._chart_llm_client.chat_json(
+                    system="You are a read-only chart explanation assistant. Output JSON only.",
+                    user=json.dumps(payload, ensure_ascii=False),
+                    max_tokens=600,
+                    temperature=0.2,
+                )
+            proposal = parse_chart_proposal(output, symbol=reading.symbol)
+            validation = None
+            if proposal is not None:
+                validation = validate_chart_proposal(proposal, reading)
+            meta["llm_proposal"] = {
+                "enabled": True,
+                "model": self._chart_llm_model,
+                "provider_base_url": self._chart_llm_base_url,
+                "mode": "propose" if self.config.chart_llm_propose else "explain",
+                "raw": output,
+                "proposal": proposal.to_dict() if proposal else None,
+                "validation": validation.to_dict() if validation else None,
+                "free_technique": True,
+                "deterministic_fields_unchanged": True,
+            }
+            meta["llm_explanation"] = {
+                "enabled": True,
+                "model": self._chart_llm_model,
+                "provider_base_url": self._chart_llm_base_url,
+                "result": output,
+                "deterministic_fields_unchanged": True,
+                "via": "chart_proposal",
+            }
+        except Exception as exc:
+            meta["llm_proposal"] = {
+                "enabled": True,
+                "model": self._chart_llm_model,
+                "error": str(exc),
+                "fallback": "deterministic_chart_only",
+                "deterministic_fields_unchanged": True,
+            }
+            meta["llm_explanation"] = {
+                "enabled": True,
+                "model": self._chart_llm_model,
+                "error": str(exc),
+                "fallback": "deterministic_chart_only",
+                "deterministic_fields_unchanged": True,
+            }
+        return replace(reading, meta=meta)
+
+    def _adopt_chart_proposal(self, reading, decision: Decision) -> Decision:
+        """Optionally replace EntryPlan with validated free-technique levels."""
+        if not self.config.adopt_chart_proposal_levels:
+            return decision
+        if decision.action not in {"ENTRY_BUY", "ENTRY_SELL"}:
+            return decision
+        block = reading.meta.get("llm_proposal") if isinstance(reading.meta, dict) else None
+        if not isinstance(block, dict):
+            return decision
+        validation = block.get("validation") or {}
+        proposal_data = block.get("proposal")
+        if not validation.get("accepted") or not isinstance(proposal_data, dict):
+            meta = dict(decision.meta)
+            meta["chart_proposal_adopted"] = False
+            meta["chart_proposal_skip_reason"] = validation.get("reasons") or ["not_accepted"]
+            return replace(decision, meta=meta)
+
+        entry = proposal_data.get("proposed_entry")
+        sl = proposal_data.get("proposed_sl")
+        tp1 = proposal_data.get("proposed_tp1")
+        if entry is None or sl is None or tp1 is None:
+            return decision
+
+        side = "BUY" if decision.action == "ENTRY_BUY" else "SELL"
+        risk = abs(float(entry) - float(sl))
+        rr = abs(float(tp1) - float(entry)) / risk if risk > 0 else 0.0
+        old_plan = decision.entry_plan
+        new_plan = EntryPlan(
+            side=side,  # type: ignore[arg-type]
+            entry_price=round(float(entry), 8),
+            stop_loss=round(float(sl), 8),
+            take_profit_1=round(float(tp1), 8),
+            take_profit_2=(
+                round(float(proposal_data["proposed_tp2"]), 8)
+                if proposal_data.get("proposed_tp2") is not None
+                else (old_plan.take_profit_2 if old_plan else None)
+            ),
+            take_profit_3=(
+                round(float(proposal_data["proposed_tp3"]), 8)
+                if proposal_data.get("proposed_tp3") is not None
+                else (old_plan.take_profit_3 if old_plan else None)
+            ),
+            risk_reward=round(rr, 2),
+            position_size_percent=old_plan.position_size_percent if old_plan else 1.0,
+            entry_zone=old_plan.entry_zone if old_plan else None,
+            order_type=old_plan.order_type if old_plan else "LIMIT",
+            expires_in_seconds=old_plan.expires_in_seconds if old_plan else 900.0,
+        )
+        meta = dict(decision.meta)
+        meta["chart_proposal_adopted"] = True
+        meta["chart_proposal_methods"] = list(proposal_data.get("methods_used") or [])
+        meta["chart_proposal_indicators"] = list(proposal_data.get("indicators_used") or [])
+        meta["chart_proposal_techniques"] = list(proposal_data.get("techniques_used") or [])
+        meta["entry_plan_source"] = "chart_llm_proposal"
+        reasons = list(decision.reasons) + ["entry_plan_from_chart_llm_proposal"]
+        return replace(decision, entry_plan=new_plan, reasons=reasons, meta=meta)
+
     def _audit_decision(self, reading, insight, decision, *, stage: str):
         if self._decision_llm_client is None or not self._decision_llm_model:
             return decision
-        payload = {"stage": stage, "chart_reading": reading.to_dict(), "learning_insight": insight.to_dict() if insight is not None else None, "decision": decision.to_dict(), "instruction": "Audit this deterministic decision. Do not change action. Output JSON only."}
-        meta = dict(decision.meta)
+        proposal_block = None
+        if isinstance(reading.meta, dict):
+            proposal_block = reading.meta.get("llm_proposal")
+        payload = {
+            "stage": stage,
+            "chart_reading": reading.to_dict(),
+            "chart_llm_proposal": proposal_block,
+            "learning_insight": insight.to_dict() if insight is not None else None,
+            "decision": decision.to_dict(),
+            "instruction": (
+                "Audit this decision using the deterministic chart reading and any "
+                "free-technique chart proposal. "
+                "You may vote SUPPORT or VETO. "
+                "VETO only when risk/setup quality is poor. "
+                "You must NOT invent a new ENTRY if decision is SKIP. "
+                "You must NOT change entry/SL/TP numbers here. "
+                "Output JSON keys: vote (SUPPORT|VETO|ABSTAIN), confidence (0-1), "
+                "reasons (array), notes (string)."
+            ),
+        }
         try:
-            output = self._decision_llm_client.chat_json(system="You are a read-only decision auditor. Output JSON only.", user=json.dumps(payload, ensure_ascii=False), max_tokens=500, temperature=0.1)
-            meta["llm_audit"] = {"enabled": True, "model": self._decision_llm_model, "provider_base_url": self._decision_llm_base_url, "result": output, "final_action_unchanged": True}
+            output = self._decision_llm_client.chat_json(
+                system=(
+                    "You are the Decision audit agent. Output JSON only. "
+                    "Prefer VETO over forcing trades. Never place orders."
+                ),
+                user=json.dumps(payload, ensure_ascii=False),
+                max_tokens=500,
+                temperature=0.1,
+            )
+            vote = str((output or {}).get("vote") or "ABSTAIN").strip().upper()
+            conf = output.get("confidence") if isinstance(output, dict) else None
+            try:
+                conf_f = float(conf) if conf is not None else 0.0
+            except (TypeError, ValueError):
+                conf_f = 0.0
+            if conf_f > 1.0:
+                conf_f = conf_f / 100.0
+
+            action_changed = False
+            if (
+                self.config.decision_llm_can_veto
+                and vote == "VETO"
+                and conf_f >= self.config.decision_llm_veto_min_confidence
+                and decision.action in {"ENTRY_BUY", "ENTRY_SELL", "EXIT"}
+            ):
+                final_action = "SKIP" if decision.action.startswith("ENTRY") else "HOLD"
+                action_changed = True
+                reasons = list(decision.reasons) + [
+                    f"decision_llm_veto conf={conf_f:.2f}",
+                    *[str(r) for r in (output.get("reasons") or [])][:5],
+                ]
+                decision = replace(
+                    decision,
+                    action=final_action,  # type: ignore[arg-type]
+                    entry_plan=None if final_action == "SKIP" else decision.entry_plan,
+                    exit_plan=None if final_action == "HOLD" else decision.exit_plan,
+                    reasons=reasons,
+                    confidence="LOW",
+                )
+
+            meta = dict(decision.meta)
+            meta["llm_audit"] = {
+                "enabled": True,
+                "model": self._decision_llm_model,
+                "provider_base_url": self._decision_llm_base_url,
+                "result": output,
+                "vote": vote,
+                "vote_confidence": conf_f,
+                "final_action_unchanged": not action_changed,
+                "can_veto": self.config.decision_llm_can_veto,
+            }
             return replace(decision, meta=meta)
         except Exception as exc:
             meta = dict(decision.meta)
-            meta["llm_audit"] = {"enabled": True, "model": self._decision_llm_model, "error": str(exc), "fallback": "deterministic_decision_only", "final_action_unchanged": True}
+            meta["llm_audit"] = {
+                "enabled": True,
+                "model": self._decision_llm_model,
+                "error": str(exc),
+                "fallback": "deterministic_decision_only",
+                "final_action_unchanged": True,
+            }
             return replace(decision, meta=meta)
-
-    def _explain_chart(self, reading, *, stage: str):
-        if self._chart_llm_client is None or not self._chart_llm_model:
-            return reading
-        payload = {"stage": stage, "chart_reading": reading.to_dict(), "instruction": "Explain chart reading. Do not change bias or levels."}
-        meta = dict(reading.meta)
-        try:
-            output = self._chart_llm_client.chat_json(system="You are a read-only chart explanation assistant. Output JSON only.", user=json.dumps(payload, ensure_ascii=False), max_tokens=600, temperature=0.2)
-            meta["llm_explanation"] = {"enabled": True, "model": self._chart_llm_model, "provider_base_url": self._chart_llm_base_url, "result": output, "deterministic_fields_unchanged": True}
-        except Exception as exc:
-            meta["llm_explanation"] = {"enabled": True, "model": self._chart_llm_model, "error": str(exc), "fallback": "deterministic_chart_only", "deterministic_fields_unchanged": True}
-        return replace(reading, meta=meta)
 
     def _explain_execution(self, decision, execution) -> None:
         if self._executor_llm_client is None or not self._executor_llm_model:
