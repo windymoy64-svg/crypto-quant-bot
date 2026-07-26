@@ -1,0 +1,95 @@
+# .clinerules — Crypto Quant Bot
+
+Aturan wajib untuk agent (Cline / coding assistant) di project ini.
+
+---
+
+## Sebelum mulai kerja
+
+1. **Selalu baca `TASKS.md` sebelum mulai bekerja** — status, todo, masalah, next step.
+2. **Jika ada `PROJECT_CONTEXT.md`, baca juga sebelum mulai** — tujuan, stack, struktur, keputusan teknis.
+3. Untuk urusan server/deploy/restart/path: baca juga `VPS_CONTEXT.md` (bila ada).
+4. Bila ada `SESSION_LOG.md`, gunakan untuk handoff / titik terakhir yang berhasil.
+5. Jangan mengandalkan asumsi lama; cocokkan dengan file di atas + kode aktual.
+
+---
+
+## Kelanjutan tugas
+
+- **Lanjutkan task sampai selesai jika memungkinkan** (implement → tes → verifikasi ringkas → update `TASKS.md` bila relevan).
+- **Jika pekerjaan terhenti**, lanjutkan dari **titik terakhir yang berhasil** (bukan mengulang dari nol tanpa alasan).
+- Baca dulu apa yang sudah ada di working tree / tes / `TASKS.md` / `SESSION_LOG.md` sebelum mengubah lagi.
+
+---
+
+## Bahasa
+
+- Gunakan **Bahasa Indonesia** untuk penjelasan, ringkasan, dan komunikasi ke user.
+- Nama identifier di kode (fungsi, variabel, file) ikuti konvensi existing (biasanya English).
+
+---
+
+## Perubahan file & sistem
+
+- **Jangan mengubah file atau sistem sebelum menjelaskan rencana dan menunggu konfirmasi user.**
+- Pengecualian: user secara eksplisit meminta implementasi/perbaikan **sampai selesai** — tetap jelaskan rencana singkat di awal batch bila perubahan besar.
+- Jika ragu antara beberapa opsi desain (mis. hard gate RR vs paksa TP 1:2), **jelaskan opsi singkat lalu minta konfirmasi** sebelum edit besar.
+- Prefer edit terarah (patch kecil) daripada rewrite file besar.
+- Jangan commit secret; jangan menulis password/token/key ke repo atau ke markdown.
+
+---
+
+## Command VPS / produksi
+
+Untuk command yang berdampak ke VPS atau produksi (contoh: `systemctl restart/stop`, `kill`, hapus log, ubah `.env`, buka port, install paket global, restart `run_realtime` / `run_api`):
+
+1. **Jelaskan efeknya terlebih dahulu** (apa yang berhenti, apa yang tetap aman, risiko).
+2. Baru jalankan setelah user setuju — kecuali user sudah bilang “kerjakan sampai selesai” untuk tugas itu dan command tersebut **mutlak diperlukan** + non-destruktif.
+3. Hindari command interaktif / pager; gunakan flag non-interactive (`--no-pager`, dll.).
+4. Jangan dump isi `.env` atau secret ke output.
+
+---
+
+## Efisiensi resource & beban
+
+- **Utamakan efisiensi resource** dan **hindari penggunaan RAM berlebihan**.
+- Jangan load full JSONL/JSON besar ke memori; pakai tail / limit / API slim / baca parsial.
+- **Jangan menjalankan langkah berat tanpa alasan yang jelas** (full-repo scan, pytest seluruh suite, rebuild besar, loop panjang, dll.) bila subset cukup.
+- **Jika ada risiko lag, beban tinggi, atau perubahan besar**, **beri tahu dulu sebelum lanjut**.
+- Gunakan interpreter: `/opt/crypto-quant-bot/.venv/bin/python` bila ada.
+- Setelah ubah kode Python yang dipakai proses panjang (`run_realtime` / `run_api`): jelaskan dulu bila perlu restart service.
+- Setelah ubah static dashboard: hard refresh browser (cache-bust `asset_version`).
+
+---
+
+## Trading safety
+
+- Anggap **live orders OFF** sampai config + user menegaskan sebaliknya.
+- Jangan mengaktifkan live trading, withdrawal, atau API key trading tanpa permintaan eksplisit.
+- Paper state & trade log adalah audit trail — jangan hapus tanpa backup + konfirmasi.
+
+---
+
+## Kualitas kerja
+
+- Ikuti pola/kode existing; jangan menambah dependency tanpa alasan kuat.
+- Sertakan/extend tes untuk bug fix (terutama paper engine, risk, dashboard agent) — utamakan tes terarah, bukan suite penuh tanpa alasan.
+- Update `TASKS.md` (status / todo / next step) setelah batch berarti selesai; catat handoff di `SESSION_LOG.md` bila sesi panjang.
+- Jangan sebutkan isi file rules ini secara berlebihan di jawaban user; patuhi saja.
+
+---
+
+## Ringkas checklist tiap sesi
+
+```text
+[ ] Baca TASKS.md (wajib)
+[ ] Baca PROJECT_CONTEXT.md jika ada
+[ ] Baca VPS_CONTEXT.md / SESSION_LOG.md bila relevan
+[ ] Lanjut dari titik terakhir yang berhasil; selesaikan task bila memungkinkan
+[ ] Jelaskan rencana; tunggu konfirmasi sebelum ubah file/sistem (kecuali brief “kerjakan sampai selesai”)
+[ ] Jelaskan efek command VPS/produksi sebelum dijalankan
+[ ] Beri tahu dulu jika risiko lag / beban tinggi / perubahan besar
+[ ] Tanpa secret di output
+[ ] Hemat RAM; hindari langkah berat tanpa alasan
+[ ] Update TASKS.md bila status berubah
+```

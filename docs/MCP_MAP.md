@@ -3,8 +3,8 @@
 Dokumen ini memetakan **mana yang jadi MCP server**, **mana yang tetap internal**,
 dan **urutan implementasi paling aman** untuk repo `/opt/crypto-quant-bot`.
 
-Status: **MCP-1 Ops MCP read-only DONE** (`app/mcp/`).
-Fase berikutnya masih desain; lihat urutan di bawah.
+Status: **MCP-1..4 DONE** (Ops, Market, Backtest, Monitoring/Notify) (`app/mcp/`).
+MCP-N Execution masih desain (default off).
 
 Prinsip tetap berlaku (lihat `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`,
 `docs-vibe-trading.md`):

@@ -806,9 +806,9 @@ function agentText(value){
   if(typeof value==="number"||typeof value==="boolean") return String(value);
   if(typeof value==="object"){
     return String(
-      value.text || value.message || value.summary || value.reason ||
+      value.text || value.message || value.summary || value.human_summary || value.reason ||
       value.assessment || value.hypothesis || value.description ||
-      value.title || value.note || ""
+      value.title || value.note || value.explanation || value.analysis || ""
     );
   }
   return String(value);
@@ -823,6 +823,44 @@ function agentPrettyReason(value){
 }
 function agentJoin(values,limit=2){
   return list(values).map(agentPrettyReason).filter(Boolean).slice(0,limit).join("; ");
+}
+function agentClip(text, max=280){
+  const value = String(text || "").replace(/\s+/g," ").trim();
+  if(!value) return "";
+  if(value.length <= max) return value;
+  return value.slice(0, max - 1).trimEnd() + "…";
+}
+function llmInsightDisplay(output){
+  const raw = (output && typeof output === "object") ? output : {};
+  const patch = (raw.policy_patch && typeof raw.policy_patch === "object") ? raw.policy_patch : {};
+  const summaryText = agentClip(
+    agentText(
+      raw.summary || raw.human_summary || raw.explanation || raw.reason || raw.analysis ||
+      patch.human_summary || patch.summary || raw.message || raw.text
+    )
+  );
+  let recommendations = agentJoin(raw.recommendations, 4);
+  if(!recommendations && patch && typeof patch === "object"){
+    const bits = [];
+    const prefer = agentJoin(patch.prefer_patterns, 3);
+    const avoid = agentJoin(patch.avoid_patterns, 3);
+    if(prefer) bits.push(`prefer: ${prefer}`);
+    if(avoid) bits.push(`avoid: ${avoid}`);
+    if(patch.size_multiplier != null && patch.size_multiplier !== "") bits.push(`size×${patch.size_multiplier}`);
+    if(patch.min_confluence_delta != null && patch.min_confluence_delta !== "") bits.push(`confΔ ${patch.min_confluence_delta}`);
+    if(patch.max_entries_per_cycle != null && patch.max_entries_per_cycle !== "") bits.push(`max_entries ${patch.max_entries_per_cycle}`);
+    if(patch.confidence != null && patch.confidence !== "") bits.push(`conf ${patch.confidence}`);
+    recommendations = bits.slice(0, 4).join("; ");
+  }
+  const reasons = agentJoin(raw.reasons || patch.reasons, 2);
+  const warnings = agentJoin(raw.warnings || patch.warnings, 2);
+  const fallback = reasons || recommendations || warnings;
+  return {
+    summaryText: summaryText || agentClip(fallback) || "-",
+    recommendations,
+    warnings,
+    reasons,
+  };
 }
 
 function renderAgentEntries(items){
@@ -922,19 +960,21 @@ function renderAgentLLMInsights(payload, llm){
   }
 
   const rows = insights.slice().reverse().map(item=>{
-    const output = item.output || {};
-    const summaryText = agentText(output.summary || output.explanation || output.reason || output.analysis) || "-";
-    const recommendations = agentJoin(output.recommendations, 2);
-    const warnings = agentJoin(output.warnings, 2);
+    const display = llmInsightDisplay(item.output || item.result || {});
+    const summaryText = display.summaryText;
+    const recommendations = display.recommendations;
+    const warnings = display.warnings;
+    const reasons = display.reasons && display.reasons !== summaryText ? display.reasons : "";
     return `<tr>
       <td data-label="Time">${esc(formatAgentTime(item.timestamp,true))}</td>
       <td data-label="Agent">${esc(item.agent||"-")}</td>
       <td data-label="Model">${esc(item.model||"-")}</td>
-      <td data-label="Output"><strong>${esc(summaryText)}</strong>${warnings?`<div><small>Warnings: ${esc(warnings)}</small></div>`:""}${recommendations?`<div><small>Recommendations: ${esc(recommendations)}</small></div>`:""}</td>
+      <td data-label="Output"><strong>${esc(summaryText)}</strong>${reasons?`<div><small>Reasons: ${esc(agentClip(reasons,160))}</small></div>`:""}${warnings?`<div><small>Warnings: ${esc(warnings)}</small></div>`:""}${recommendations?`<div><small>Recommendations: ${esc(agentClip(recommendations,180))}</small></div>`:""}</td>
     </tr>`;
   }).join("");
   listEl.innerHTML = `<table class="agent-table"><thead><tr><th>Time</th><th>Agent</th><th>Model</th><th>Output</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
+
 
 function renderAgentObservations(payload){
   const status = byId("agent-observations-status");

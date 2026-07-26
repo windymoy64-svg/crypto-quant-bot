@@ -182,7 +182,23 @@ def check_acr_invalidation(
 
     opposite: Direction = "BEARISH" if direction == "BULLISH" else "BULLISH"
 
-    counter_cisds = [c for c in cisd_levels(ltf_candles) if c.direction == opposite]
+    # Only newest counter CISD near the live edge. Full-history counters
+    # from before entry produced false invalidations and BE exits.
+    n = len(ltf_candles)
+    edge = max(0, n - 4)
+    all_counter = [c for c in cisd_levels(ltf_candles) if c.direction == opposite]
+    # Prefer index-near-edge when metadata exists; else keep only the newest
+    # counter event so pre-entry history cannot invalidate.
+    indexed = [
+        c for c in all_counter
+        if int(getattr(c, "break_index", getattr(c, "index", -1))) >= edge
+    ]
+    if indexed:
+        counter_cisds = indexed
+    elif all_counter:
+        counter_cisds = all_counter[-1:]
+    else:
+        counter_cisds = []
     if counter_cisds:
         return "counter_cisd"
 
@@ -190,7 +206,11 @@ def check_acr_invalidation(
         ltf_candles, direction=opposite, require_actionable=True
     )
     if counter_pattern is not None:
-        return "counter_acr_pattern"
+        p_index = getattr(counter_pattern, "index", None)
+        if p_index is None:
+            p_index = getattr(counter_pattern, "end_index", None)
+        if p_index is None or int(p_index) >= edge:
+            return "counter_acr_pattern"
 
     return None
 

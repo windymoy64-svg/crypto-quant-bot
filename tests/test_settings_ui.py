@@ -137,3 +137,7 @@ def test_llm_insight_renderer_supports_structured_model_output() -> None:
     assert "value.assessment || value.hypothesis" in javascript
     assert "const rationale = agentText(value.rationale);" in javascript
     assert 'join(" — ")' in javascript
+    assert "function llmInsightDisplay" in javascript
+    assert "patch.human_summary" in javascript
+    assert "function agentClip" in javascript
+    assert "value.human_summary" in javascript

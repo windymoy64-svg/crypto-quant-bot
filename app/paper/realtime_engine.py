@@ -183,8 +183,8 @@ class RealtimePaperTradingEngine:
         """Force-close an open position from an agent pipeline EXIT decision.
 
         Priority logic (trader-professional):
-        - IMMEDIATE (CHoCH / structure invalidation): always close. Structure
-          is dead — locking profit or cutting loss beats hoping.
+        - IMMEDIATE (CHoCH / structure invalidation): close on real loss or
+          solid profit; suppress break-even / micro-PnL noise exits.
         - NEXT_CANDLE (bias flip, confluence degraded): close only when PnL is
           outside the (0, 1R) "let winners run" band AND position age exceeds
           min_hold. Cut losers fast, lock big winners; small profits + fresh
@@ -211,10 +211,26 @@ class RealtimePaperTradingEngine:
         
         position = open_positions[symbol]
         
-        # IMMEDIATE: always close (structure invalidation).
+        # IMMEDIATE: close on real loss or solid profit only.
+        # Near BE / micro-PnL structure flags were flattening winners early.
         if urgency == "IMMEDIATE":
+            opened_at_str = position.get("opened_at")
+            if opened_at_str and -0.15 < float(pnl_ratio) <= 0.35:
+                try:
+                    opened_at = datetime.fromisoformat(
+                        str(opened_at_str).replace("Z", "+00:00")
+                    )
+                    age_seconds = (datetime.now(tz=UTC) - opened_at).total_seconds()
+                    if age_seconds < min_hold_seconds:
+                        return None
+                except (ValueError, AttributeError, TypeError):
+                    pass
+            if -0.15 < float(pnl_ratio) <= 0.35:
+                return None
             signal = {"symbol": symbol, "entry": float(exit_price)}
-            event = self._close_position_full(state, symbol, float(exit_price), reason, signal)
+            event = self._close_position_full(
+                state, symbol, float(exit_price), reason, signal
+            )
             state["updated_at"] = self._now()
             self._save_state(state)
             self._append_trade_event(event)
@@ -383,6 +399,23 @@ class RealtimePaperTradingEngine:
                 signal,
             )
 
+        if not take_profit:
+            # Signal TPs were missing or wrong-side (e.g. LONG TP below entry).
+            # Rebuild from risk so TP1 can never partial-close at a loss.
+            take_profit = self._fallback_take_profits(side, entry, stop_loss)
+            tp_level_source = "normalized_min_rr"
+        else:
+            take_profit, tp_level_source = self._normalize_take_profits_min_rr(
+                side, entry, stop_loss, take_profit
+            )
+
+        risk_distance = abs(entry - stop_loss)
+        rr_tp1 = (
+            round(abs(take_profit[0] - entry) / risk_distance, 4)
+            if take_profit and risk_distance > 0
+            else 0.0
+        )
+
         # Calculate available balance (total balance - margin committed by
         # open positions). Existing positions without leverage remain 1x.
         used_capital = sum(
@@ -449,6 +482,8 @@ class RealtimePaperTradingEngine:
             "atr_at_entry": atr_at_entry,
             "take_profit": take_profit,
             "tp_hit": [False, False, False],
+            "rr_tp1": rr_tp1,
+            "tp_level_source": tp_level_source,
             "realized_pnl_partial": 0.0,
             "opened_at": self._now(),
             "last_price": entry,
@@ -656,11 +691,13 @@ class RealtimePaperTradingEngine:
             not skip_fixed_tp
             and isinstance(targets, list)
             and targets
+            and self._is_profitable_target(position, float(targets[0]))
             and self._is_tp_hit(
                 position,
                 float(targets[0]),
                 price,
             )
+            and self._is_profitable_target(position, price)
         ):
             return [
                 self._close_position_full(
@@ -858,11 +895,21 @@ class RealtimePaperTradingEngine:
 
             target = float(targets[index])
 
+            # Skip inverted levels (LONG TP <= entry / SHORT TP >= entry).
+            if not self._is_profitable_target(position, target):
+                hits[index] = True
+                position["tp_hit"] = hits
+                continue
+
             if not self._is_tp_hit(
                 position,
                 target,
                 current_price,
             ):
+                continue
+
+            # Fill must still be on the profit side of entry.
+            if not self._is_profitable_target(position, current_price):
                 continue
 
             is_last = (
@@ -895,6 +942,7 @@ class RealtimePaperTradingEngine:
                 events.append(event)
                 hits[index] = True
                 position["tp_hit"] = hits
+                # Trailing + BE only after a profitable partial lock.
                 position["trailing_active"] = True
                 # After TP1 hit: move SL to breakeven for "free ride"
                 if index == 0:
@@ -1095,6 +1143,17 @@ class RealtimePaperTradingEngine:
 
         return price >= target
 
+    def _is_profitable_target(
+        self,
+        position: dict[str, object],
+        price: float,
+    ) -> bool:
+        """True when ``price`` is strictly on the profit side of entry."""
+        entry = float(position["entry"])
+        if self._is_short(position):
+            return price < entry
+        return price > entry
+
     def _is_short(
         self,
         position: dict[str, object],
@@ -1125,9 +1184,126 @@ class RealtimePaperTradingEngine:
         percent = self.config.take_profit_percent
         if percent is None:
             raw = signal.get("take_profit", [])
-            return [float(value) for value in raw] if isinstance(raw, list) else []
-        multiplier = 1 - (percent / 100) if side == "SHORT" else 1 + (percent / 100)
-        return [round(entry * multiplier, 8)]
+            levels = (
+                [float(value) for value in raw] if isinstance(raw, list) else []
+            )
+        else:
+            multiplier = (
+                1 - (percent / 100) if side == "SHORT" else 1 + (percent / 100)
+            )
+            levels = [round(entry * multiplier, 8)]
+        return self._sanitize_take_profits(side, entry, levels)
+
+    def _sanitize_take_profits(
+        self,
+        side: str,
+        entry: float,
+        levels: list[float],
+    ) -> list[float]:
+        """Keep only TPs on the profit side of entry, nearest first.
+
+        Drops inverted levels (LONG TP <= entry / SHORT TP >= entry) that would
+        fire partial closes at a loss and falsely arm the trailing badge.
+        """
+        cleaned: list[float] = []
+        seen: set[float] = set()
+        for raw in levels:
+            try:
+                level = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if side == "SHORT":
+                if level >= entry:
+                    continue
+            elif level <= entry:
+                continue
+            key = round(level, 8)
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(key)
+        if side == "SHORT":
+            cleaned.sort(reverse=True)
+        else:
+            cleaned.sort()
+        return cleaned[:3]
+
+    def _risk_multiple_levels(
+        self,
+        side: str,
+        entry: float,
+        stop_loss: float,
+        multiples: tuple[float, ...] = (2.0, 3.0, 4.0),
+    ) -> list[float]:
+        """Build TP ladder from risk multiples (default min RR 1:2 then 3R/4R)."""
+        risk = abs(entry - stop_loss)
+        if risk <= 0:
+            risk = max(entry * 0.01, 1e-8)
+        if side == "SHORT":
+            levels = [round(entry - risk * m, 8) for m in multiples]
+        else:
+            levels = [round(entry + risk * m, 8) for m in multiples]
+        return self._sanitize_take_profits(side, entry, levels)
+
+    def _normalize_take_profits_min_rr(
+        self,
+        side: str,
+        entry: float,
+        stop_loss: float,
+        levels: list[float],
+        min_rr: float = 2.0,
+    ) -> tuple[list[float], str]:
+        """Opsi C: keep structural TPs if TP1 RR >= min_rr, else floor to min_rr.
+
+        - Structural ladder with reward/risk >= min_rr is preserved as-is.
+        - If nearest TP is below min_rr, rebuild 2R/3R/4R (or lift TP1 and keep
+          farther structural levels that remain beyond the new TP1).
+        - Returns (levels, source) where source is ``structural`` or
+          ``normalized_min_rr``.
+        """
+        cleaned = self._sanitize_take_profits(side, entry, levels)
+        risk = abs(entry - stop_loss)
+        if risk <= 0:
+            risk = max(entry * 0.01, 1e-8)
+        if not cleaned:
+            return self._risk_multiple_levels(side, entry, stop_loss), "normalized_min_rr"
+
+        tp1_rr = abs(cleaned[0] - entry) / risk
+        if tp1_rr + 1e-12 >= min_rr:
+            return cleaned[:3], "structural"
+
+        # Floor TP1 to min_rr; keep structural levels farther than the floor.
+        floor_levels = self._risk_multiple_levels(
+            side, entry, stop_loss, multiples=(min_rr,)
+        )
+        if not floor_levels:
+            return self._risk_multiple_levels(side, entry, stop_loss), "normalized_min_rr"
+        tp1 = floor_levels[0]
+
+        farther: list[float] = []
+        for level in cleaned:
+            if side == "SHORT":
+                if level < tp1:
+                    farther.append(level)
+            elif level > tp1:
+                farther.append(level)
+
+        merged = self._sanitize_take_profits(side, entry, [tp1, *farther])
+        if len(merged) < 3:
+            extras = self._risk_multiple_levels(
+                side, entry, stop_loss, multiples=(3.0, 4.0)
+            )
+            merged = self._sanitize_take_profits(side, entry, [*merged, *extras])
+        return merged[:3], "normalized_min_rr"
+
+    def _fallback_take_profits(
+        self,
+        side: str,
+        entry: float,
+        stop_loss: float,
+    ) -> list[float]:
+        """Synthesize 2R / 3R / 4R targets when signal TPs are unusable."""
+        return self._risk_multiple_levels(side, entry, stop_loss)
 
     def _get_position(
         self,

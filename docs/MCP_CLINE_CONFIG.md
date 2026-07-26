@@ -65,3 +65,23 @@ See `docs/MCP_MAP.md` for architecture and future phases.
 
 Parameters: symbol (`BTC/USDT` or `BTCUSDT`), timeframe (`1m`…`1d`), limit 1–500,
 exchange (`binance`|`bitunix`|`okx`), force_refresh (default false).
+
+### Backtest (MCP-3)
+
+| Tool | Purpose |
+|---|---|
+| `list_backtest_artifacts` | List JSON under logs/backtests/ |
+| `get_backtest_artifact` | Read one artifact by filename |
+| `run_backtest` | Run guarded historical backtest (artifact write only) |
+
+`run_backtest` params: symbol, timeframe, limit (50-1000), exchange, initial_cash, use_sample_data.
+
+### Monitoring / Notify (MCP-4)
+
+| Tool | Purpose |
+|---|---|
+| `get_system_health` | CPU/RAM/disk/uptime + artifact flags |
+| `send_ops_notification` | Ops Telegram message (default dry-run) |
+
+`send_ops_notification`: `live=false` by default. Live needs TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID. Rate-limited (5s). Not for trading orders.
+

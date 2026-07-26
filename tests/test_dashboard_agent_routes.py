@@ -194,7 +194,7 @@ def test_llm_insights_returns_recent_rows(_redirect_paths) -> None:
                 "agent": "learning",
                 "provider_base_url": "https://api.example.com/v1",
                 "model": "gpt-4.1",
-                "input_summary": {},
+                "input_summary": {"record_count": 1, "recent_trades": [{"trade_id": "x"}]},
                 "output": {"summary": "old"},
             }),
             json.dumps({
@@ -202,8 +202,23 @@ def test_llm_insights_returns_recent_rows(_redirect_paths) -> None:
                 "agent": "learning",
                 "provider_base_url": "https://api.example.com/v1",
                 "model": "gpt-4.1",
-                "input_summary": {},
-                "output": {"summary": "new"},
+                "input_summary": {
+                    "record_count": 99,
+                    "deterministic_insight": {"total_trades": 99},
+                    "recent_trades": [{"trade_id": "huge-payload"}],
+                },
+                "output": {
+                    "policy_patch": {
+                        "human_summary": "What worked: high vol. What failed: marubozu churn.",
+                        "reasons": ["positive expectancy", "avoid marubozu"],
+                        "prefer_patterns": ["dark_cloud_cover"],
+                        "avoid_patterns": ["marubozu"],
+                        "size_multiplier": 0.75,
+                        "min_confluence_delta": 3,
+                        "max_entries_per_cycle": 1,
+                        "confidence": 0.8,
+                    }
+                },
             }),
         ]),
         encoding="utf-8",
@@ -214,4 +229,28 @@ def test_llm_insights_returns_recent_rows(_redirect_paths) -> None:
     assert result["available"] is True
     assert result["count"] == 2
     assert result["total_stored"] == 2
-    assert result["insights"][-1]["output"]["summary"] == "new"
+    latest = result["insights"][-1]
+    assert latest["output"]["summary"].startswith("What worked")
+    assert "prefer: dark_cloud_cover" in latest["output"]["recommendations"]
+    # Heavy journal snapshot must not be shipped to the browser.
+    assert "input_summary" not in latest
+    assert result["insights"][0]["output"]["summary"] == "old"
+
+
+def test_llm_insights_flattens_policy_patch_for_ui(_redirect_paths) -> None:
+    from app.dashboard.routes.agent import _normalize_llm_insight_output
+
+    out = _normalize_llm_insight_output(
+        {
+            "policy_patch": {
+                "human_summary": "Keep trading but cut size.",
+                "reasons": ["low winrate", "positive expectancy"],
+                "prefer_patterns": ["dark_cloud_cover"],
+                "avoid_patterns": ["marubozu", "evening_star"],
+                "size_multiplier": 0.75,
+            }
+        }
+    )
+    assert out["summary"] == "Keep trading but cut size."
+    assert out["reasons"][0] == "low winrate"
+    assert any(r.startswith("prefer:") for r in out["recommendations"])

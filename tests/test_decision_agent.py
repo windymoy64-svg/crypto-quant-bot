@@ -125,9 +125,15 @@ def test_hold_exit_on_choch() -> None:
         break_type="CHoCH", direction="BEARISH", price=98.0,
         index=5, timestamp="2024-01-01T11:00:00Z", swing_origin_index=2,
     )
-    decision = agent.decide_hold(_reading(breaks=[brk]), "BUY")
+    # Keep bias bullish so bias_flip does not shadow; weak confluence confirms CHoCH.
+    decision = agent.decide_hold(
+        _reading(bias="BULLISH", confidence=80.0, breaks=[brk], confluence=45.0),
+        "BUY",
+    )
     assert decision.action == "EXIT"
     assert "choch_bearish_against_long" in decision.reasons
+    assert decision.exit_plan is not None
+    assert decision.exit_plan.urgency == "NEXT_CANDLE"
 
 
 def test_hold_exit_low_confluence() -> None:
@@ -181,3 +187,38 @@ def test_to_dict() -> None:
     assert isinstance(d, dict)
     assert d["action"] == "ENTRY_BUY"
     assert d["entry_plan"] is not None
+
+
+def test_hold_ignores_stale_choch() -> None:
+    """Historical CHoCH far from the live edge must not force EXIT."""
+    agent = DecisionMakerAgent()
+    stale = StructureBreak(
+        break_type="CHoCH", direction="BEARISH", price=98.0,
+        index=2, timestamp="2024-01-01T08:00:00Z", swing_origin_index=0,
+    )
+    fresh_bos = StructureBreak(
+        break_type="BOS", direction="BULLISH", price=105.0,
+        index=20, timestamp="2024-01-01T12:00:00Z", swing_origin_index=18,
+    )
+    decision = agent.decide_hold(
+        _reading(breaks=[stale, fresh_bos], confluence=70.0), "BUY"
+    )
+    assert decision.action == "HOLD"
+
+
+def test_hold_soft_exit_on_recent_choch_with_bias() -> None:
+    """Recent counter CHoCH + weak confluence → EXIT NEXT_CANDLE (not IMMEDIATE)."""
+    agent = DecisionMakerAgent()
+    recent = StructureBreak(
+        break_type="CHoCH", direction="BEARISH", price=98.0,
+        index=20, timestamp="2024-01-01T12:00:00Z", swing_origin_index=18,
+    )
+    decision = agent.decide_hold(
+        _reading(bias="BULLISH", confidence=80.0, breaks=[recent], confluence=45.0),
+        "BUY",
+    )
+    assert decision.action == "EXIT"
+    assert decision.exit_plan is not None
+    assert decision.exit_plan.urgency == "NEXT_CANDLE"
+    assert decision.exit_plan.reason == "structure_invalidation"
+

@@ -140,6 +140,11 @@ def test_tool_registry_complete() -> None:
         "get_candles",
         "get_ticker",
         "get_data_source",
+        "list_backtest_artifacts",
+        "get_backtest_artifact",
+        "run_backtest",
+        "get_system_health",
+        "send_ops_notification",
     }
     assert set(ops_tools.TOOL_FUNCS) == expected
 
@@ -212,3 +217,43 @@ def test_market_tools_with_fake_service(monkeypatch: pytest.MonkeyPatch) -> None
 def test_tool_registry_includes_market() -> None:
     for name in ("get_candles", "get_ticker", "get_data_source"):
         assert name in ops_tools.TOOL_FUNCS
+
+
+def test_backtest_list_and_invalid_name() -> None:
+    listed = ops_tools.list_backtest_artifacts(limit=5)
+    assert listed["ok"] is True
+    assert "results" in listed
+
+    bad = ops_tools.get_backtest_artifact("../secrets.json")
+    assert bad["ok"] is False
+
+
+def test_run_backtest_sample_offline(tmp_path, monkeypatch) -> None:
+    import app.mcp.guards as guards
+
+    root = tmp_path
+    (root / "logs" / "backtests").mkdir(parents=True)
+    (root / "configs").mkdir(parents=True)
+    rules_src = Path("configs/rules.json")
+    if rules_src.exists():
+        (root / "configs" / "rules.json").write_text(
+            rules_src.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    else:
+        (root / "configs" / "rules.json").write_text("[]", encoding="utf-8")
+
+    monkeypatch.setattr(guards, "PROJECT_ROOT", root)
+    result = ops_tools.run_backtest(
+        symbol="BTC/USDT",
+        timeframe="1h",
+        limit=80,
+        use_sample_data=True,
+    )
+    assert result["ok"] is True, result
+    assert result.get("available") is True
+    assert "metrics" in result
+    assert result.get("paths", {}).get("json")
+
+    listed = ops_tools.list_backtest_artifacts(limit=10)
+    assert listed["ok"] is True
+    assert listed["count"] >= 1

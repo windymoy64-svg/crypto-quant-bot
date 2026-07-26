@@ -139,19 +139,11 @@ class LLMInsightStore:
         return (record_count, latest_trade_id)
 
     def latest(self) -> dict[str, Any] | None:
-        """Return the most recent insight row without parsing the whole file."""
-        if not self.path.exists():
-            return None
-        last_line = ""
-        with self.path.open("r", encoding="utf-8") as file:
-            for line in file:
-                line = line.strip()
-                if line:
-                    last_line = line
-        if not last_line:
-            return None
-        try:
-            data = json.loads(last_line)
-        except json.JSONDecodeError:
-            return None
-        return data if isinstance(data, dict) else None
+        """Return the most recent insight row via the bounded tail cache.
+
+        Avoids a full-file sequential scan (each row can be ~100KB with journal
+        snapshots). ``load_latest(1)`` reuses mtime/size cache so frequent
+        fingerprint checks stay cheap.
+        """
+        rows, _total = self.load_latest(1)
+        return rows[-1] if rows else None

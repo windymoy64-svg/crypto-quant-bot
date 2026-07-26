@@ -37,7 +37,7 @@ def build_mcp_server() -> Any:
         instructions=(
             "Read-only Ops + Market MCP for crypto-quant-bot. "
             "Inspect status, portfolio, signals, pipeline, journals, and "
-            "public OHLCV/ticker via MarketDataService. "
+            "public OHLCV/ticker via MarketDataService, and offline backtests. "
             "Never place orders. Live trading stays locked."
         ),
     )
@@ -134,7 +134,56 @@ def build_mcp_server() -> Any:
             )
         )
 
+
+    @mcp.tool()
+    def list_backtest_artifacts(limit: int = 20) -> str:
+        """List recent backtest JSON artifacts under logs/backtests/."""
+        return _json(ops_tools.list_backtest_artifacts(limit=limit))
+
+    @mcp.tool()
+    def get_backtest_artifact(name: str) -> str:
+        """Read one backtest artifact by filename (no path traversal)."""
+        return _json(ops_tools.get_backtest_artifact(name=name))
+
+    @mcp.tool()
+    def run_backtest(
+        symbol: str = "BTC/USDT",
+        timeframe: str = "1h",
+        limit: int = 300,
+        exchange: str = "binance",
+        initial_cash: float = 10000.0,
+        use_sample_data: bool = False,
+    ) -> str:
+        """Run guarded historical backtest; writes only to logs/backtests/."""
+        return _json(
+            ops_tools.run_backtest(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=limit,
+                exchange=exchange,
+                initial_cash=initial_cash,
+                use_sample_data=use_sample_data,
+            )
+        )
+
+    @mcp.tool()
+    def get_system_health() -> str:
+        """System health snapshot + artifact flags (read-only)."""
+        return _json(ops_tools.get_system_health())
+
+    @mcp.tool()
+    def send_ops_notification(
+        message: str, live: bool = False, prefix: str = "[ops-mcp]"
+    ) -> str:
+        """Send ops Telegram notification. Default dry-run; live needs env creds."""
+        return _json(
+            ops_tools.send_ops_notification(
+                message=message, live=live, prefix=prefix
+            )
+        )
+
     return mcp
+
 
 
 def main() -> None:

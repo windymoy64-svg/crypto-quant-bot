@@ -45,6 +45,38 @@ TP1_WEAK_CONFLUENCE = 40.0
 TP1_STRONG_REGIMES = ("TRENDING_BULLISH", "TRENDING_BEARISH")
 
 
+def _recent_counter_choch(
+    reading: ChartReading,
+    position_side: str,
+    *,
+    max_age_bars: int = 3,
+) -> object | None:
+    """Return newest counter-trend CHoCH only if near the live edge.
+
+    Full-history CHoCH must not force immediate exits (BE spam / low WR).
+    """
+    if not reading.structure_breaks:
+        return None
+    max_index = max(int(b.index) for b in reading.structure_breaks)
+    cutoff = max_index - max(0, int(max_age_bars))
+    side = str(position_side or "").upper()
+    candidates = []
+    for brk in reading.structure_breaks:
+        if brk.break_type != "CHoCH":
+            continue
+        if int(brk.index) < cutoff:
+            continue
+        if side in {"BUY", "LONG"} and brk.direction == "BEARISH":
+            candidates.append(brk)
+        elif side in {"SELL", "SHORT"} and brk.direction == "BULLISH":
+            candidates.append(brk)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda b: int(b.index))
+
+
+
+
 def _select_take_profits(
     reading: ChartReading,
     entry_price: float,
@@ -107,12 +139,9 @@ def should_enable_tp1(reading: ChartReading, position_side: str) -> bool:
         True  → TP1 enabled  (structure weak, lock partial profit).
         False → TP1 disabled (structure strong, let it run).
     """
-    # 1. Counter-trend CHoCH = structure damaged → always enable TP1.
-    for brk in reading.structure_breaks:
-        if position_side == "BUY" and brk.break_type == "CHoCH" and brk.direction == "BEARISH":
-            return True
-        if position_side == "SELL" and brk.break_type == "CHoCH" and brk.direction == "BULLISH":
-            return True
+    # 1. Recent counter-trend CHoCH only → enable TP1.
+    if _recent_counter_choch(reading, position_side) is not None:
+        return True
 
     # 2. Low confluence → weak structure → enable TP1.
     if reading.confluence_score < TP1_WEAK_CONFLUENCE:
@@ -309,24 +338,37 @@ class DecisionMakerAgent:
                 timestamp=reading.timestamp,
             )
 
-        # CHoCH against position
-        for brk in reading.structure_breaks:
-            if position_side == "BUY" and brk.direction == "BEARISH" and brk.break_type == "CHoCH":
+        # Recent CHoCH only + confirmation. Soft NEXT_CANDLE (not IMMEDIATE)
+        # so close_from_decision can suppress BE / micro-PnL noise exits.
+        counter = _recent_counter_choch(reading, position_side)
+        if counter is not None:
+            reason_tag = (
+                "choch_bearish_against_long"
+                if position_side in {"BUY", "LONG"}
+                else "choch_bullish_against_short"
+            )
+            bias_against = (
+                (position_side in {"BUY", "LONG"} and reading.bias == "BEARISH")
+                or (position_side in {"SELL", "SHORT"} and reading.bias == "BULLISH")
+            )
+            weak = reading.confluence_score < HOLD_INVALIDATION_THRESHOLD + 15.0
+            if bias_against or weak:
                 return Decision(
                     action="EXIT", symbol=reading.symbol, confidence="HIGH",
-                    confidence_score=80.0, reasons=["choch_bearish_against_long"],
-                    exit_plan=ExitPlan(urgency="IMMEDIATE", reason="structure_invalidation"),
+                    confidence_score=max(70.0, float(reading.bias_confidence)),
+                    reasons=[reason_tag, "recent_choch_confirmed"],
+                    exit_plan=ExitPlan(
+                        urgency="NEXT_CANDLE",
+                        reason="structure_invalidation",
+                    ),
                     regime=reading.regime, confluence_score=reading.confluence_score,
                     timestamp=reading.timestamp,
+                    meta={
+                        "choch_index": int(getattr(counter, "index", -1)),
+                        "choch_price": float(getattr(counter, "price", 0.0) or 0.0),
+                    },
                 )
-            if position_side == "SELL" and brk.direction == "BULLISH" and brk.break_type == "CHoCH":
-                return Decision(
-                    action="EXIT", symbol=reading.symbol, confidence="HIGH",
-                    confidence_score=80.0, reasons=["choch_bullish_against_short"],
-                    exit_plan=ExitPlan(urgency="IMMEDIATE", reason="structure_invalidation"),
-                    regime=reading.regime, confluence_score=reading.confluence_score,
-                    timestamp=reading.timestamp,
-                )
+            reasons.append("recent_choch_unconfirmed_hold")
 
         # Confluence degraded
         if reading.confluence_score < HOLD_INVALIDATION_THRESHOLD:

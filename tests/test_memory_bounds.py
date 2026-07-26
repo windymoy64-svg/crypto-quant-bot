@@ -145,3 +145,14 @@ def test_insight_tail_cache_invalidates_after_append(tmp_path: Path) -> None:
     with path.open("a", encoding="utf-8") as file:
         file.write('{"id":2}\n')
     assert store.load_latest(1) == ([{"id": 2}], 2)
+
+
+def test_insight_latest_reuses_tail_cache(tmp_path: Path) -> None:
+    path = tmp_path / "insights.jsonl"
+    path.write_text('{"id":1,"input_summary":{"record_count":3}}\n', encoding="utf-8")
+    store = LLMInsightStore(str(path))
+    assert store.latest() == {"id": 1, "input_summary": {"record_count": 3}}
+    assert store.latest()["id"] == 1
+    with path.open("a", encoding="utf-8") as file:
+        file.write('{"id":2,"input_summary":{"record_count":4}}\n')
+    assert store.latest()["id"] == 2
