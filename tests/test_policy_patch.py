@@ -53,6 +53,16 @@ def test_parse_clamps_out_of_range_fields() -> None:
     assert patch.confidence == 0.05  # 5 > 1 -> /100 -> 0.05, within [0,1]
 
 
+def test_parse_clamps_policy_operational_caps() -> None:
+    patch = parse_policy_patch({
+        "max_entries_per_cycle": 999,
+        "requires_min_samples": 999999,
+    })
+    assert patch is not None
+    assert patch.max_entries_per_cycle == 20
+    assert patch.requires_min_samples == 10000
+
+
 def test_validate_shadow_vs_apply() -> None:
     patch = parse_policy_patch(
         {

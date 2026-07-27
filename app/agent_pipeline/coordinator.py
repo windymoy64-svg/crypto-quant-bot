@@ -47,15 +47,15 @@ class AgentPipelineConfig:
     execute_decisions: bool = False
     apply_learning_to_decision: bool = False
     require_risk_gate: bool = True
-    scanner_chart_conflict_policy: str = "IGNORE"
+    scanner_chart_conflict_policy: str = "REJECT"
     # Soft-entry: evaluate top WATCH candidates (chart still must approve ENTRY).
     allow_watch_soft_entry: bool = False
     min_watch_confidence: float = 75.0
     # Chart LLM: free-technique proposal (not fixed indicator set).
     chart_llm_propose: bool = True
     # When True, validated proposal levels may replace EntryPlan on ENTRY_*.
-    adopt_chart_proposal_levels: bool = True
-    # Decision LLM may VETO entry/exit; never force ENTRY.
+    adopt_chart_proposal_levels: bool = False
+    # Decision LLM may VETO entry only; never force ENTRY or veto EXIT.
     decision_llm_can_veto: bool = True
     decision_llm_veto_min_confidence: float = 0.75
     # Learning Journal Coach: LLM PolicyPatch tuning of Decision gates.
@@ -460,13 +460,16 @@ class AgentPipelineCoordinator:
                 conf_f = conf_f / 100.0
 
             action_changed = False
+            # Tier 1 safety: LLM audit may only veto ENTRY. Mandatory/structural
+            # exits (EXIT) must never be turned into HOLD by the LLM, otherwise a
+            # stop-loss / invalidation exit could be silently cancelled.
             if (
                 self.config.decision_llm_can_veto
                 and vote == "VETO"
                 and conf_f >= self.config.decision_llm_veto_min_confidence
-                and decision.action in {"ENTRY_BUY", "ENTRY_SELL", "EXIT"}
+                and decision.action in {"ENTRY_BUY", "ENTRY_SELL"}
             ):
-                final_action = "SKIP" if decision.action.startswith("ENTRY") else "HOLD"
+                final_action = "SKIP"
                 action_changed = True
                 reasons = list(decision.reasons) + [
                     f"decision_llm_veto conf={conf_f:.2f}",
@@ -475,8 +478,7 @@ class AgentPipelineCoordinator:
                 decision = replace(
                     decision,
                     action=final_action,  # type: ignore[arg-type]
-                    entry_plan=None if final_action == "SKIP" else decision.entry_plan,
-                    exit_plan=None if final_action == "HOLD" else decision.exit_plan,
+                    entry_plan=None,
                     reasons=reasons,
                     confidence="LOW",
                 )

@@ -42,11 +42,12 @@
     "min_watch_confidence": 75.0,
     "max_watch_soft_entry": 3,
     "chart_llm_propose": true,
-    "adopt_chart_proposal_levels": true,
+    "adopt_chart_proposal_levels": false,
     "decision_llm_can_veto": true,
     "decision_llm_veto_min_confidence": 0.75,
-    "apply_llm_policy": true,
-    "policy_min_confidence": 0.6
+    "apply_llm_policy": false,
+    "policy_min_confidence": 0.6,
+    "scanner_chart_conflict_policy": "REJECT"
   },
   "learning_recorder": {
     "enabled": true,

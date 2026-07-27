@@ -19,8 +19,37 @@ from app.agent_pipeline.coordinator import (
 )
 from app.agent_pipeline.models import ScannerCandidate
 from app.core.models import Candle
+from app.events.events import EntryCandidateProcessed
+from app.events.publisher import publish
 from app.executor_agent.models import PositionContext
 from app.market.data_service import MarketDataService
+
+
+@dataclass(frozen=True)
+class CandleFetchResult:
+    """Candle fetch outcome; errors must not masquerade as empty data."""
+
+    candles: list[Candle]
+    status: Literal["ok", "empty", "error"]
+    error_type: str | None = None
+
+
+def _classify_fetch_error(exc: Exception) -> str:
+    text = f"{exc.__class__.__name__} {exc}".lower()
+    if "timeout" in text:
+        return "timeout"
+    if any(token in text for token in ("ratelimit", "rate_limit", "429")):
+        return "rate_limited"
+    if any(token in text for token in ("connection", "network", "http")):
+        return "transport"
+    return "provider_error"
+
+
+def _parse_conflict_policy(value: object) -> str:
+    policy = str(value or "REJECT").strip().upper()
+    if policy not in {"REJECT", "WATCH", "IGNORE"}:
+        raise ValueError(f"Invalid scanner_chart_conflict_policy: {policy}")
+    return policy
 
 
 @dataclass(frozen=True)
@@ -55,12 +84,14 @@ class AgentPipelineRuntimeConfig:
     max_watch_soft_entry: int = 3
     # Free-technique Chart LLM proposal + Decision veto (executor remains non-LLM).
     chart_llm_propose: bool = True
-    adopt_chart_proposal_levels: bool = True
+    adopt_chart_proposal_levels: bool = False
     decision_llm_can_veto: bool = True
     decision_llm_veto_min_confidence: float = 0.75
     # Learning Journal Coach PolicyPatch (shadow by default).
     apply_llm_policy: bool = False
     policy_min_confidence: float = 0.6
+    # Scanner vs deterministic chart bias conflict handling.
+    scanner_chart_conflict_policy: str = "REJECT"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "AgentPipelineRuntimeConfig":
@@ -84,23 +115,27 @@ class AgentPipelineRuntimeConfig:
             min_watch_confidence=float(data.get("min_watch_confidence", 75.0)),
             max_watch_soft_entry=int(data.get("max_watch_soft_entry", 3)),
             chart_llm_propose=bool(data.get("chart_llm_propose", True)),
-            adopt_chart_proposal_levels=bool(data.get("adopt_chart_proposal_levels", True)),
+            adopt_chart_proposal_levels=bool(data.get("adopt_chart_proposal_levels", False)),
             decision_llm_can_veto=bool(data.get("decision_llm_can_veto", True)),
             decision_llm_veto_min_confidence=float(
                 data.get("decision_llm_veto_min_confidence", 0.75)
             ),
             apply_llm_policy=bool(data.get("apply_llm_policy", False)),
             policy_min_confidence=float(data.get("policy_min_confidence", 0.6)),
+            scanner_chart_conflict_policy=_parse_conflict_policy(
+                data.get("scanner_chart_conflict_policy", "REJECT")
+            ),
         )
 
 
 def _candle_fetcher(market_data: MarketDataService, timeframe: str, limit: int):
-    def _fetch(symbol: str) -> list[Candle]:
+    def _fetch(symbol: str) -> CandleFetchResult:
         try:
             loaded = market_data.fetch_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit)
-            return list(loaded.candles)
-        except Exception:
-            return []
+            candles = list(loaded.candles)
+            return CandleFetchResult(candles, "ok" if candles else "empty")
+        except Exception as exc:  # noqa: BLE001 - classify and fail closed at caller
+            return CandleFetchResult([], "error", _classify_fetch_error(exc))
     return _fetch
 
 
@@ -233,6 +268,7 @@ def run_pipeline_bridge(
                 decision_llm_veto_min_confidence=config.decision_llm_veto_min_confidence,
                 apply_llm_policy=config.apply_llm_policy,
                 policy_min_confidence=config.policy_min_confidence,
+                scanner_chart_conflict_policy=config.scanner_chart_conflict_policy,
             ),
         )
 
@@ -290,30 +326,46 @@ def run_pipeline_bridge(
             filter_counts["failed_gates"] += 1
             return
 
-        htf = fetch_htf(candidate.symbol)
-        mtf = fetch_mtf(candidate.symbol)
-        ltf = fetch_ltf(candidate.symbol)
-        if not htf or not mtf or not ltf:
-            filter_counts["missing_multi_timeframe_candles"] += 1
+        fetched = {
+            "htf": fetch_htf(candidate.symbol),
+            "mtf": fetch_mtf(candidate.symbol),
+            "ltf": fetch_ltf(candidate.symbol),
+        }
+        failed = {name: item for name, item in fetched.items() if item.status != "ok"}
+        if failed:
+            reason = (
+                "candle_fetch_error"
+                if any(item.status == "error" for item in failed.values())
+                else "missing_multi_timeframe_candles"
+            )
+            filter_counts[reason] += 1
             entries.append({
                 "symbol": candidate.symbol,
                 "skipped": True,
-                "reason": "missing_multi_timeframe_candles",
+                "reason": reason,
+                "data_quality": {
+                    name: {"status": item.status, "error_type": item.error_type}
+                    for name, item in failed.items()
+                },
                 "soft_entry": soft,
                 "scanner_action": candidate.action,
             })
             return
 
         result = coordinator.process_entry_candidate(
-            candidate, htf_candles=htf, mtf_candles=mtf, ltf_candles=ltf
+            candidate,
+            htf_candles=fetched["htf"].candles,
+            mtf_candles=fetched["mtf"].candles,
+            ltf_candles=fetched["ltf"].candles,
         )
-        entries.append({
+        entry_record = {
             "symbol": candidate.symbol,
             "scanner_confidence": candidate.confidence,
             "scanner_action": candidate.action,
             "soft_entry": soft,
             "result": result.to_dict(),
-        })
+        }
+        entries.append(entry_record)
         scanned += 1
         if soft:
             watch_evaluated += 1
@@ -321,18 +373,25 @@ def run_pipeline_bridge(
         else:
             filter_counts["evaluated"] += 1
         try:
-            from app.events.publisher import publish
-            publish({
-                "event_type": "entry_candidate_processed",
-                "symbol": candidate.symbol,
-                "scanner_confidence": candidate.confidence,
-                "scanner_action": candidate.action,
-                "soft_entry": soft,
-                "result": result.to_dict(),
-                "timestamp": datetime.now(tz=UTC).isoformat(),
-            })
-        except Exception:
-            pass
+            publish(EntryCandidateProcessed(
+                symbol=candidate.symbol,
+                scanner_confidence=candidate.confidence,
+                scanner_action=candidate.action,
+                soft_entry=soft,
+                result=result.to_dict(),
+                timestamp=datetime.now(tz=UTC).isoformat(),
+            ))
+            entry_record["publish_status"] = "published"
+            filter_counts["events_published"] += 1
+        except Exception as exc:  # noqa: BLE001 - event failure must not stop trading loop
+            entry_record["publish_status"] = "failed"
+            entry_record["publish_error_type"] = exc.__class__.__name__
+            filter_counts["event_publish_failed"] += 1
+            print(
+                f"agent_pipeline event publish failed symbol={candidate.symbol} "
+                f"error_type={exc.__class__.__name__}",
+                flush=True,
+            )
 
     for candidate in hard_candidates:
         if scanned >= config.max_entry_symbols:
@@ -364,23 +423,35 @@ def run_pipeline_bridge(
             if position is None:
                 monitor_skipped += 1
                 continue
-            htf = fetch_htf(symbol)
-            mtf = fetch_mtf(symbol)
-            ltf = fetch_ltf(symbol)
-            if not htf or not mtf or not ltf:
+            fetched = {
+                "htf": fetch_htf(symbol),
+                "mtf": fetch_mtf(symbol),
+                "ltf": fetch_ltf(symbol),
+            }
+            failed = {name: item for name, item in fetched.items() if item.status != "ok"}
+            if failed:
                 monitor_skipped += 1
+                reason = (
+                    "candle_fetch_error"
+                    if any(item.status == "error" for item in failed.values())
+                    else "missing_multi_timeframe_candles"
+                )
                 monitor.append({
                     "symbol": symbol,
                     "skipped": True,
-                    "reason": "missing_multi_timeframe_candles",
+                    "reason": reason,
+                    "data_quality": {
+                        name: {"status": item.status, "error_type": item.error_type}
+                        for name, item in failed.items()
+                    },
                 })
                 continue
             result = coordinator.monitor_position(
                 symbol=symbol,
                 position=position,
-                htf_candles=htf,
-                mtf_candles=mtf,
-                ltf_candles=ltf,
+                htf_candles=fetched["htf"].candles,
+                mtf_candles=fetched["mtf"].candles,
+                ltf_candles=fetched["ltf"].candles,
             )
             monitor.append({"symbol": symbol, "result": result.to_dict()})
 

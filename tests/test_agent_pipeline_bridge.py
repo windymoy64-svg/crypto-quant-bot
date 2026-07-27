@@ -7,12 +7,29 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.agent_pipeline.bridge import (
     AgentPipelineRuntimeConfig,
     run_pipeline_bridge,
 )
 from app.core.models import Candle
 from app.market.data_service import MarketDataResult
+from app.events.bus import event_bus
+
+
+def test_conflict_policy_defaults_to_reject_and_validates_enum() -> None:
+    assert AgentPipelineRuntimeConfig.from_dict({}).scanner_chart_conflict_policy == "REJECT"
+    assert (
+        AgentPipelineRuntimeConfig.from_dict(
+            {"scanner_chart_conflict_policy": "watch"}
+        ).scanner_chart_conflict_policy
+        == "WATCH"
+    )
+    with pytest.raises(ValueError, match="Invalid scanner_chart_conflict_policy"):
+        AgentPipelineRuntimeConfig.from_dict(
+            {"scanner_chart_conflict_policy": "ALLOW"}
+        )
 
 
 def _candle(i: int, base: float = 100.0) -> Candle:
@@ -176,6 +193,58 @@ def test_bridge_execution_stays_off_by_default(tmp_path: Path) -> None:
     )
     assert result["execute_decisions"] is False
     assert result["entries"][0]["result"]["execution"] is None
+
+
+def test_bridge_classifies_candle_fetch_error(tmp_path: Path) -> None:
+    market_data = MagicMock()
+    market_data.fetch_ohlcv.side_effect = TimeoutError("provider timed out")
+    config = AgentPipelineRuntimeConfig.from_dict({
+        "enabled": True,
+        "output_path": str(tmp_path / "pipeline.json"),
+        "monitor_positions": False,
+    })
+    result = run_pipeline_bridge(
+        config=config,
+        scanner_results=[{
+            "symbol": "BTC/USDT", "action": "BUY", "confidence": 95.0,
+            "failed_gates": [],
+        }],
+        open_positions={},
+        market_data=market_data,
+    )
+    entry = result["entries"][0]
+    assert entry["reason"] == "candle_fetch_error"
+    assert entry["data_quality"]["htf"] == {
+        "status": "error", "error_type": "timeout",
+    }
+    assert result["summary"]["entry_filter_counts"]["candle_fetch_error"] == 1
+
+
+def test_bridge_publishes_typed_entry_candidate_event(tmp_path: Path) -> None:
+    received: list[object] = []
+    event_bus.subscribe("*", received.append)
+    try:
+        config = AgentPipelineRuntimeConfig.from_dict({
+            "enabled": True,
+            "output_path": str(tmp_path / "pipeline.json"),
+            "monitor_positions": False,
+        })
+        result = run_pipeline_bridge(
+            config=config,
+            scanner_results=[{
+                "symbol": "BTC/USDT", "action": "BUY", "confidence": 95.0,
+                "failed_gates": [],
+            }],
+            open_positions={},
+            market_data=_market_data_stub(),
+        )
+    finally:
+        event_bus.unsubscribe("*", received.append)
+
+    event = next(item for item in received if getattr(item, "event_type", "") == "entry_candidate_processed")
+    assert event.to_dict()["symbol"] == "BTC/USDT"
+    assert result["entries"][0]["publish_status"] == "published"
+    assert result["summary"]["entry_filter_counts"]["events_published"] == 1
 
 
 def test_bridge_config_from_dict_defaults() -> None:

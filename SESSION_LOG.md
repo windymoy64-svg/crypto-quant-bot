@@ -6,6 +6,128 @@
 
 ---
 
+## Sesi 2026-07-27 — Handoff akhir: dashboard realtime, Tier 1, restart runtime
+
+**Environment:** `/opt/crypto-quant-bot`  
+**Mode akhir:** paper ON · live OFF · executor dry-run  
+**Runtime:** realtime PID `24492`; API PID `22170`
+
+### 1. Sudah dikerjakan di sesi ini
+
+#### Dashboard / Agents Entry Candidates
+- Ditemukan root cause Entry Candidates telat: event WebSocket realtime ditimpa snapshot `agent_snapshot` periodik dari `logs/agent_pipeline.json` yang masih memakai siklus lama.
+- `app/dashboard/static/dashboard.js` diperbaiki dengan:
+  - timestamp `lastEntryLiveTs` untuk event `entry_candidate_processed`;
+  - guard agar snapshot lama tidak menimpa data live;
+  - merge live + file saat live lebih baru, dedup per symbol, live diprioritaskan; baris file seperti `skip`/missing candles tetap tampil.
+- Node syntax check: `SYNTAX_OK`.
+- Perlu hard refresh browser sekali untuk mengambil asset static terbaru; tidak perlu restart API untuk perubahan JS.
+
+#### Tier 1 baseline agent safety
+- Decision LLM hanya dapat veto `ENTRY_BUY`/`ENTRY_SELL`; tidak dapat mengubah `EXIT` menjadi `HOLD`.
+- `scanner_chart_conflict_policy` ditambahkan ke runtime config, validasi enum `REJECT|WATCH|IGNORE`, default/baseline `REJECT`, dan di-wire ke coordinator melalui bridge + `run_realtime`.
+- `adopt_chart_proposal_levels=false`: proposal Chart LLM tetap direkam/audit, tetapi entry/SL/TP order memakai level deterministik.
+- `apply_llm_policy=false`: PolicyPatch shadow, tidak mengubah decision.
+- Default fail-safe adopsi level Chart LLM juga diubah menjadi `false` di bridge/coordinator/run_realtime.
+
+#### Runtime / RR
+- Restart hanya `crypto-quant-bot.service`: PID `22247 -> 24492`; `crypto-quant-bot-api.service` tidak disentuh.
+- Startup validation OK; mode paper; live tetap OFF; paper state utuh dengan 6 posisi.
+- Lima posisi non-legacy punya `rr_tp1=2.0`, `tp_level_source=normalized_min_rr`; posisi U legacy tidak di-rewrite.
+- Siklus agent pasca-restart selesai pada `15:08:57 WIB`: 3 kandidat dievaluasi, 6 posisi dimonitor.
+
+### 2. File dibuat/diubah
+- `app/agent_pipeline/coordinator.py`
+- `app/agent_pipeline/bridge.py`
+- `run_realtime.py`
+- `configs/realtime.json`
+- `tests/test_chart_proposal.py`
+- `tests/test_agent_pipeline_bridge.py`
+- `app/dashboard/static/dashboard.js`
+- `TASKS.md`
+- `SESSION_LOG.md`
+
+Tidak ada file secret atau history paper yang dihapus/ditulis ulang.
+
+### 3. Command penting
+```bash
+# Validasi Tier 1 targeted
+.venv/bin/python -m pytest \
+  tests/test_chart_proposal.py::test_decision_llm_veto_blocks_entry \
+  tests/test_chart_proposal.py::test_decision_llm_cannot_veto_exit \
+  tests/test_chart_proposal.py::test_scanner_chart_conflict_is_rejected_by_baseline_policy \
+  tests/test_agent_pipeline_bridge.py::test_conflict_policy_defaults_to_reject_and_validates_enum \
+  -q --tb=line
+# 4 passed; kemudian subset gabungan 6 passed
+
+.venv/bin/python -m pytest tests/test_chart_proposal.py -q --tb=line
+# 8 passed
+
+.venv/bin/python -m pytest tests/test_realtime_paper_engine.py -q
+# 23 passed pada batch RR sebelumnya
+
+.venv/bin/python -m py_compile app/agent_pipeline/bridge.py \
+  app/agent_pipeline/coordinator.py run_realtime.py
+# OK
+
+systemctl restart crypto-quant-bot.service
+systemctl --no-pager --full status crypto-quant-bot.service
+systemctl --no-pager --full status crypto-quant-bot-api.service
+journalctl -u crypto-quant-bot.service -n 35 --no-pager -o cat
+# realtime active, API tetap active, startup + scan berjalan
+```
+
+### 4. Error / masalah terakhir
+- Full `tests/test_agent_pipeline_bridge.py` sempat timeout di environment; test config Tier 1 baru lulus dan compile lulus.
+- Beberapa command luas (`git diff/status`, pytest gabungan besar) juga timeout; tidak ada error test terarah dari Tier 1.
+- Futures bootstrap warning nonfatal: API permission error `-2015` untuk `position_mode` dan `multi_assets_margin`; service tetap active, paper/live safety tidak berubah.
+- Artifact `logs/agent_pipeline.json` sempat masih timestamp sebelum restart saat pengecekan awal; setelah itu journal menunjukkan siklus agent baru selesai.
+- Posisi U legacy tidak memiliki `rr_tp1`; history/state lama sengaja tidak di-rewrite.
+
+### 5. Keputusan teknis
+- RR: Opsi C hybrid, bukan hard reject; TP1 minimal 2R, level struktural >=2R dipertahankan.
+- Baseline paper harus deterministik: Chart LLM boleh propose/audit, tidak boleh mengganti level order.
+- PolicyPatch tetap shadow.
+- Konflik scanner vs chart deterministic default `REJECT`.
+- Decision LLM hanya veto entry; mandatory/structural exit tidak boleh diveto.
+- Live tetap OFF sampai paper, RR, risk, data quality, dan observability stabil.
+- Paper history dan legacy positions tidak di-rewrite.
+
+### 6. Next step chat baru
+1. Hard refresh browser sekali; buka Agents dan pastikan Entry Candidates live tidak lagi mundur saat snapshot 5 detik masuk.
+2. Verifikasi artifact `logs/agent_pipeline.json` pasca-restart: conflict menghasilkan `scanner_chart_conflict_rejected`, dan entry source tidak `chart_llm_proposal` untuk baseline.
+3. Pantau open baru di `logs/paper_state.json`/`logs/paper_trades.jsonl`: `rr_tp1 >= 2`, geometry OK, tanpa menyentuh history lama.
+4. Lanjut Tier 2: klasifikasi error candle fetch (jangan `except -> []`), data quality gate minimal, logging publish event, dan batas PolicyPatch.
+5. P1 dashboard: kolom RR planned di Active Orders dan source/sl_pct observability.
+6. Tetap jangan restart API/live atau mengubah permission futures tanpa kebutuhan dan konfirmasi.
+
+---
+
+## Sesi 2026-07-27 — Tier 1 baseline safety agent pipeline
+
+**Mode:** paper ON · live OFF · realtime sudah restart
+
+### Selesai
+- Decision LLM hanya boleh veto `ENTRY_BUY`/`ENTRY_SELL`; `EXIT` selalu dipertahankan.
+- `scanner_chart_conflict_policy` ditambah ke runtime config, enum `REJECT|WATCH|IGNORE`, default/config baseline `REJECT`, dan ter-wire ke coordinator di bridge + `run_realtime`.
+- `adopt_chart_proposal_levels=false` (juga default fail-safe false); proposal Chart LLM tetap audit/shadow.
+- `apply_llm_policy=false` baseline shadow.
+- Tests: Tier 1 targeted 4 passed; full `test_chart_proposal.py` 8 passed; py_compile + JSON/runtime config validation OK.
+- Full `test_agent_pipeline_bridge.py` sempat timeout di environment; test config baru sendiri lulus.
+
+### Runtime verification
+- Restart hanya `crypto-quant-bot.service`; PID 22247 → 24492. API tetap PID 22170.
+- Startup: production validation OK, `Mode paper`; live execution config false.
+- Paper state utuh: 6 posisi. Lima posisi non-legacy punya `rr_tp1=2.0`; U legacy tidak di-rewrite.
+- Baseline runtime config: adoption false, policy false, conflict REJECT.
+- Warning nonfatal: futures bootstrap API permission `-2015`; service tetap active dan paper scan berjalan.
+- Artifact agent saat cek masih timestamp sebelum restart (siklus baru belum selesai).
+
+### Next
+- Verifikasi artifact siklus agent pertama pasca-restart + entry source deterministik/conflict reject; pantau open baru RR >= 2.
+
+---
+
 ## Sesi 2026-07-27 — Opsi C RR normalize di pintu open paper
 
 **Environment:** `/opt/crypto-quant-bot` (VPS Linux)  

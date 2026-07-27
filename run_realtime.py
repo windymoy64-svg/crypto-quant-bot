@@ -307,13 +307,16 @@ def build_runtime_agent_coordinator(
         allow_watch_soft_entry=bool(getattr(config, "allow_watch_soft_entry", False)),
         min_watch_confidence=float(getattr(config, "min_watch_confidence", 75.0)),
         chart_llm_propose=bool(getattr(config, "chart_llm_propose", True)),
-        adopt_chart_proposal_levels=bool(getattr(config, "adopt_chart_proposal_levels", True)),
+        adopt_chart_proposal_levels=bool(getattr(config, "adopt_chart_proposal_levels", False)),
         decision_llm_can_veto=bool(getattr(config, "decision_llm_can_veto", True)),
         decision_llm_veto_min_confidence=float(
             getattr(config, "decision_llm_veto_min_confidence", 0.75)
         ),
         apply_llm_policy=bool(getattr(config, "apply_llm_policy", False)),
         policy_min_confidence=float(getattr(config, "policy_min_confidence", 0.6)),
+        scanner_chart_conflict_policy=str(
+            getattr(config, "scanner_chart_conflict_policy", "REJECT")
+        ).upper(),
     )
 
     chart_llm_client, chart_llm_model, chart_llm_base_url = build_agent_llm("chart")

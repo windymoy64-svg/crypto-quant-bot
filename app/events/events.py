@@ -44,6 +44,23 @@ class SignalCreated(BaseEvent):
 
 
 @dataclass(frozen=True)
+class EntryCandidateProcessed(BaseEvent):
+    """Audit event emitted after one agent entry candidate is evaluated."""
+
+    symbol: str = ""
+    scanner_confidence: float = 0.0
+    scanner_action: str = ""
+    soft_entry: bool = False
+    result: dict[str, Any] = field(default_factory=dict)
+    timestamp: str = ""
+
+    @property
+    def event_type(self) -> str:
+        # Stable websocket contract consumed by dashboard.js.
+        return "entry_candidate_processed"
+
+
+@dataclass(frozen=True)
 class RiskApproved(BaseEvent):
     symbol: str = ""
     timestamp: str = ""

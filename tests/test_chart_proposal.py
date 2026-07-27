@@ -7,7 +7,7 @@ from app.agent_pipeline.models import ScannerCandidate
 from app.chart_agent.models import ChartReading
 from app.chart_agent.proposal import parse_chart_proposal, validate_chart_proposal
 from app.core.models import Candle
-from app.decision_agent.models import Decision, EntryPlan
+from app.decision_agent.models import Decision, EntryPlan, ExitPlan
 from app.executor_agent.agent import ExecutorAgent
 
 
@@ -269,3 +269,59 @@ def test_decision_llm_veto_blocks_entry() -> None:
     assert result.decision.action == "SKIP"
     assert result.decision.meta["llm_audit"]["vote"] == "VETO"
     assert result.decision.meta["llm_audit"]["final_action_unchanged"] is False
+
+
+def test_decision_llm_cannot_veto_exit() -> None:
+    coordinator = AgentPipelineCoordinator(
+        decision_llm_client=_FakeVetoLLM(),
+        decision_llm_model="veto-model",
+        config=AgentPipelineConfig(
+            decision_llm_can_veto=True,
+            decision_llm_veto_min_confidence=0.75,
+        ),
+    )
+    decision = Decision(
+        action="EXIT",
+        symbol="BTC/USDT",
+        confidence="HIGH",
+        confidence_score=95.0,
+        reasons=["stop_loss_hit"],
+        exit_plan=ExitPlan(urgency="IMMEDIATE", reason="stop_loss_hit"),
+        regime="BEARISH",
+        confluence_score=20.0,
+        timestamp="t",
+        meta={"exit_class": "MANDATORY"},
+    )
+
+    audited = coordinator._audit_decision(
+        _reading(bias="BEARISH", suggested_bias="BEARISH"),
+        None,
+        decision,
+        stage="POSITION_MONITOR",
+    )
+
+    assert audited.action == "EXIT"
+    assert audited.exit_plan is not None
+    assert audited.meta["llm_audit"]["vote"] == "VETO"
+    assert audited.meta["llm_audit"]["final_action_unchanged"] is True
+
+
+def test_scanner_chart_conflict_is_rejected_by_baseline_policy() -> None:
+    class BearishChart:
+        def read(self, *_args, **_kwargs):
+            return _reading(bias="BEARISH", suggested_bias="BEARISH")
+
+    coordinator = AgentPipelineCoordinator(
+        chart_agent=BearishChart(),  # type: ignore[arg-type]
+        config=AgentPipelineConfig(scanner_chart_conflict_policy="REJECT")
+    )
+    candles = _candles()
+    result = coordinator.process_entry_candidate(
+        ScannerCandidate("BTC/USDT", "BUY", 95.0, [], {}),
+        htf_candles=candles,
+        mtf_candles=candles,
+        ltf_candles=candles,
+    )
+    assert result.eligibility_reason == "scanner_chart_conflict_rejected"
+    assert result.decision is None
+    assert result.scanner_chart_conflict == "scanner_BUY_vs_chart_BEARISH"

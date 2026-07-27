@@ -20,6 +20,8 @@ MIN_SIZE_MULT = 0.5
 MAX_SIZE_MULT = 1.0
 MAX_BLOCK_REGIMES = 3
 MAX_PATTERN_LIST = 12
+MAX_ENTRIES_PER_CYCLE = 20
+MAX_REQUIRED_SAMPLES = 10000
 KNOWN_REGIMES = {
     "TRENDING_BULLISH",
     "TRENDING_BEARISH",
@@ -135,7 +137,9 @@ def parse_policy_patch(payload: dict[str, Any] | None) -> PolicyPatch | None:
         req_val = int(req) if req is not None else 30
     except (TypeError, ValueError):
         req_val = 30
-    req_val = max(0, req_val)
+    req_val = max(0, min(MAX_REQUIRED_SAMPLES, req_val))
+    if max_entries_val is not None:
+        max_entries_val = min(MAX_ENTRIES_PER_CYCLE, max_entries_val)
 
     return PolicyPatch(
         min_confluence_delta=round(delta, 2),
