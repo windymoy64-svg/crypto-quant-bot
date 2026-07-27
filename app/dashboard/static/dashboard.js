@@ -1,7 +1,7 @@
 const FALLBACK_SYMBOLS = ["BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT","XRP/USDT","ADA/USDT","DOGE/USDT","TRX/USDT","AVAX/USDT","LINK/USDT","DOT/USDT","MATIC/USDT","LTC/USDT","BCH/USDT","UNI/USDT","ATOM/USDT","XLM/USDT","NEAR/USDT","APT/USDT","ARB/USDT","OP/USDT","INJ/USDT","SUI/USDT","PEPE/USDT","TIA/USDT"];
 const DEFAULT_PAYLOAD = { market:{count:0,signals:[],tracked_signals:[],symbols:FALLBACK_SYMBOLS,configured_symbols:[]}, portfolio:{equity:0,available_balance:0,open_positions_count:0,open_positions:[],source:"local"}, multiPortfolio:{view_mode:"single",active_execution_exchange:null,accounts:[],positions:[],open_orders:[],accounts_connected:0}, paper:{balance:0,equity:0,available_balance:0,open_positions:[],fills:[],orders:[]}, analytics:{performance:{},journal:{trades:[]}}, liveOrders:{order_history:[],open_orders:[],filled_orders:[],rejected_orders:[]}, health:{status:"unknown"} };
 
-const state = { liveEvents:[], lastOrders:null, loading:true, multiPortfolio:null, tvChart:null, tvSeries:null, tvVolumeSeries:null, apexChart:null, renderEventsTimer:null, toastTimer:null, chartSymbol:"BTC/USDT", chartTimeframe:"1h", chartLimit:200, chartLoading:false, chartRefreshTimer:null, symbols:[...FALLBACK_SYMBOLS], configuredSymbols:[], currentView:"overview", lastPayload:clone(DEFAULT_PAYLOAD) };
+const state = { liveEvents:[], lastOrders:null, loading:true, multiPortfolio:null, tvChart:null, tvSeries:null, tvVolumeSeries:null, apexChart:null, renderEventsTimer:null, toastTimer:null, chartSymbol:"BTC/USDT", chartTimeframe:"1h", chartLimit:200, chartLoading:false, chartRefreshTimer:null, symbols:[...FALLBACK_SYMBOLS], configuredSymbols:[], currentView:"overview", liveEntryCandidates:[], lastEntryLiveTs:0, lastPayload:clone(DEFAULT_PAYLOAD) };
 const byId = id => document.getElementById(id);
 const fmt = v => typeof v === "number" && Number.isFinite(v) ? v.toLocaleString(undefined,{maximumFractionDigits:4}) : (v ?? "-");
 const money = v => `$${fmt(Number(v ?? 0))}`;
@@ -109,7 +109,7 @@ function debounce(fn,wait=160){ let timer; return (...args)=>{ clearTimeout(time
 function tickClock(){ text("clock",new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",second:"2-digit"})); }
 function showView(view){ state.currentView=view||"overview"; document.querySelectorAll("[data-view-section]").forEach(s=>s.classList.toggle("active",s.dataset.viewSection===state.currentView)); document.querySelectorAll("[data-view-link]").forEach(l=>l.classList.toggle("active",l.dataset.viewLink===state.currentView)); const isMenuView=["portfolio","health","agents","settings"].includes(state.currentView); document.querySelector(".nav-menu-btn")?.classList.toggle("active",isMenuView); toggleMobileMenu(false); document.body.dataset.view=state.currentView; history.replaceState(null,"",`#${state.currentView}`); setTimeout(resizeCharts,80); if(state.currentView==="agents") loadAgentPanels().catch(console.warn); }
 function initUi(){ if(localStorage.getItem("sidebarCollapsed")==="1") document.body.classList.add("sidebar-collapsed"); populateChartSymbols(state.symbols); renderSymbolUniverse({symbols:state.symbols,configured_symbols:[]}); tickClock(); setInterval(tickClock,1000); window.addEventListener("resize",debounce(resizeCharts,180),{passive:true}); document.querySelectorAll("[data-view-link]").forEach(link=>link.addEventListener("click",e=>{ e.preventDefault(); showView(link.dataset.viewLink); })); document.addEventListener("keydown",e=>{ if(e.key==="Escape") toggleMobileMenu(false); }); showView(location.hash?.replace("#","")||"overview"); }
-function handleEntryCandidateUpdate(payload){ if(!payload||!payload.symbol) return; if(!state.liveEntryCandidates) state.liveEntryCandidates=[]; state.liveEntryCandidates.unshift({symbol:payload.symbol,scanner_confidence:payload.scanner_confidence,result:payload.result,timestamp:payload.timestamp||new Date().toISOString()}); if(state.liveEntryCandidates.length>50) state.liveEntryCandidates.pop(); if(state.currentView==="agents"){ const entries=byId("agent-pipeline-entries"); if(entries&&state.liveEntryCandidates.length) entries.innerHTML=renderAgentEntries(state.liveEntryCandidates); } showToast(`Entry: ${payload.symbol}`); }
+function handleEntryCandidateUpdate(payload){ if(!payload||!payload.symbol) return; if(!state.liveEntryCandidates) state.liveEntryCandidates=[]; const ts=payload.timestamp||new Date().toISOString(); const parsed=Date.parse(ts); state.lastEntryLiveTs=Number.isFinite(parsed)?parsed:Date.now(); state.liveEntryCandidates.unshift({symbol:payload.symbol,scanner_confidence:payload.scanner_confidence,result:payload.result,timestamp:ts}); if(state.liveEntryCandidates.length>50) state.liveEntryCandidates.pop(); if(state.currentView==="agents"){ const entries=byId("agent-pipeline-entries"); if(entries&&state.liveEntryCandidates.length) entries.innerHTML=renderAgentEntries(state.liveEntryCandidates); } showToast(`Entry: ${payload.symbol}`); }
 function connectWs(){ const protocol=location.protocol==="https:"?"wss":"ws"; setWsStatus("Reconnecting"); const token=document.querySelector('meta[name="dashboard-token"]')?.content||""; const query=token?`?api_key=${encodeURIComponent(token)}`:""; const ws=new WebSocket(`${protocol}://${location.host}/ws${query}`); ws.onopen=()=>{ setWsStatus("Connected"); showToast("Websocket connected"); }; ws.onerror=()=>setWsStatus("Disconnected"); ws.onclose=()=>{ setWsStatus("Disconnected"); setTimeout(()=>{ setWsStatus("Reconnecting"); connectWs(); },3000); }; let snapshotTimer=null; ws.onmessage=msg=>{ let data; try{ data=JSON.parse(msg.data); }catch(err){ console.warn("Invalid websocket payload",err); return; } if(data.type==="snapshot"){ clearTimeout(snapshotTimer); snapshotTimer=setTimeout(()=>render(data.payload),state.currentView==="orders"?100:800); renderEvents(); } if(data.type==="agent_snapshot") renderAgentSnapshot(data.payload); if(data.type==="entry_candidate_processed") handleEntryCandidateUpdate(data.payload); if(data.type==="live_events"){ state.liveEvents=list(data.payload); renderEvents(); } if(data.type==="event"){ state.liveEvents.push(data); showToast(`${data.event_type??"event"} received`); renderEvents(); } if(data.type==="price_update") handlePriceUpdate(data.payload); }; }
 document.addEventListener("change",e=>{ if(e.target?.id==="market-filter") render(state.lastPayload); });
 document.addEventListener("input",debounce(e=>{ if(["journal-filter","symbol-filter","search"].includes(e.target?.id)) render(state.lastPayload); },180));
@@ -796,8 +796,34 @@ function renderAgentPipeline(payload, snapshot={}){
     agentMetricCard("Executor", payload.execute_decisions ? String(payload.executor_mode || "dry_run").replace("_", " ") : "gated", "executor", "amber"),
   ].join("");
 
-  entries.innerHTML = renderAgentEntries(payload.entries || []);
+  entries.innerHTML = renderAgentEntries(pickEntryCandidates(payload));
   monitor.innerHTML = renderAgentMonitor(payload.monitor || []);
+}
+
+// Opsi 1 guard + merge: snapshot periodik (5s, dari logs/agent_pipeline.json) tidak
+// boleh menimpa Entry Candidates realtime yang lebih baru dari `generated_at` siklus file.
+// Saat live lebih baru, gabungkan: baris terevaluasi realtime diprioritaskan, sedangkan
+// baris lain dari file (mis. skip / missing candles) tetap tampil. Dedup per symbol.
+function pickEntryCandidates(payload){
+  const fileEntries = payload.entries || [];
+  const live = state.liveEntryCandidates || [];
+  if (!live.length) return fileEntries;
+  const genTs = Date.parse(payload.generated_at || "");
+  const fileFresh = Number.isFinite(genTs) && genTs >= (state.lastEntryLiveTs || 0);
+  // File snapshot mewakili siklus sama/lebih baru → sudah lengkap (termasuk skip).
+  if (fileFresh) return fileEntries;
+  const merged = [];
+  const seen = new Set();
+  const push = item => {
+    const sym = String((item && item.symbol) || "").toUpperCase();
+    if (!sym || seen.has(sym)) return;
+    seen.add(sym);
+    merged.push(item);
+  };
+  // Live dulu (paling baru, sudah dievaluasi), lalu sisa file (skip/rows lain).
+  live.forEach(push);
+  fileEntries.forEach(push);
+  return merged;
 }
 
 function agentText(value){
