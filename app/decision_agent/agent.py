@@ -17,6 +17,7 @@ from app.decision_agent.models import (
     EntryPlan,
     ExitPlan,
 )
+from app.risk.geometry import validate_entry_geometry
 
 
 # ---------------------------------------------------------------------------
@@ -259,10 +260,19 @@ class DecisionMakerAgent:
         if entry_plan is None:
             return self._skip(reading, ["cannot_build_entry_plan"] + reasons)
 
-        # Gate 5: risk:reward
-        if entry_plan.risk_reward < self.min_rr:
+        # Gate 5: final geometry (same gate used by LLM adoption and RiskAgent).
+        geometry = validate_entry_geometry(
+            side=entry_plan.side,
+            entry=entry_plan.entry_price,
+            stop_loss=entry_plan.stop_loss,
+            take_profit=entry_plan.take_profit_1,
+            min_rr=self.min_rr,
+            min_sl_pct=MIN_SL_PCT,
+            max_sl_pct=MAX_SL_PCT,
+        )
+        if not geometry.valid:
             return self._skip(reading, [
-                f"rr_too_low={entry_plan.risk_reward:.1f}<{self.min_rr}"
+                f"entry_geometry_invalid:{reason}" for reason in geometry.reasons
             ] + reasons)
 
         # APPROVED

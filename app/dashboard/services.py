@@ -313,6 +313,12 @@ class DashboardService:
                     "modal": modal,
                     "pnl": pnl,
                     "reason": ev.get("reason"),
+                    "close_scope": ev.get("close_scope", "partial" if etype == "partial_close" else "full"),
+                    "close_label": ev.get(
+                        "close_label",
+                        f"{'Partial' if etype == 'partial_close' else 'Full'} close — "
+                        f"{str(ev.get('reason') or 'unknown').replace('_', ' ')}",
+                    ),
                     "update_time": ev.get("timestamp"),
                 }
             )

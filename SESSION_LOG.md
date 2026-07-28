@@ -6,6 +6,204 @@
 
 ---
 
+## Handoff lengkap sesi 2026-07-28
+
+**Environment:** `/opt/crypto-quant-bot`
+**Mode:** paper ON · live OFF · executor dry-run
+**Runtime terakhir:** realtime active PID 7990; API active PID 8039. API sempat berada pada transisi deactivating, lalu pulih tanpa tindakan tambahan.
+
+### 1. Apa yang sudah dikerjakan
+- Memverifikasi batch shared geometry gate dari sesi sebelumnya; tes geometry + Chart Proposal tetap hijau (**13 passed**).
+- Menambahkan metadata close yang eksplisit pada paper event:
+  - partial: `close_scope="partial"`, contoh label `Partial close — take profit 1`;
+  - full: `close_scope="full"`, contoh label `Full close — trailing stop`.
+- Menjaga kompatibilitas raw reason dan membuat fallback label untuk event/history lama di dashboard service dan JS.
+- Mengaudit leverage dari Settings sampai runtime/state. Ditemukan nilai 25 tersimpan sebagai `configured_leverage`, tetapi sebelumnya actual `leverage` di-cap 5.
+- Menghapus cap 5x dari paper engine. Leverage eksplisit Settings sekarang actual; leverage kosong tetap default 1x.
+- Me-restart hanya realtime untuk memuat perubahan Python leverage. Paper state/history utuh dan live tetap OFF.
+
+### 2. File dibuat/diubah
+- **Dibuat dan masih untracked:** `app/risk/geometry.py`, `tests/test_entry_geometry.py`.
+- **Diubah:**
+  - `app/chart_agent/proposal.py`
+  - `app/decision_agent/agent.py`
+  - `app/risk/risk_agent.py`
+  - `app/paper/realtime_engine.py`
+  - `app/dashboard/services.py`
+  - `app/dashboard/static/dashboard.js`
+  - `tests/test_chart_proposal.py`
+  - `tests/test_realtime_paper_engine.py`
+  - `tests/test_dashboard_services.py`
+  - `TASKS.md`
+  - `SESSION_LOG.md`
+- Tidak ada secret ditulis dan tidak ada audit trail/state paper yang dihapus atau dimigrasi.
+
+### 3. Command penting dan hasil
+```bash
+cd /opt/crypto-quant-bot
+.venv/bin/python -m pytest tests/test_entry_geometry.py tests/test_chart_proposal.py -q --tb=short
+# 13 passed
+.venv/bin/python -m pytest tests/test_realtime_paper_engine.py tests/test_dashboard_services.py -q --tb=short
+# 25 passed
+.venv/bin/python -m pytest tests/test_realtime_paper_engine.py tests/test_trading_preferences.py -q --tb=short
+# 26 passed
+.venv/bin/python -m py_compile app/paper/realtime_engine.py app/dashboard/services.py tests/test_realtime_paper_engine.py tests/test_dashboard_services.py
+# OK
+node --check app/dashboard/static/dashboard.js
+# OK
+git diff --check -- app/paper/realtime_engine.py app/dashboard/services.py app/dashboard/static/dashboard.js tests/test_realtime_paper_engine.py tests/test_dashboard_services.py
+# bersih saat batch terkait diverifikasi
+systemctl restart crypto-quant-bot.service
+# berhasil; service kembali active
+```
+
+### 4. Error atau masalah terakhir
+- Belum ada artifact open baru pasca-restart yang membuktikan actual leverage 25; expected row baru: `configured_leverage=25`, `leverage=25`.
+- Runtime verification geometry/Tier 1 masih menunggu open baru dan artifact conflict terbaru.
+- `crypto-quant-bot-api.service` sempat berstatus `deactivating / stop-sigterm` PID 3716, lalu pada pengecekan final pulih `active/running` PID 8039 tanpa tindakan tambahan. Jangan restart jika tetap sehat.
+- Realtime startup menghasilkan warning futures `-2015` terkait API key/IP/permission. Mode tetap paper dan live OFF.
+- Beberapa command luas timeout karena batas tool 30 detik; subset tests/command terarah berhasil.
+- Static dashboard membutuhkan hard refresh setelah API kembali sehat.
+
+### 5. Keputusan teknis
+- Opsi C RR hybrid dan shared geometry gate dipertahankan; tidak rewrite history lama.
+- Label partial/full ditambahkan secara backward-compatible; raw reason tetap audit source.
+- RR Planned tetap tidak ditampilkan sesuai keputusan user; `rr_tp1`/source tetap backend audit-only.
+- Leverage yang dipilih di Settings sekarang authoritative untuk posisi paper baru, tervalidasi 1–125; kosong berarti 1x.
+- `risk_percent` dan `max_position_size_percent` tetap menjadi pembatas sizing; leverage bukan pengganti risk control.
+- Posisi lama tidak diubah. Live trading tidak diaktifkan.
+
+### 6. Next step chat baru
+1. Review `git status`; jangan lewatkan `app/risk/geometry.py` dan `tests/test_entry_geometry.py` yang masih untracked.
+2. Konfirmasi realtime dan API tetap active. Jika salah satunya down/deactivating lagi, cek log pendek dan jelaskan efek sebelum restart; jangan restart tanpa kebutuhan.
+3. Verifikasi realtime sehat dan artifact siklus baru terus diperbarui.
+4. Pada open baru, cek leverage 25 aktual + RR/geometry/source; jangan menyentuh posisi/history lama.
+5. Cek conflict scanner-chart dan baseline source di `logs/agent_pipeline.json`.
+6. Hard refresh UI; verifikasi close labels, RR Planned hidden, dan SL percentage tetap ada.
+7. Setelah semua hijau, lanjut P2 churn soft-entry/re-entry dan evaluasi invalidation premature exit.
+
+---
+
+## Sesi 2026-07-28 — Paper leverage mengikuti menu Settings
+
+**Environment:** `/opt/crypto-quant-bot`
+**Mode:** paper ON · live OFF · executor dry-run
+**Runtime:** realtime sudah direstart; service aktif PID 7757 sejak 17:05 WIB. Open baru 25x belum muncul untuk verifikasi artifact.
+
+### Sudah dikerjakan
+- Menghapus hard cap internal 5x dari `RealtimePaperTradingEngine`.
+- Nilai leverage eksplisit dari menu Settings sekarang menjadi leverage aktual posisi paper baru.
+- Bila leverage tidak dipilih/dikosongkan, perilaku default tetap 1x.
+- Validasi menu Settings tetap membatasi leverage pada rentang exchange 1–125.
+- Position sizing tetap dibatasi `risk_percent` dan `max_position_size_percent`; leverage tidak menjamin notional selalu naik bila risk cap lebih ketat.
+- Posisi lama tidak dimigrasi atau diubah; leverage tersimpan saat posisi tersebut dibuka tetap berlaku sampai close.
+
+### Verifikasi
+```bash
+.venv/bin/python -m pytest tests/test_realtime_paper_engine.py tests/test_trading_preferences.py -q --tb=short
+# 26 passed
+.venv/bin/python -m py_compile app/paper/realtime_engine.py tests/test_realtime_paper_engine.py
+# OK
+git diff --check -- app/paper/realtime_engine.py tests/test_realtime_paper_engine.py
+# bersih
+```
+
+### Next step
+1. ✅ Restart hanya `crypto-quant-bot.service` selesai; API tidak direstart, live tetap OFF, state/history tidak dihapus.
+2. Verifikasi open paper baru memiliki `configured_leverage: 25` dan `leverage: 25` bila Settings tetap 25.
+3. Pastikan posisi lama yang memakai 5x tidak ditulis ulang.
+4. Lanjut P2 churn soft-entry/re-entry setelah runtime hijau.
+
+---
+
+## Sesi 2026-07-28 — P1 reason partial/full close
+
+**Environment:** `/opt/crypto-quant-bot`
+**Mode:** paper ON · live OFF · executor dry-run
+**Runtime:** perubahan batch ini belum dimuat ke service; restart realtime + API dan hard refresh masih diperlukan.
+
+### Sudah dikerjakan
+- Event paper `partial_close` sekarang membawa `close_scope="partial"` dan label eksplisit seperti `Partial close — take profit 1`.
+- Event paper `closed` sekarang membawa `close_scope="full"` dan label eksplisit seperti `Full close — trailing stop`.
+- Field raw `reason`, `partial_reason`, dan `close_reason` tetap dipertahankan untuk kompatibilitas dan audit.
+- Fallback Order History di `app/dashboard/services.py` meneruskan scope/label dan membentuk label untuk history lama yang belum punya metadata baru.
+- `dashboard.js` menampilkan `close_label`; live/legacy row tanpa label tetap dinormalisasi berdasarkan status.
+
+### Verifikasi
+```bash
+.venv/bin/python -m pytest tests/test_realtime_paper_engine.py tests/test_dashboard_services.py -q --tb=short
+# 25 passed
+.venv/bin/python -m py_compile app/paper/realtime_engine.py app/dashboard/services.py tests/test_realtime_paper_engine.py tests/test_dashboard_services.py
+# OK
+node --check app/dashboard/static/dashboard.js
+# OK
+git diff --check -- app/paper/realtime_engine.py app/dashboard/services.py app/dashboard/static/dashboard.js tests/test_realtime_paper_engine.py tests/test_dashboard_services.py
+# bersih
+```
+
+### Next step
+1. Jelaskan efek lalu restart `crypto-quant-bot.service` dan `crypto-quant-bot-api.service` agar event producer dan API mapper memuat kode baru.
+2. Hard refresh dashboard agar renderer `close_label` terbaru aktif.
+3. Verifikasi event close baru tampil sebagai `Partial close — ...` atau `Full close — ...`; history lama tetap mendapat fallback label.
+4. Setelah runtime hijau, lanjut P2 churn soft-entry/re-entry.
+
+---
+
+## Sesi terakhir — Handoff sebelum chat baru: Tier 2 geometry + UI
+
+**Environment:** `/opt/crypto-quant-bot`
+**Mode:** paper ON · live OFF · executor dry-run
+**Runtime:** belum direstart setelah shared geometry gate; jangan menganggap proses aktif sudah memuat kode terbaru.
+
+### 1. Sudah dikerjakan di sesi ini
+- Menambahkan shared validator geometry untuk entry plan: RR minimum 2.0, SL/TP sesuai sisi, SL percentage 0,35–4,5%, dan harga harus finite/positif.
+- Menghubungkan validator ke Chart Proposal, Decision Agent, dan RiskAgent final gate.
+- RiskAgent sekarang memvalidasi level aktual, sehingga metadata `risk_reward` stale/palsu tidak dapat melewati gate.
+- Menambah tes geometry dan memperluas tes Chart Proposal.
+- Active Orders sempat menampilkan RR Planned/source, tetapi user memutuskan agar tidak ditampilkan. Kolom desktop dan metric mobile dihapus kembali.
+- Stop Loss tetap menampilkan `SL x.xx%`.
+- `rr_tp1` dan `tp_level_source` tetap dipertahankan di backend/paper state sebagai audit/risk data.
+
+### 2. File dibuat/diubah
+- **Dibuat (belum tracked Git saat pengecekan):** `app/risk/geometry.py`, `tests/test_entry_geometry.py`.
+- **Diubah:** `app/chart_agent/proposal.py`, `app/decision_agent/agent.py`, `app/risk/risk_agent.py`, `app/dashboard/static/dashboard.js`, `tests/test_chart_proposal.py`, `TASKS.md`.
+- Tidak ada paper state/history yang dihapus atau di-rewrite; tidak ada secret yang ditulis.
+
+### 3. Command penting dan hasil
+```bash
+.venv/bin/python -m pytest tests/test_entry_geometry.py tests/test_chart_proposal.py -q --tb=short
+# 13 passed in 0.58–0.91s
+.venv/bin/python -m py_compile app/risk/geometry.py app/chart_agent/proposal.py app/decision_agent/agent.py app/risk/risk_agent.py tests/test_entry_geometry.py
+# berhasil
+node --check app/dashboard/static/dashboard.js
+# berhasil
+git diff --check -- app/dashboard/static/dashboard.js
+# bersih
+```
+
+### 4. Error/masalah terakhir
+- Runtime realtime belum direstart setelah perubahan Python; shared geometry gate belum aktif di proses lama.
+- Hard refresh browser masih diperlukan untuk membersihkan cache asset dashboard.
+- Command Git/pytest luas pernah timeout pada batas tool 30 detik; tes terarah geometry/chart berhasil.
+- `git diff --name-status` hanya menampilkan tracked files; file baru geometry/test belum muncul karena belum tracked, perlu dicek sebelum commit.
+
+### 5. Keputusan teknis
+- RR tetap **Opsi C hybrid** pada paper: TP rendah dinormalisasi ke 2R/3R/4R, bukan hard reject di pintu paper.
+- Shared geometry gate memakai RR minimum 2.0 dan menjadi fail-safe final di RiskAgent.
+- Chart LLM tetap advisory; baseline tidak mengadopsi level LLM sebagai order.
+- Live tetap OFF; exit tidak boleh diveto oleh LLM.
+- RR Planned tidak ditampilkan di UI atas keputusan user; RR/source hanya audit backend/state.
+
+### 6. Next step chat baru
+1. Review `git status`, lalu pastikan `app/risk/geometry.py` dan `tests/test_entry_geometry.py` tidak terabaikan.
+2. Jelaskan efek dan lakukan restart hanya `crypto-quant-bot.service` bila policy mengizinkan; API tidak perlu restart.
+3. Validasi open baru: `rr_tp1 >= 2`, SL/TP geometry benar, dan tidak menyentuh history lama.
+4. Validasi artifact agent: conflict `scanner_chart_conflict_rejected`, entry baseline deterministik.
+5. Hard refresh dashboard; pastikan RR Planned tidak muncul dan SL percentage tetap tampil.
+6. Jika runtime hijau, lanjut P1 reason close partial/full dan P2 evaluasi churn soft-entry/re-entry.
+
+---
+
 ## Sesi 2026-07-27 — Handoff akhir: dashboard realtime, Tier 1, restart runtime
 
 **Environment:** `/opt/crypto-quant-bot`  

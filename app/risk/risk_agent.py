@@ -14,6 +14,7 @@ from app.core.models import Candle
 from app.decision_agent.models import Decision
 from app.executor_agent.models import PositionContext
 from app.risk.manager import RiskManager, RiskSettings
+from app.risk.geometry import validate_entry_geometry
 
 
 RISK_POLICY_VERSION = "risk-1.1.0"
@@ -117,6 +118,20 @@ class RiskAgent:
         entry = float(plan.entry_price)
         stop = float(plan.stop_loss)
         tp = float(plan.take_profit_1)
+        geometry = validate_entry_geometry(
+            side=plan.side,
+            entry=entry,
+            stop_loss=stop,
+            take_profit=tp,
+        )
+        if not geometry.valid:
+            return RiskApproval(
+                approved=False,
+                hard_rejections=["INVALID_ENTRY_GEOMETRY"],
+                reason="invalid_entry_geometry",
+                risk_reward=geometry.risk_reward,
+                checks={"entry_geometry": geometry.to_dict()},
+            )
         if decision.action == "ENTRY_SELL":
             risk = abs(entry - stop)
             reward = abs(tp - entry)

@@ -14,6 +14,12 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from app.chart_agent.models import ChartReading
+from app.risk.geometry import (
+    DEFAULT_MAX_SL_PCT,
+    DEFAULT_MIN_RR,
+    DEFAULT_MIN_SL_PCT,
+    validate_entry_geometry,
+)
 
 LtfState = Literal[
     "WAIT_PULLBACK",
@@ -27,9 +33,9 @@ LtfState = Literal[
 ]
 SetupStance = Literal["LONG", "SHORT", "WAIT", "AVOID", "NEUTRAL"]
 
-MIN_SL_PCT = 0.35
-MAX_SL_PCT = 4.5
-MIN_RR = 1.5
+MIN_SL_PCT = DEFAULT_MIN_SL_PCT
+MAX_SL_PCT = DEFAULT_MAX_SL_PCT
+MIN_RR = DEFAULT_MIN_RR
 MAX_ENTRY_DRIFT_PCT = 3.0
 
 _REJECT_TOKENS = (
@@ -273,27 +279,16 @@ def validate_chart_proposal(
     sl = float(proposal.proposed_sl)  # type: ignore[arg-type]
     tp1 = float(proposal.proposed_tp1)  # type: ignore[arg-type]
 
-    if proposal.stance == "LONG":
-        if sl >= entry:
-            reasons.append("long_sl_not_below_entry")
-        if tp1 <= entry:
-            reasons.append("long_tp_not_above_entry")
-    else:
-        if sl <= entry:
-            reasons.append("short_sl_not_above_entry")
-        if tp1 >= entry:
-            reasons.append("short_tp_not_below_entry")
-
-    risk = abs(entry - sl)
-    sl_pct = (risk / entry) * 100.0 if entry > 0 else 0.0
-    if sl_pct < min_sl_pct:
-        reasons.append(f"sl_too_tight={sl_pct:.2f}%")
-    if sl_pct > max_sl_pct:
-        reasons.append(f"sl_too_wide={sl_pct:.2f}%")
-
-    rr = abs(tp1 - entry) / risk if risk > 0 else 0.0
-    if rr < min_rr:
-        reasons.append(f"rr_too_low={rr:.2f}")
+    geometry = validate_entry_geometry(
+        side=proposal.stance,
+        entry=entry,
+        stop_loss=sl,
+        take_profit=tp1,
+        min_rr=min_rr,
+        min_sl_pct=min_sl_pct,
+        max_sl_pct=max_sl_pct,
+    )
+    reasons.extend(geometry.reasons)
 
     aligned = False
     if reading.bias == "BULLISH" and proposal.stance == "LONG":
@@ -320,8 +315,8 @@ def validate_chart_proposal(
     return ProposalValidation(
         accepted=accepted,
         reasons=reasons,
-        risk_reward=round(rr, 2),
-        sl_pct=round(sl_pct, 3),
+        risk_reward=round(geometry.risk_reward, 2),
+        sl_pct=round(geometry.sl_pct, 3),
         aligned_with_reading_bias=aligned,
     )
 

@@ -66,6 +66,8 @@ def test_paper_engine_closes_position_on_take_profit(tmp_path: Path) -> None:
 
     assert not result["open_positions"]
     assert result["events"][0]["type"] == "closed"
+    assert result["events"][0]["close_scope"] == "full"
+    assert result["events"][0]["close_label"] == "Full close — take profit 1"
 
 
 def test_paper_engine_updates_unranked_position_with_tracking_tick(
@@ -122,8 +124,7 @@ def test_percent_overrides_apply_to_new_long_position(tmp_path: Path) -> None:
         take_profit_percent=5,
         stop_loss_percent=2,
         trailing_stop_percent=1,
-        leverage=20,
-        max_leverage=20,  # Allow leverage=20 (default cap is 5)
+        leverage=25,
     )
     engine = RealtimePaperTradingEngine(config)
 
@@ -141,9 +142,9 @@ def test_percent_overrides_apply_to_new_long_position(tmp_path: Path) -> None:
     position = result["open_positions"][0]
     assert position["stop_loss"] == 98.0
     assert position["take_profit"] == [105.0]
-    assert position["configured_leverage"] == 20
-    assert position["leverage"] == 20
-    assert position["used_capital"] == 250.0
+    assert position["configured_leverage"] == 25
+    assert position["leverage"] == 25
+    assert position["used_capital"] == 200.0
 
     tracked = engine.process_signals(
         [{
@@ -501,6 +502,8 @@ def test_tp1_enabled_partial_closes_by_default(tmp_path: Path) -> None:
     )
     partial_events = [e for e in result["events"] if e.get("type") == "partial_close"]
     assert len(partial_events) == 1
+    assert partial_events[0]["close_scope"] == "partial"
+    assert partial_events[0]["close_label"] == "Partial close — take profit 1"
     position = result["open_positions"][0]
     assert position["tp_hit"][0] is True
 

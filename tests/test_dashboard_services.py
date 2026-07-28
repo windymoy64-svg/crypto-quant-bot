@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from app.dashboard import services
 from app.dashboard.services import dashboard_service
 
 
@@ -22,3 +23,50 @@ def test_dashboard_service_market_portfolio_analytics_health_are_valid_objects()
     assert portfolio["read_only"] is True
     assert analytics["read_only"] is True
     assert health["read_only"] is True
+
+
+def test_paper_order_history_labels_partial_and_full_close(monkeypatch) -> None:
+    events = [
+        {
+            "type": "partial_close",
+            "symbol": "BTC/USDT",
+            "reason": "take_profit_1",
+            "price": 110.0,
+            "timestamp": "2026-07-28T01:00:00+00:00",
+            "position": {
+                "side": "BUY",
+                "entry": 100.0,
+                "size": 1.0,
+                "partial_size_closed": 0.3,
+                "partial_realized_pnl": 3.0,
+            },
+        },
+        {
+            "type": "closed",
+            "symbol": "BTC/USDT",
+            "reason": "trailing_stop",
+            "price": 108.0,
+            "timestamp": "2026-07-28T02:00:00+00:00",
+            "close_scope": "full",
+            "close_label": "Full close — trailing stop",
+            "position": {
+                "side": "BUY",
+                "entry": 100.0,
+                "size": 1.0,
+                "final_size_closed": 0.7,
+                "realized_pnl": 8.6,
+            },
+        },
+    ]
+    monkeypatch.setattr(services, "read_jsonl_file", lambda *_args, **_kwargs: events)
+
+    history = dashboard_service._paper_order_history()
+
+    assert history[0]["status"] == "PARTIAL"
+    assert history[0]["close_scope"] == "partial"
+    assert history[0]["close_label"] == "Partial close — take profit 1"
+    assert history[0]["reason"] == "take_profit_1"
+    assert history[1]["status"] == "CLOSED"
+    assert history[1]["close_scope"] == "full"
+    assert history[1]["close_label"] == "Full close — trailing stop"
+    assert history[1]["reason"] == "trailing_stop"

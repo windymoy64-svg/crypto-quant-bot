@@ -117,7 +117,23 @@ def test_validate_accepts_aligned_long() -> None:
     assert proposal is not None
     v = validate_chart_proposal(proposal, _reading())
     assert v.accepted is True
-    assert v.risk_reward >= 1.5
+    assert v.risk_reward >= 2.0
+
+
+def test_validate_rejects_chart_proposal_below_two_r() -> None:
+    proposal = parse_chart_proposal(
+        {
+            "stance": "LONG",
+            "proposed_entry": 100.0,
+            "proposed_sl": 98.0,
+            "proposed_tp1": 103.0,
+        },
+        symbol="BTC/USDT",
+    )
+    assert proposal is not None
+    validation = validate_chart_proposal(proposal, _reading())
+    assert validation.accepted is False
+    assert any("rr_too_low" in reason for reason in validation.reasons)
 
 
 class _FakeChartLLM:

@@ -84,7 +84,6 @@ class PaperTradingConfig:
     stop_loss_percent: float | None = None
     trailing_stop_percent: float | None = None
     leverage: int | None = None
-    max_leverage: int = 5  # Cap effective leverage during validation/live.
     pending_order_ttl_seconds: float = 900.0
 
     @classmethod
@@ -127,7 +126,6 @@ class PaperTradingConfig:
                 data.get("trailing_stop_percent")
             ),
             leverage=_optional_positive_int(data.get("leverage")),
-            max_leverage=int(data.get("max_leverage", 5)),
             pending_order_ttl_seconds=float(data.get("pending_order_ttl_seconds", 900.0)),
         )
 
@@ -436,13 +434,9 @@ class RealtimePaperTradingEngine:
                 signal,
             )
 
-        # Leverage guard: cap effective leverage during validation. Leverage
-        # does not change edge, only amplifies liquidation and execution risk,
-        # so the cap is enforced even if operator preferences request higher.
-        max_leverage = int(getattr(self.config, "max_leverage", 5) or 5)
-        leverage = min(int(self.config.leverage or 1), max_leverage)
-        if leverage < 1:
-            leverage = 1
+        # An explicit dashboard preference is authoritative. When no leverage
+        # is selected, preserve the existing unleveraged 1x default.
+        leverage = int(self.config.leverage) if self.config.leverage is not None else 1
         size = calculate_position_size(
             account_balance=available,
             risk_percent=self.config.risk_percent,
@@ -1013,6 +1007,8 @@ class RealtimePaperTradingEngine:
             symbol,
             reason,
             signal,
+            close_scope="partial",
+            close_label=f"Partial close — {reason.replace('_', ' ')}",
             position=snapshot,
         )
 
@@ -1065,6 +1061,8 @@ class RealtimePaperTradingEngine:
             symbol,
             reason,
             signal,
+            close_scope="full",
+            close_label=f"Full close — {reason.replace('_', ' ')}",
             position=closed_position,
         )
 
@@ -1378,8 +1376,10 @@ class RealtimePaperTradingEngine:
         signal: dict[str, object],
         *,
         position: dict[str, object] | None = None,
+        close_scope: str | None = None,
+        close_label: str | None = None,
     ) -> dict[str, object]:
-        return {
+        event = {
             "timestamp": self._now(),
             "type": event_type,
             "symbol": symbol,
@@ -1389,6 +1389,11 @@ class RealtimePaperTradingEngine:
             "confidence": signal.get("confidence"),
             "position": position,
         }
+        if close_scope is not None:
+            event["close_scope"] = close_scope
+        if close_label is not None:
+            event["close_label"] = close_label
+        return event
 
     def _build_entry_reason(self, signal: dict[str, object], side: str) -> str:
         """Susun ringkasan alasan teknis entry dari meta signal.
