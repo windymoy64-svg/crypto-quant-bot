@@ -1224,13 +1224,22 @@
                   p.unrealized_pnl ?? calculatedPnl
                 );
 
-                // ROI arah-aware: SHORT profit ketika harga turun.
-                const roi = entry > 0
-                  ? (
-                      isShort
-                        ? ((entry - last) / entry) * 100
-                        : ((last - entry) / entry) * 100
-                    )
+                // Samakan dengan Active Orders dan exchange futures: persentase
+                // adalah ROE terhadap margin posisi, bukan perubahan harga coin.
+                const storedMargin = Number(p.used_capital);
+                const rawNotional = Number(p.notional);
+                const notional = Number.isFinite(rawNotional) && rawNotional !== 0
+                  ? Math.abs(rawNotional)
+                  : entry * size;
+                const leverage = Math.max(
+                  Number(p.leverage ?? p.configured_leverage ?? 1) || 1,
+                  1
+                );
+                const margin = Number.isFinite(storedMargin) && storedMargin > 0
+                  ? storedMargin
+                  : notional / leverage;
+                const roe = margin > 0
+                  ? (pnlDollar / margin) * 100
                   : 0;
 
                 const dollarLabel =
@@ -1257,7 +1266,7 @@
                   <div class="pnl-card ${dir} ${sideClass}">
                     ${trailingBadge}
                     <div class="pnl-sym">${symShort}</div>
-                    <div class="pnl-value">${pct(roi)}</div>
+                    <div class="pnl-value">${pct(roe)}</div>
                     <div class="pnl-dollar">${dollarLabel}</div>
                     <div class="pnl-side">${sideLabel}</div>
                   </div>

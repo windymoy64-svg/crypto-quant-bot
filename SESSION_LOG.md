@@ -6,6 +6,166 @@
 
 ---
 
+## Handoff sesi 2026-07-29 — Agent conflict, Active Orders margin/ROE, P&L Stream, risk 1%
+
+**Environment:** `/opt/crypto-quant-bot`
+**Mode:** paper ON · live OFF
+**Runtime/service:** tidak direstart pada sesi ini; perubahan static perlu hard refresh, perubahan `risk_percent` perlu restart realtime agar dimuat.
+
+### 1. Apa yang sudah dikerjakan
+- Entry Candidates: root cause decision kosong pada ETH/SPCXB/XLM adalah conflict `scanner_BUY_vs_chart_BEARISH`; policy `REJECT` return sebelum Decision Agent sehingga `decision=null`. UI sekarang menampilkan `REJECT`, chart score/regime, dan reason conflict yang jelas tanpa mengubah policy trading.
+- Active Orders FIL: membuktikan `$149.46` adalah notional awal, bukan modal. Runtime FIL saat dicek: leverage 50x, margin awal `$2.99`; setelah TP1 partial remaining size `146.22314853`, remaining margin/`used_capital` `$2.09`.
+- Active Orders Modal diperbaiki memakai `used_capital`, fallback exposure/leverage, dan quantity `remaining_size`.
+- PnL% Active Orders diperbaiki dari bug dua denominator: snapshot memakai margin, price tick memakai notional. Keduanya sekarang memanggil `positionMargin(...)`, sehingga persentase konsisten sebagai ROE.
+- Menelusuri angka besar seperti `+$0.85 / +119%`: ini valid sebagai ROE margin pada leverage 25x, bukan perubahan harga atau return total akun.
+- Overview Real-Time P&L Stream sebelumnya menghitung perubahan harga `(last-entry)/entry`; kini memakai `ROE = pnlDollar / margin`, dengan `used_capital` utama dan fallback `notional/leverage`, sama dengan Active Orders.
+- Formula sizing dijelaskan: quantity berdasarkan budget risiko ke SL; margin = notional/leverage. Leverage tinggi membuat margin kecil walau risiko nominal ke SL tetap dibatasi.
+- Simulasi ringan leverage 10x menunjukkan sebagian besar margin posisi dengan notional saat ini sekitar `$0.90–$3.57`, tetapi leverage config tidak diubah.
+- `configs/paper_trading.json`: `risk_percent` diubah `0.5 → 1.0`. Dengan saldo sekitar `$129`, budget rugi ke SL kira-kira `$1.29` per posisi baru setelah config dimuat.
+- `target_margin_percent` belum ada; hanya dijelaskan sebagai soft target margin. `max_position_size_percent=10` tetap batas maksimum, bukan target.
+
+### 2. File dibuat/diubah
+- **Dibuat:** `tests/test_dashboard_pnl_stream.py`.
+- **Diubah sesi ini:**
+  - `app/dashboard/static/dashboard.js`
+  - `app/dashboard/templates/index.html`
+  - `tests/test_dashboard_orders_scroll.py`
+  - `configs/paper_trading.json`
+  - `TASKS.md`
+  - `SESSION_LOG.md`
+- Perubahan working tree lama tetap ada dan jangan ditimpa: termasuk `app/dashboard/static/dashboard.css` dan file/test untracked dari handoff sebelumnya.
+- Tidak ada secret, paper state, trade history, atau posisi lama yang dihapus/di-rewrite.
+
+### 3. Command penting dan hasil
+```bash
+node --check /opt/crypto-quant-bot/app/dashboard/static/dashboard.js
+# sukses
+
+.venv/bin/pytest tests/test_chart_proposal.py::test_scanner_chart_conflict_is_rejected_by_baseline_policy -q --tb=short
+# 1 passed
+
+.venv/bin/pytest tests/test_dashboard_orders_scroll.py -q --tb=short
+# 8 passed (setelah regresi denominator ditambah)
+
+.venv/bin/pytest tests/test_dashboard_pnl_stream.py tests/test_dashboard_orders_scroll.py -q --tb=short
+# 11 passed
+
+python -c 'import json; d=json.load(open("configs/paper_trading.json")); assert d["risk_percent"] == 1.0'
+# VALID risk_percent=1.0
+
+git diff --check -- <file terarah>
+# bersih
+```
+- Inspeksi runtime dilakukan dengan membaca `paper_state.json` kecil dan kalkulasi Python singkat; tidak menjalankan service/proses tambahan atau load JSONL besar.
+
+### 4. Error atau masalah terakhir
+- `risk_percent=1.0` belum aktif di proses realtime sampai service memuat ulang config. **Belum ada restart** pada sesi ini.
+- Leverage 10x baru rekomendasi/simulasi; tidak ada perubahan leverage config dan posisi aktif tidak boleh di-rewrite.
+- `target_margin_percent` belum diimplementasikan. Minimum/target margin 3% berbeda dari risk 3%; jangan menerapkan risk 3% untuk sekadar membesarkan modal.
+- UI menghitung ROE dengan benar, tetapi label persentase masih dapat diperjelas menjadi `ROE`.
+- Fetch dokumentasi resmi: Binance memberi halaman anti-bot/JavaScript; Bitunix HTTP 403/404. Tidak ada kutipan resmi palsu; formula kontrak linear dibandingkan dengan implementasi lokal.
+- Beberapa command sukses tetapi output tool tidak tertangkap. Gunakan command sempit dan test terarah untuk menjaga RAM/waktu.
+
+### 5. Keputusan teknis
+- Notional dan modal dibedakan: `notional=entry×quantity`; `margin=notional/leverage`.
+- PnL dolar tidak dikalikan leverage; leverage tercermin pada quantity/exposure dan ROE.
+- Persentase Active Orders dan P&L Stream adalah ROE terhadap margin, bukan price change dan bukan dampak terhadap total balance.
+- Margin utama berasal dari `used_capital`; fallback harus leverage-aware dan memakai remaining quantity.
+- Risk sizing tetap fail-safe: `risk_percent` membatasi rugi ke SL, sedangkan `max_position_size_percent` hanya batas maksimum margin.
+- Jika target margin dibuat, target harus soft dan risk cap selalu menang.
+- Config/state bersifat forward-looking; posisi/history lama tidak dimigrasi.
+- Tetap low-resource: baca/edit file spesifik, test kecil, jangan dump log besar atau restart yang tidak perlu.
+
+### 6. Next step chat baru
+1. Review `git status` dan handoff teratas sebelum bekerja; working tree berisi perubahan dari beberapa sesi.
+2. Jika user ingin risk 1% mulai dipakai, jelaskan efek dan restart hanya `crypto-quant-bot.service`; API tidak perlu restart, live harus tetap OFF.
+3. Verifikasi open baru setelah restart: actual risk ke SL ≤ sekitar 1% available balance, leverage/configured leverage sesuai Settings, margin UI benar, RR/geometry tetap valid.
+4. Konfirmasi keputusan leverage 10x melalui Settings. Posisi lama tetap memakai leverage saat entry.
+5. Hard refresh dan cek empat UI: conflict REJECT, Modal Active Orders, ROE Active Orders stabil, P&L Stream ROE sama.
+6. Opsional: ubah label persentase menjadi `ROE` agar semantik jelas.
+7. Implementasikan `target_margin_percent` hanya bila diminta eksplisit, dengan target 3% soft, risk cap 1%, max margin 10%, test lengkap, dan tanpa membesarkan posisi secara paksa.
+8. Lanjutkan verifikasi runtime lama untuk RR ≥2, geometry, source deterministik, dan artifact conflict.
+
+---
+
+## Handoff sesi 2026-07-28 — Orders scroll mobile leverage badge
+
+**Environment:** `/opt/crypto-quant-bot`  
+**Mode:** paper ON · live OFF · frontend-only changes in this session  
+**Runtime/service:** tidak ada restart service pada batch UI Orders; perubahan static dashboard perlu hard refresh browser.
+
+### 1. Apa yang sudah dikerjakan
+- Membaca `.clinerules` dan `TASKS.md`, lalu melanjutkan dari konteks terakhir.
+- Menganalisis root cause menu **Orders**: panel **Active Orders** dan **Order History** tersendat serta scroll kembali ke atas karena container scroll ikut dihancurkan/dibuat ulang via `innerHTML` pada render realtime.
+- Mengimplementasikan fix scroll Orders:
+  - `price_update` tidak lagi memanggil `renderActiveOrders(...)` penuh;
+  - update harga/PnL tetap memakai patch per-sel (`ao-price-*`, `ao-pnl-*`, dan varian mobile);
+  - debounce snapshot di view Orders disamakan menjadi `800ms` (sebelumnya khusus Orders `100ms`);
+  - shell tabel Active Orders dan Order History di-mount sekali, lalu hanya `<tbody>` / list card mobile yang dipatch;
+  - `keepScroll(...)` menyimpan/memulihkan `scrollTop`/`scrollLeft` sebagai guard.
+- Menambahkan badge leverage pada **kartu mobile Active Orders**, tepat sebaris di samping badge LONG/SHORT:
+  - format `25x` untuk integer, `2.5x` untuk pecahan;
+  - sumber utama `p.leverage`, fallback `p.configured_leverage`;
+  - badge disembunyikan bila leverage tidak valid / < 1 (contoh pending order tanpa leverage).
+- Menambah tes regresi khusus dashboard Orders untuk scroll dan badge leverage mobile.
+- Mengupdate `TASKS.md` untuk P1 UI Orders.
+
+### 2. File dibuat/diubah
+- **Dibuat:** `tests/test_dashboard_orders_scroll.py`
+- **Diubah:**
+  - `app/dashboard/static/dashboard.js`
+  - `app/dashboard/static/dashboard.css`
+  - `TASKS.md`
+  - `SESSION_LOG.md`
+- Tidak ada secret ditulis, tidak ada paper state/history/log trading yang dihapus atau di-rewrite.
+- File untracked lama dari sesi sebelumnya tetap penting untuk commit berikutnya: `app/risk/geometry.py`, `tests/test_entry_geometry.py`.
+
+### 3. Command penting dan hasil
+```bash
+cd /opt/crypto-quant-bot
+node --check app/dashboard/static/dashboard.js
+# JS_SYNTAX_OK / JS_OK (beberapa run output tool sempat tidak tertangkap, tetapi command sukses)
+
+.venv/bin/python -m pytest tests/test_dashboard_orders_scroll.py -q --tb=short
+# 7 passed
+
+.venv/bin/python -m pytest tests/test_dashboard_office.py -q --tb=short
+# 10 passed
+
+.venv/bin/python -m pytest tests/test_dashboard_services.py -q --tb=short
+# 2 passed
+
+.venv/bin/python -m pytest tests/test_dashboard_orders_scroll.py tests/test_dashboard_office.py tests/test_dashboard_services.py -q --tb=short
+# sempat timeout di tool 30 detik saat digabung, tetapi tes yang sama sukses saat dijalankan terpisah
+```
+
+### 4. Error atau masalah terakhir
+- Gambar contoh user untuk badge leverage mobile tidak terbaca/attachment tidak sampai ke tool; implementasi memakai konvensi exchange-style pill netral `25x` sebaris dengan LONG/SHORT.
+- Perlu **hard refresh dashboard** agar `dashboard.js` dan `dashboard.css` versi baru termuat (asset cache-bust mtime tersedia, tetapi browser tetap sebaiknya di-refresh paksa).
+- Smoothness scroll belum bisa diverifikasi visual dari sisi agent; yang sudah diverifikasi adalah hilangnya jalur rebuild DOM yang menyebabkan reset scroll, sintaks JS, dan tes regresi.
+- Command shell tertentu masih kadang timeout / output tidak tertangkap karena batas tool 30 detik; command terarah yang sama berhasil saat diulang atau dipisah.
+- Masalah runtime lama tetap belum selesai: open paper baru pasca-restart masih perlu diverifikasi untuk `configured_leverage: 25`, actual `leverage: 25`, `rr_tp1 >= 2`, geometry valid, dan artifact conflict.
+
+### 5. Keputusan teknis
+- Fix scroll dilakukan frontend-only, tanpa restart service.
+- Untuk Active Orders mobile, leverage aktual (`leverage`) lebih diutamakan daripada `configured_leverage` agar posisi lama yang masih aktual 5x tidak salah tampil 25x; `configured_leverage` hanya fallback.
+- Shell table dipertahankan stabil; patch render diarahkan ke `<tbody>`/card list supaya container scroll tidak hilang.
+- Tidak lanjut ke patch per-baris berbasis key penuh karena langkah 1+2+3 sudah diminta dan cukup untuk menghilangkan reset paling sering; langkah 4 tetap opsi jika masih ada flicker saat set baris berubah.
+- Live trading tetap OFF; tidak ada perubahan backend trading/risk/runtime pada batch ini.
+
+### 6. Next step chat baru
+1. Minta user hard refresh browser lalu cek menu **Orders** di mobile:
+   - Active Orders bisa scroll tanpa lompat ke atas;
+   - Order History bisa scroll tanpa lompat ke atas;
+   - badge leverage tampil sebaris di samping LONG/SHORT sesuai ekspektasi UI.
+2. Jika badge leverage perlu disesuaikan dengan gambar user, ubah hanya style `.mc-lev` / `.mc-tags` di `app/dashboard/static/dashboard.css` dan markup kecil di `renderActiveOrders` bila perlu.
+3. Jika masih ada flicker saat posisi dibuka/ditutup, lanjut langkah 4: patch per-baris berbasis key (`data-symbol` untuk Active Orders; id/time+symbol untuk Order History) agar baris yang tidak berubah tidak disentuh.
+4. Lanjut next step runtime lama dari `TASKS.md`: verifikasi open baru pasca-restart untuk `rr_tp1 >= 2`, `tp_level_source` deterministik/normalized_min_rr, geometry valid, dan conflict artifact `scanner_chart_conflict_rejected`.
+5. Verifikasi artifact leverage runtime: posisi paper baru dengan Settings 25 harus memiliki `configured_leverage: 25` dan actual `leverage: 25`; posisi lama tidak di-rewrite.
+6. Review working tree sebelum commit, termasuk file baru/untracked: `tests/test_dashboard_orders_scroll.py`, `app/risk/geometry.py`, `tests/test_entry_geometry.py`.
+
+---
+
 ## Handoff lengkap sesi 2026-07-28
 
 **Environment:** `/opt/crypto-quant-bot`

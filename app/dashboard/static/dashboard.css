@@ -3201,6 +3201,9 @@ body.menu-open{overflow:hidden}
 .mc-dir{width:fit-content;padding:3px 7px;border-radius:6px;font-size:9px;font-weight:800;letter-spacing:.04em}
 .mc-dir.dir-long,.mc-dir.order-long{color:var(--green);background:var(--green-bg);border:1px solid var(--green-br)}
 .mc-dir.dir-short,.mc-dir.order-short{color:var(--red);background:var(--red-bg);border:1px solid var(--red-br)}
+/* Baris tag: badge arah + leverage berdampingan, tepat di samping LONG/SHORT */
+.mc-tags{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.mc-lev{flex:none;padding:3px 7px;border-radius:6px;font-size:9px;font-weight:800;letter-spacing:.04em;font-variant-numeric:tabular-nums;color:var(--txt-dim);background:var(--panel);border:1px solid var(--border-2)}
 .mc-right{text-align:right;min-width:72px}
 .mc-right strong{display:block;font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1;color:var(--txt)}
 .mc-right strong.pnl-pos{color:var(--green)}
