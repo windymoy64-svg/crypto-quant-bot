@@ -27,6 +27,13 @@ def _optional_positive_int(value: object) -> int | None:
     return parsed
 
 
+def _optional_percent(value: object) -> float | None:
+    parsed = _optional_positive_float(value)
+    if parsed is not None and parsed > 100:
+        raise ValueError("target_margin_percent must be within (0, 100]")
+    return parsed
+
+
 @dataclass(frozen=True)
 class AutoExitConfig:
     enabled: bool = True
@@ -84,6 +91,8 @@ class PaperTradingConfig:
     stop_loss_percent: float | None = None
     trailing_stop_percent: float | None = None
     leverage: int | None = None
+    target_margin_percent: float | None = None
+    target_risk_reward: float | None = None
     pending_order_ttl_seconds: float = 900.0
 
     @classmethod
@@ -126,6 +135,12 @@ class PaperTradingConfig:
                 data.get("trailing_stop_percent")
             ),
             leverage=_optional_positive_int(data.get("leverage")),
+            target_margin_percent=_optional_percent(
+                data.get("target_margin_percent")
+            ),
+            target_risk_reward=_optional_positive_float(
+                data.get("target_risk_reward")
+            ),
             pending_order_ttl_seconds=float(data.get("pending_order_ttl_seconds", 900.0)),
         )
 
@@ -397,7 +412,16 @@ class RealtimePaperTradingEngine:
                 signal,
             )
 
-        if not take_profit:
+        target_rr = self.config.target_risk_reward
+        if target_rr is not None:
+            take_profit = self._risk_multiple_levels(
+                side,
+                entry,
+                stop_loss,
+                multiples=(target_rr, target_rr + 1.0, target_rr + 2.0),
+            )
+            tp_level_source = "configured_rr"
+        elif not take_profit:
             # Signal TPs were missing or wrong-side (e.g. LONG TP below entry).
             # Rebuild from risk so TP1 can never partial-close at a loss.
             take_profit = self._fallback_take_profits(side, entry, stop_loss)
@@ -437,17 +461,25 @@ class RealtimePaperTradingEngine:
         # An explicit dashboard preference is authoritative. When no leverage
         # is selected, preserve the existing unleveraged 1x default.
         leverage = int(self.config.leverage) if self.config.leverage is not None else 1
-        size = calculate_position_size(
-            account_balance=available,
-            risk_percent=self.config.risk_percent,
-            entry=entry,
-            stop_loss=stop_loss,
-            # max_position_size_percent represents committed margin. Convert
-            # it to the equivalent leveraged notional cap for paper sizing.
-            max_position_percent=(
-                self.config.max_position_size_percent * leverage
-            ),
-        )
+        target_margin_percent = self.config.target_margin_percent
+        if target_margin_percent is None:
+            size = calculate_position_size(
+                account_balance=available,
+                risk_percent=self.config.risk_percent,
+                entry=entry,
+                stop_loss=stop_loss,
+                # max_position_size_percent represents committed margin. Convert
+                # it to the equivalent leveraged notional cap for paper sizing.
+                max_position_percent=(
+                    self.config.max_position_size_percent * leverage
+                ),
+            )
+            sizing_source = "default_risk"
+        else:
+            target_margin = available * (target_margin_percent / 100)
+            target_notional = target_margin * leverage
+            size = round(target_notional / entry, 8)
+            sizing_source = "configured_margin"
 
         if size <= 0:
             return self._event(
@@ -485,6 +517,9 @@ class RealtimePaperTradingEngine:
             "confidence": float(signal["confidence"]),
             "entry_reason": self._build_entry_reason(signal, side),
             "configured_leverage": self.config.leverage,
+            "configured_margin_percent": target_margin_percent,
+            "configured_risk_reward": target_rr,
+            "sizing_source": sizing_source,
             # Default True = legacy partial TP1. False = trend-hold (skip fixed TPs).
             "tp1_enabled": bool(signal.get("tp1_enabled", True)),
             "hold_mode": bool(signal.get("hold_mode", False)),

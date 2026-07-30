@@ -572,10 +572,10 @@
                 <span>Kosong = gunakan default yang sudah berjalan</span>
               </div>
               <div class="settings-fields-grid">
-                <label>Target TP (%)
+                <label id="settings-tp-field">Target TP (%)
                   <input type="number" id="settings-tp-percent" min="0.01" max="100" step="0.01" placeholder="default signal" />
                 </label>
-                <label>Stop Loss (%)
+                <label id="settings-sl-field">Stop Loss (%)
                   <input type="number" id="settings-sl-percent" min="0.01" max="100" step="0.01" placeholder="default signal" />
                 </label>
                 <label>Trailing Stop (%)
@@ -586,7 +586,15 @@
                     <option value="">Default existing</option>
                   </select>
                 </label>
+                <label>Modal dimainkan (%)
+                  <input type="number" id="settings-target-margin-percent" min="0.01" max="100" step="0.01" placeholder="default risk sizing" />
+                </label>
+                <label id="settings-rr-field">Target RR
+                  <input type="number" id="settings-target-rr" min="0.01" max="100" step="0.01" placeholder="default 2R hybrid" />
+                </label>
               </div>
+              <p id="settings-exit-mode-hint" class="settings-field-hint">Pilih salah satu: Target RR, atau TP/SL manual. Target RR memakai Stop Loss dari signal dan menonaktifkan kolom TP/SL.</p>
+              <p class="settings-field-hint">Modal dimainkan dihitung dari available balance sebagai margin, lalu disesuaikan dengan leverage. Berlaku untuk posisi baru saja.</p>
               <p id="settings-leverage-hint" class="settings-field-hint"></p>
               <div class="settings-actions">
                 <button type="submit" class="primary">Save</button>

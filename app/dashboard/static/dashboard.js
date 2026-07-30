@@ -199,10 +199,39 @@ function optionalNumberValue(id){
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
 }
+function syncTradingExitMode(){
+  const tp = byId("settings-tp-percent");
+  const sl = byId("settings-sl-percent");
+  const rr = byId("settings-target-rr");
+  if(!tp || !sl || !rr) return;
+  const hasRr = rr.value.trim() !== "";
+  const hasManual = tp.value.trim() !== "" || sl.value.trim() !== "";
+  // Data lama yang ambigu diperlakukan seperti runtime saat ini: RR menang.
+  tp.disabled = hasRr;
+  sl.disabled = hasRr;
+  rr.disabled = !hasRr && hasManual;
+  const manualFields = [byId("settings-tp-field"), byId("settings-sl-field")];
+  const rrField = byId("settings-rr-field");
+  manualFields.forEach(field => {
+    field?.classList.toggle("exit-mode-active", hasManual && !hasRr);
+    field?.classList.toggle("exit-mode-disabled", hasRr);
+  });
+  rrField?.classList.toggle("exit-mode-active", hasRr);
+  rrField?.classList.toggle("exit-mode-disabled", !hasRr && hasManual);
+  const hint = byId("settings-exit-mode-hint");
+  if(hint) hint.textContent = hasRr
+    ? "Mode Target RR aktif: TP dan SL manual dinonaktifkan; SL berasal dari signal."
+    : hasManual
+      ? "Mode TP/SL manual aktif: Target RR dinonaktifkan. Kosongkan TP dan SL untuk memakai RR."
+      : "Pilih salah satu: Target RR, atau TP/SL manual. Target RR memakai Stop Loss dari signal dan menonaktifkan kolom TP/SL.";
+}
 function renderTradingSettings(data){
   setOptionalNumber("settings-tp-percent", data.take_profit_percent);
   setOptionalNumber("settings-sl-percent", data.stop_loss_percent);
   setOptionalNumber("settings-trailing-percent", data.trailing_stop_percent);
+  setOptionalNumber("settings-target-margin-percent", data.target_margin_percent);
+  setOptionalNumber("settings-target-rr", data.target_risk_reward);
+  syncTradingExitMode();
   const select = byId("settings-leverage");
   if(select){
     const selected = data.leverage === null || data.leverage === undefined ? "" : String(data.leverage);
@@ -358,12 +387,15 @@ async function loadExchangeSettings(){
 }
 async function saveTradingSettings(){
   const exchange = currentExchange();
+  syncTradingExitMode();
   const payload = {
     exchange,
-    take_profit_percent: optionalNumberValue("settings-tp-percent"),
-    stop_loss_percent: optionalNumberValue("settings-sl-percent"),
+    take_profit_percent: byId("settings-tp-percent")?.disabled ? null : optionalNumberValue("settings-tp-percent"),
+    stop_loss_percent: byId("settings-sl-percent")?.disabled ? null : optionalNumberValue("settings-sl-percent"),
     trailing_stop_percent: optionalNumberValue("settings-trailing-percent"),
     leverage: byId("settings-leverage")?.value || null,
+    target_margin_percent: optionalNumberValue("settings-target-margin-percent"),
+    target_risk_reward: byId("settings-target-rr")?.disabled ? null : optionalNumberValue("settings-target-rr"),
   };
   setSettingsStatus("warn", "saving defaults...");
   try {
@@ -380,6 +412,8 @@ async function saveTradingSettings(){
       stop_loss_percent: data.stop_loss_percent,
       trailing_stop_percent: data.trailing_stop_percent,
       leverage: data.leverage,
+      target_margin_percent: data.target_margin_percent,
+      target_risk_reward: data.target_risk_reward,
     }, true);
     showToast(`${exchangeLabel(exchange)} trading defaults saved`);
   } catch(err){
@@ -387,6 +421,11 @@ async function saveTradingSettings(){
     renderSettingsResult(err.message, false);
   }
 }
+document.addEventListener("input", event => {
+  if(["settings-tp-percent", "settings-sl-percent", "settings-target-rr"].includes(event.target?.id)){
+    syncTradingExitMode();
+  }
+});
 async function submitExchangeSettings(event){
   event.preventDefault();
   const exchange = currentExchange();

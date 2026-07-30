@@ -161,6 +161,44 @@ def test_percent_overrides_apply_to_new_long_position(tmp_path: Path) -> None:
     assert position["trailing_stop_loss"] == 100.98
 
 
+def test_configured_margin_and_rr_override_default_sizing(tmp_path: Path) -> None:
+    config = PaperTradingConfig(
+        enabled=True,
+        starting_balance=100,
+        risk_percent=0.5,
+        max_open_positions=3,
+        state_path=str(tmp_path / "paper_state.json"),
+        trades_path=str(tmp_path / "paper_trades.jsonl"),
+        leverage=25,
+        target_margin_percent=5,
+        target_risk_reward=2,
+    )
+    engine = RealtimePaperTradingEngine(config)
+
+    result = engine.process_signals(
+        [{
+            "symbol": "TEST/USDT",
+            "action": "BUY",
+            "entry": 100.0,
+            "stop_loss": 98.0,
+            "take_profit": [101.0],
+            "confidence": 95.0,
+        }]
+    )
+
+    position = result["open_positions"][0]
+    assert position["size"] == 1.25
+    assert position["used_capital"] == 5.0
+    assert position["take_profit"] == [104.0, 106.0, 108.0]
+    assert position["rr_tp1"] == 2.0
+    assert position["tp_level_source"] == "configured_rr"
+    assert position["configured_margin_percent"] == 5
+    assert position["configured_risk_reward"] == 2
+    assert position["sizing_source"] == "configured_margin"
+    assert abs((position["entry"] - position["stop_loss"]) * position["size"]) == 2.5
+    assert abs((position["take_profit"][0] - position["entry"]) * position["size"]) == 5.0
+
+
 def test_percent_overrides_apply_to_new_short_position(tmp_path: Path) -> None:
     config = PaperTradingConfig(
         enabled=True,

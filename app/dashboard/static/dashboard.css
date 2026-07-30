@@ -33,6 +33,16 @@
 .settings-section-head span,.settings-field-hint{font-size:11px;color:var(--txt-mute)}
 .settings-fields-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px}
 .settings-field-hint{margin:-4px 0 12px}
+.settings-fields-grid label.exit-mode-active{color:var(--green)}
+.settings-fields-grid label.exit-mode-active input{
+  background:var(--green-bg);border-color:var(--green-br);
+  box-shadow:0 0 0 1px rgba(34,197,94,.08);
+}
+.settings-fields-grid label.exit-mode-disabled{color:var(--txt-mute);opacity:.52}
+.settings-fields-grid label.exit-mode-disabled input:disabled{
+  background:var(--bg-2);border-color:var(--border);color:var(--txt-mute);
+  cursor:not-allowed;box-shadow:none;
+}
 @media (max-width:640px){.settings-fields-grid{grid-template-columns:1fr}.settings-section-head{align-items:flex-start;flex-direction:column;gap:4px}}
 .settings-actions button{
   padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;

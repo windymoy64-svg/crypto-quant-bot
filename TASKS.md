@@ -3,8 +3,192 @@
 > Update file ini setiap selesai batch kerja.  
 > Tujuan: status operasional + antrian kerja tanpa menebak-nebak.
 
-**Terakhir di-update:** 2026-07-29 (agent conflict UI, Orders margin/ROE, P&L Stream ROE, paper risk 1%)
+**Terakhir di-update:** 2026-07-30 (handoff lengkap: eksklusivitas + warna mode TP/SL vs Target RR)
 **Environment:** `/opt/crypto-quant-bot` (VPS Linux)
+
+---
+
+## Handoff sesi 2026-07-30 — Handoff sebelum pindah chat
+
+### Sudah dikerjakan di sesi ini
+- Menjelaskan perbedaan operasional **Target TP (%)**, **Stop Loss (%)**, **Trailing Stop (%)**, **Target RR**, leverage, dan Modal dimainkan (%), termasuk hubungan Entry–SL–1R–TP serta perilaku HOLD/trailing/partial close.
+- Menetapkan rekomendasi awal: Target RR `2`, leverage `5x`, field TP/SL/Trailing/Modal dimainkan dikosongkan untuk baseline; pengujian sizing margin dilakukan terpisah setelah RR stabil.
+- Membuat mode exit saling eksklusif:
+  - Target RR diisi → Target TP (%) dan Stop Loss (%) disabled.
+  - Target TP (%) atau Stop Loss (%) diisi → Target RR disabled.
+  - Mengosongkan nilai mengaktifkan kembali mode lawan.
+- Menambahkan validasi API agar `target_risk_reward` tidak dapat disimpan bersama `take_profit_percent` atau `stop_loss_percent`.
+- Menjaga Trailing Stop (%), Leverage, dan Modal dimainkan (%) tetap independen.
+- Menambahkan hint dinamis yang menjelaskan mode aktif dan sumber SL saat Target RR digunakan.
+- Menambahkan pembeda visual: mode aktif hijau; kolom disabled abu-abu redup dengan cursor `not-allowed`; kondisi semua kosong tetap netral.
+- Tidak mengubah engine realtime, posisi paper aktif, paper state, trade history, atau live flag.
+
+### File dibuat/diubah pada sesi ini
+- **Dibuat:** tidak ada file baru.
+- **Diubah:**
+  - `/opt/crypto-quant-bot/app/dashboard/routes/settings.py`
+  - `/opt/crypto-quant-bot/app/dashboard/static/dashboard.js`
+  - `/opt/crypto-quant-bot/app/dashboard/static/dashboard.css`
+  - `/opt/crypto-quant-bot/app/dashboard/templates/index.html`
+  - `/opt/crypto-quant-bot/tests/test_settings_api.py`
+  - `/opt/crypto-quant-bot/tests/test_settings_ui.py`
+  - `/opt/crypto-quant-bot/TASKS.md`
+  - `/opt/crypto-quant-bot/SESSION_LOG.md`
+- Perubahan fixed-margin/Target RR dari handoff sebelumnya tetap berada di working tree dan tidak dioverwrite.
+
+### Command penting dan hasil
+```bash
+.venv/bin/python -m pytest tests/test_settings_api.py -q --tb=short
+# 14 passed, 1 warning deprecation nonfatal
+
+.venv/bin/python -m pytest tests/test_settings_ui.py -q --tb=short
+# 11 passed
+
+.venv/bin/python -m pytest \
+  tests/test_settings_api.py::test_trading_settings_reject_rr_with_manual_tp_or_sl \
+  tests/test_settings_ui.py::test_tp_sl_and_target_rr_are_mutually_exclusive_in_ui -q --tb=short
+# 3 passed, 1 warning deprecation nonfatal
+
+node --check /opt/crypto-quant-bot/app/dashboard/static/dashboard.js
+# OK
+
+python -m py_compile /opt/crypto-quant-bot/app/dashboard/routes/settings.py
+# OK
+
+git -C /opt/crypto-quant-bot diff --check
+# OK
+```
+- API direstart setelah perubahan route/UI: beberapa PID berubah selama operasi; status akhir `crypto-quant-bot.service` PID `9102` dan `crypto-quant-bot-api.service` PID `9107`, keduanya `active/running`.
+- Realtime tidak perlu direstart karena engine Python tidak berubah pada batch eksklusivitas/warna; jika service otomatis berganti PID, tetap diverifikasi active/running.
+- Konfigurasi akhir terverifikasi: `paper_enabled=True`, `live_enabled=False`.
+
+### Error atau masalah terakhir
+- Tidak ada assertion failure atau syntax error pada validasi terakhir.
+- Beberapa command `git status`/output shell sempat timeout atau tidak tertangkap oleh environment, tetapi command tetap diverifikasi ulang secara sempit; `git diff --check` bersih.
+- Warning nonfatal: `StarletteDeprecationWarning` dari integrasi `httpx`/TestClient.
+- Warning runtime lama tetap ada saat bootstrap Binance Futures terkait permission/API key (`-2015`); tidak mengaktifkan live order dan tidak mengubah mode paper.
+- Browser masih membutuhkan hard refresh agar asset CSS/JS terbaru terlihat.
+
+### Keputusan teknis
+- Target RR dan TP/SL manual diperlakukan sebagai dua mode exit yang mutually exclusive, bukan dua sumber TP yang boleh aktif bersamaan.
+- Jika Target RR aktif, SL memakai signal/struktur; Target RR membentuk ladder TP berbasis Entry–SL.
+- Jika TP atau SL manual aktif, Target RR harus kosong; API fail-closed untuk payload ambigu.
+- Trailing Stop tetap independen karena merupakan mekanisme exit dinamis, bukan mode penentuan TP/SL awal.
+- Perubahan hanya berlaku untuk posisi baru; posisi lama, state, dan audit history tidak dimigrasi.
+- Live tetap OFF.
+
+### Next step chat baru
+1. Hard refresh dashboard dan cek warna/hint/disabled state pada panel Trading Defaults.
+2. Verifikasi tiga kondisi UI: semua kosong; Target RR diisi; TP atau SL diisi.
+3. Verifikasi GET/PUT Settings per exchange tidak menyimpan kombinasi Target RR + TP/SL.
+4. Jika baseline RR ingin diuji, gunakan Target RR `2`, leverage `5x`, TP/SL/Trailing/Modal dimainkan kosong.
+5. Setelah posisi baru tersedia, audit metadata `rr_tp1`, `tp_level_source`, SL final, dan geometry; jangan rewrite posisi lama.
+6. Lanjutkan evaluasi partial TP (fraksi saat ini diterapkan terhadap remaining size), integrasi HOLD/trailing/`close_from_decision`, dan safety gate fixed-margin sebelum jalur live.
+
+---
+
+## Handoff sesi 2026-07-30 — Modal dimainkan (%), Target RR, leverage-aware sizing
+
+### Sudah dikerjakan di sesi ini
+- Mengaudit perhitungan futures dan runtime paper aktif: mode paper, live/network OFF, Settings Binance leverage 5x. Menjelaskan perbedaan quantity, notional, margin, risiko ke SL, PnL nominal, dan ROE dengan contoh runtime `SPCXB/USDT` serta `XRP/USDT`.
+- Menambahkan dua Trading Defaults opsional dan per-exchange:
+  - `target_margin_percent` / UI **Modal dimainkan (%)**;
+  - `target_risk_reward` / UI **Target RR**.
+- Jika Modal dimainkan diisi, posisi paper baru memakai fixed-margin sizing:
+  - `target_margin = available_balance × target_margin_percent / 100`;
+  - `target_notional = target_margin × leverage`;
+  - `quantity = target_notional / entry`.
+- Jika Target RR diisi, TP baru dibentuk dari jarak Entry–SL: TP1 = `RR`, TP2 = `RR+1`, TP3 = `RR+2`; position menyimpan `tp_level_source="configured_rr"`.
+- Jika input kosong, perilaku lama dipertahankan: risk-based sizing (`risk_percent` + cap posisi) dan hybrid structural/minimum 2R.
+- Menambah metadata audit posisi baru: `configured_margin_percent`, `configured_risk_reward`, dan `sizing_source` (`configured_margin` atau `default_risk`). Posisi/state/history lama tidak di-rewrite.
+- Memverifikasi sinkronisasi dengan lifecycle posisi:
+  - HOLD tetap bisa melewati seluruh fixed TP ladder dan memakai breakeven/trailing/agent EXIT;
+  - non-HOLD tetap partial close dengan konfigurasi `tp_fractions` saat ini;
+  - setelah partial close, `remaining_size` dan `used_capital` dihitung ulang leverage-aware;
+  - trailing ATR/ACR atau override trailing percent tetap berjalan;
+  - EXIT agent tetap memakai PnL ratio dalam satuan R dari Entry–SL dan remaining quantity.
+- Tidak me-restart service, tidak mengubah preference aktif, tidak mengaktifkan live, dan tidak mengubah active orders.
+
+### File dibuat/diubah pada sesi ini
+- **Dibuat:** tidak ada file baru.
+- **Diubah:**
+  - `app/settings/trading_preferences.py`
+  - `app/dashboard/routes/settings.py`
+  - `app/dashboard/templates/index.html`
+  - `app/dashboard/static/dashboard.js`
+  - `app/paper/realtime_engine.py`
+  - `run_realtime.py`
+  - `tests/test_trading_preferences.py`
+  - `tests/test_settings_api.py`
+  - `tests/test_realtime_paper_engine.py`
+  - `TASKS.md`
+  - `SESSION_LOG.md`
+- Working tree sudah berisi perubahan dari sesi lama; review diff/status sebelum commit dan jangan overwrite file yang bukan bagian batch ini.
+
+### Command penting dan hasil
+```bash
+.venv/bin/python -m pytest \
+  tests/test_realtime_paper_engine.py::test_configured_margin_and_rr_override_default_sizing \
+  tests/test_realtime_paper_engine.py::test_percent_overrides_apply_to_new_long_position -q --tb=short
+# 2 passed
+
+.venv/bin/python -m pytest tests/test_trading_preferences.py -q --tb=short
+# 3 passed
+
+.venv/bin/python -m pytest \
+  tests/test_settings_api.py::test_trading_settings_are_isolated_per_exchange \
+  tests/test_settings_api.py::test_trading_settings_blank_values_restore_defaults \
+  tests/test_settings_api.py::test_trading_settings_reject_invalid_percent_and_leverage -q --tb=short
+# 3 passed, 1 deprecation warning nonfatal
+
+.venv/bin/python -m pytest tests/test_realtime_paper_engine.py -q --tb=short
+# 24 passed
+
+.venv/bin/python -m pytest tests/test_acr_position_manager.py -q --tb=short
+# 11 passed
+
+.venv/bin/python -m py_compile app/settings/trading_preferences.py \
+  app/dashboard/routes/settings.py app/paper/realtime_engine.py run_realtime.py
+# OK
+
+node --check app/dashboard/static/dashboard.js
+# OK
+```
+
+### Error/masalah terakhir
+- Service realtime dan API sudah direstart pada 2026-07-30 18:48–18:49 WIB; kode baru sudah dimuat. Fitur fixed-margin/Target RR berlaku untuk posisi baru setelah user menyimpan input Settings; posisi lama tidak dimigrasi.
+- Input **Modal dimainkan (%) adalah margin allocation**, bukan persentase yang pasti hilang saat SL. Contoh available `$100`, modal 5%, leverage 25x, entry 100, SL 98: margin `$5`, notional `$125`, quantity `1.25`, tetapi loss di SL `$2.50`; RR 1:2 memberi gross profit `$5` bila 100% close di TP1.
+- Saat TP biasa, konfigurasi `tp_fractions=(0.3, 0.3, 0.4)` diterapkan terhadap remaining quantity pada tiap tahap; hasil efektif dari size awal bukan persis 30/30/40. Ini perilaku lama dan belum diubah pada sesi ini; review bila user menginginkan fraksi absolut dari initial size.
+- Target RR override tidak memaksa close ketika HOLD aktif; ini disengaja agar trend-hold tetap authoritative.
+- Fetch dokumentasi resmi terhalang Binance JS/anti-bot dan Bitunix HTTP 403; tidak ada kutipan langsung palsu. Rumus diverifikasi terhadap model linear futures dan implementasi lokal.
+- Beberapa command shell luas/status/diff timeout atau output tidak tertangkap; gunakan command sempit. Test terarah dan syntax check tetap hijau.
+- Konteks lama menyebut `risk_percent=1.0`, tetapi file aktual yang diaudit sesi ini menunjukkan `configs/paper_trading.json` bernilai `0.5`; jangan mengandalkan handoff lama tanpa cek file/runtime aktual.
+
+### Keputusan teknis
+- Override modal eksplisit bersifat authoritative untuk sizing posisi paper baru; jika kosong, default risk sizing tetap dipakai penuh.
+- `target_margin_percent` tervalidasi `(0, 100]`; `target_risk_reward` tervalidasi `(0, 100]`; keduanya opsional dan tersimpan per exchange.
+- Leverage dipakai satu kali untuk mengubah margin target menjadi notional; PnL tetap `(price-entry) × quantity`, tidak dikali leverage lagi.
+- RR mengatur geometri target relatif terhadap SL, bukan nominal profit akun. Nominal loss/profit tetap bergantung pada quantity dan jarak harga.
+- HOLD/EXIT/trailing tetap authoritative setelah entry; field baru hanya menentukan initial sizing dan planned TP ladder.
+- Semua perubahan forward-looking; active orders dan history lama tidak dimigrasi.
+- Tetap low-resource: test terarah, tanpa full log JSONL, tanpa restart/test suite besar yang tidak perlu.
+
+### Next step chat baru
+1. Hard refresh dashboard agar asset Settings terbaru dimuat browser.
+2. Simpan nilai **Modal dimainkan (%)** / **Target RR** yang diinginkan; semantics modal adalah margin allocation, bukan fixed loss di SL.
+3. Verifikasi posisi baru menyimpan `configured_margin_percent`, `configured_risk_reward`, `sizing_source="configured_margin"`, dan `tp_level_source="configured_rr"`; jangan rewrite posisi lama.
+4. Perbaiki/konfirmasi perilaku partial TP: saat ini 30% lalu 30% dari remaining lalu full pada target terakhir. Jika requirement adalah tepat 30%/30%/40% dari initial quantity, ubah dengan tes backward compatibility.
+5. Tambahkan tes integrasi eksplisit fixed-margin + configured RR untuk HOLD, partial TP, trailing, dan `close_from_decision` dalam satu lifecycle.
+6. Pertimbangkan safety gate tambahan (max account risk/liquidation buffer) untuk fixed-margin leverage tinggi sebelum jalur live digunakan.
+
+### Batch terbaru — eksklusivitas mode TP/SL dan Target RR
+- UI sekarang menonaktifkan TP + SL saat Target RR diisi.
+- UI menonaktifkan Target RR jika TP atau SL manual diisi.
+- API menolak konfigurasi ambigu yang mengisi Target RR bersamaan dengan TP/SL.
+- Trailing Stop, leverage, dan Modal dimainkan tetap independen.
+- API direstart; realtime tidak direstart karena tidak ada perubahan engine.
+- Validasi: `tests/test_settings_api.py` 14 passed; `tests/test_settings_ui.py` 11 passed; JavaScript syntax check OK.
+- Visual mode diperjelas: kolom aktif berwarna hijau; kolom disabled abu-abu redup dengan cursor `not-allowed`.
 
 ---
 

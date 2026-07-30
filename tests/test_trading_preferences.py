@@ -27,18 +27,24 @@ def test_preferences_roundtrip_and_clear(store: SecretsStore) -> None:
         stop_loss_percent=2.0,
         trailing_stop_percent=1.0,
         leverage=25,
+        target_margin_percent=5.0,
+        target_risk_reward=2.0,
     )
 
     assert saved.take_profit_percent == 5.0
     assert saved.stop_loss_percent == 2.0
     assert saved.trailing_stop_percent == 1.0
     assert saved.leverage == 25
+    assert saved.target_margin_percent == 5.0
+    assert saved.target_risk_reward == 2.0
 
     cleared = save_trading_preferences(store=store, exchange="bitunix")
     assert cleared.take_profit_percent is None
     assert cleared.stop_loss_percent is None
     assert cleared.trailing_stop_percent is None
     assert cleared.leverage is None
+    assert cleared.target_margin_percent is None
+    assert cleared.target_risk_reward is None
 
 
 def test_preferences_are_isolated_by_exchange(store: SecretsStore) -> None:
@@ -60,4 +66,14 @@ def test_exchange_leverage_options_and_validation(store: SecretsStore) -> None:
     with pytest.raises(ValueError, match="take_profit_percent"):
         save_trading_preferences(
             store=store, exchange="binance", take_profit_percent=0
+        )
+
+    with pytest.raises(ValueError, match="target_margin_percent"):
+        save_trading_preferences(
+            store=store, exchange="binance", target_margin_percent=101
+        )
+
+    with pytest.raises(ValueError, match="target_risk_reward"):
+        save_trading_preferences(
+            store=store, exchange="binance", target_risk_reward=0
         )

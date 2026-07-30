@@ -6,6 +6,206 @@
 
 ---
 
+## Handoff sesi 2026-07-30 — Handoff sebelum pindah chat
+
+**Environment:** `/opt/crypto-quant-bot`
+**Mode:** paper ON · live OFF
+**Runtime:** realtime dan API terverifikasi `active/running`; posisi paper/state/history tidak disentuh.
+
+### 1. Apa yang sudah dikerjakan
+- Menjelaskan perbedaan TP persen, SL persen, trailing persen, Target RR, leverage, dan Modal dimainkan, lalu menetapkan baseline rekomendasi Target RR `2` dengan leverage `5x` dan sizing default sebelum menguji fixed-margin.
+- Membuat Target RR dan TP/SL manual mutually exclusive di UI dan API.
+- Target RR diisi → TP/SL disabled; TP atau SL diisi → Target RR disabled; field yang dikosongkan membuka kembali mode lawan.
+- Trailing Stop, leverage, dan Modal dimainkan tetap independen.
+- Menambahkan hint dinamis dan warna status: aktif hijau, disabled abu-abu redup/cursor `not-allowed`, netral bila semua kosong.
+- Tidak mengubah realtime engine, active positions, paper state, trade history, atau live configuration.
+
+### 2. File dibuat/diubah
+- **Dibuat:** tidak ada.
+- **Diubah:**
+  - `app/dashboard/routes/settings.py`
+  - `app/dashboard/static/dashboard.js`
+  - `app/dashboard/static/dashboard.css`
+  - `app/dashboard/templates/index.html`
+  - `tests/test_settings_api.py`
+  - `tests/test_settings_ui.py`
+  - `TASKS.md`
+  - `SESSION_LOG.md`
+- Perubahan sesi fixed-margin/Target RR sebelumnya tetap dipertahankan.
+
+### 3. Command penting dan hasil
+```bash
+.venv/bin/python -m pytest tests/test_settings_api.py -q --tb=short
+# 14 passed, 1 warning deprecation nonfatal
+.venv/bin/python -m pytest tests/test_settings_ui.py -q --tb=short
+# 11 passed
+node --check app/dashboard/static/dashboard.js
+# OK
+python -m py_compile app/dashboard/routes/settings.py
+# OK
+git -C /opt/crypto-quant-bot diff --check
+# OK
+```
+- API direstart untuk memuat route/asset terbaru; status akhir: realtime PID `9102`, API PID `9107`, keduanya active/running.
+- `live_enabled=False`, `paper_enabled=True`.
+
+### 4. Error/masalah terakhir
+- Tidak ada test failure atau syntax error.
+- Warning nonfatal TestClient/HTTPX tetap ada.
+- Warning bootstrap Binance Futures `-2015` terkait permission/API key tetap ada dari runtime lama; live tetap OFF.
+- Hard refresh browser masih diperlukan.
+
+### 5. Keputusan teknis
+- Target RR dan TP/SL manual adalah dua mode exit yang tidak boleh disimpan bersamaan.
+- API fail-closed terhadap payload ambigu.
+- Target RR memakai SL signal/struktur; trailing tetap dinamis/independen.
+- Semua perubahan forward-looking; posisi dan history lama tidak dimigrasi.
+
+### 6. Next step chat baru
+1. Hard refresh dashboard.
+2. Cek visual/disabled state untuk tiga kondisi: kosong, Target RR, TP/SL manual.
+3. Uji GET/PUT Settings untuk memastikan konfigurasi konflik ditolak.
+4. Uji baseline `Target RR=2`, leverage `5x`, field lain kosong; verifikasi artifact posisi baru.
+5. Lanjut audit partial TP, HOLD/trailing/agent EXIT, dan safety gate fixed-margin.
+
+---
+
+## Handoff sesi 2026-07-30 — Warna status mode exit Settings
+
+- Kolom mode aktif TP/SL atau Target RR kini disorot hijau.
+- Kolom yang dinonaktifkan tampil abu-abu redup dan memakai cursor `not-allowed`.
+- Kondisi netral (semua kosong) tetap memakai warna input normal.
+- `tests/test_settings_ui.py`: **11 passed**; JavaScript syntax check dan `git diff --check` OK.
+- API direstart, PID aktif `8834`; realtime/paper state tidak disentuh dan live tetap OFF.
+- Perlu hard refresh dashboard agar CSS/JS terbaru dimuat.
+
+---
+
+## Handoff sesi 2026-07-30 — TP/SL dan Target RR mutually exclusive
+
+**Mode:** paper ON · live OFF
+**Runtime/service:** API direstart dan sehat; realtime tidak direstart.
+
+### Perubahan
+- Target RR dan mode TP/SL manual sekarang saling eksklusif di UI.
+- Target RR diisi → input TP dan SL disabled; SL memakai signal.
+- TP atau SL diisi → Target RR disabled.
+- API menolak payload ambigu jika Target RR dikirim bersama TP atau SL.
+- Trailing Stop tetap independen.
+
+### Validasi
+- `tests/test_settings_api.py`: **14 passed**.
+- `tests/test_settings_ui.py`: **11 passed**.
+- `node --check app/dashboard/static/dashboard.js`: OK.
+- API PID `7257 -> 8498`, active/running; websocket tersambung.
+
+### Catatan operasional
+- Hard refresh dashboard diperlukan agar guard UI baru dimuat.
+- Posisi paper aktif, history, dan realtime tidak disentuh.
+
+---
+
+## Handoff sesi 2026-07-30 — Runtime Settings terbaru dimuat
+
+**Mode:** paper ON · live OFF
+**Runtime/service:** realtime dan API sudah direstart dan sehat.
+
+### Hasil
+- Validasi gabungan `test_realtime_paper_engine.py`, `test_trading_preferences.py`, dan `test_settings_api.py`: **39 passed**, 1 warning deprecation nonfatal.
+- `dashboard.js` lolos `node --check`.
+- Restart berhasil: realtime PID `6740 -> 7207`; API PID `6743 -> 7257`; keduanya `active/running`.
+- Realtime menyelesaikan startup dan scan; API menyelesaikan startup dan endpoint dashboard merespons HTTP 200.
+- Paper state tetap utuh dengan 8 posisi saat audit; artifact open terbaru memiliki `rr_tp1=2.0` dan source structural/normalized.
+- Warning bootstrap futures terkait permission tetap ada, tetapi runtime berada pada mode paper dan `configs/live_trading.json` tetap `enabled=false`.
+
+### Next step
+1. Hard refresh dashboard.
+2. Simpan nilai Modal dimainkan/Target RR bila ingin mengaktifkan override untuk posisi baru.
+3. Verifikasi artifact open berikutnya memiliki metadata `configured_margin_percent`, `configured_risk_reward`, `sizing_source=configured_margin`, dan `tp_level_source=configured_rr`.
+4. Posisi lama tidak dimigrasi; jangan reset paper state/history.
+
+---
+
+## Handoff sesi 2026-07-30 — Fixed-margin Settings + configurable RR
+
+**Environment:** `/opt/crypto-quant-bot`
+**Mode:** paper ON · live/network OFF
+**Runtime/service saat handoff ini dibuat:** belum direstart. Lihat handoff terbaru di atas; API/realtime kini sudah memuat kode baru dan posisi lama tetap tidak disentuh.
+
+### 1. Apa yang sudah dikerjakan
+- Audit ringan runtime dan formula leverage menggunakan state aktif, termasuk contoh `SPCXB/USDT` dan `XRP/USDT`. Ditegaskan: quantity adalah unit coin; notional = entry × quantity; margin = notional/leverage; PnL nominal dari perubahan harga × quantity; ROE = PnL/margin.
+- Menambahkan Trading Defaults opsional per exchange:
+  - **Modal dimainkan (%)** (`target_margin_percent`): fixed margin dari available balance;
+  - **Target RR** (`target_risk_reward`): planned TP ladder berdasarkan jarak Entry–SL.
+- Wiring lengkap: browser → Settings API → encrypted preference store → `run_realtime.py` → `PaperTradingConfig` → `RealtimePaperTradingEngine`.
+- Formula override modal: `margin=available×percent`, `notional=margin×leverage`, `quantity=notional/entry`.
+- Formula RR override: TP1=`RR`, TP2=`RR+1`, TP3=`RR+2`; source disimpan `configured_rr`.
+- Nilai kosong tetap memakai perilaku lama secara independen: default risk sizing dan hybrid structural/minimum 2R.
+- Metadata audit posisi ditambah: `configured_margin_percent`, `configured_risk_reward`, `sizing_source`.
+- Audit HOLD/EXIT/trailing menyimpulkan lifecycle tetap kompatibel: HOLD melewati fixed TP; breakeven/trailing dan ACR tetap bekerja; EXIT agent memakai R; partial close memperbarui remaining quantity dan margin.
+
+### 2. File dibuat/diubah
+- **Dibuat:** tidak ada.
+- **Diubah sesi ini:**
+  - `app/settings/trading_preferences.py`
+  - `app/dashboard/routes/settings.py`
+  - `app/dashboard/templates/index.html`
+  - `app/dashboard/static/dashboard.js`
+  - `app/paper/realtime_engine.py`
+  - `run_realtime.py`
+  - `tests/test_trading_preferences.py`
+  - `tests/test_settings_api.py`
+  - `tests/test_realtime_paper_engine.py`
+  - `TASKS.md`
+  - `SESSION_LOG.md`
+- Tidak ada secret, state posisi, trade history, atau live flag yang ditulis ulang.
+
+### 3. Command penting dan hasil
+```bash
+.venv/bin/python -m pytest tests/test_realtime_paper_engine.py::test_configured_margin_and_rr_override_default_sizing tests/test_realtime_paper_engine.py::test_percent_overrides_apply_to_new_long_position -q --tb=short
+# 2 passed
+.venv/bin/python -m pytest tests/test_trading_preferences.py -q --tb=short
+# 3 passed
+.venv/bin/python -m pytest tests/test_settings_api.py::test_trading_settings_are_isolated_per_exchange tests/test_settings_api.py::test_trading_settings_blank_values_restore_defaults tests/test_settings_api.py::test_trading_settings_reject_invalid_percent_and_leverage -q --tb=short
+# 3 passed, 1 warning nonfatal
+.venv/bin/python -m pytest tests/test_realtime_paper_engine.py -q --tb=short
+# 24 passed
+.venv/bin/python -m pytest tests/test_acr_position_manager.py -q --tb=short
+# 11 passed
+.venv/bin/python -m py_compile app/settings/trading_preferences.py app/dashboard/routes/settings.py app/paper/realtime_engine.py run_realtime.py
+# OK
+node --check app/dashboard/static/dashboard.js
+# OK
+```
+
+### 4. Error/masalah terakhir
+- **Belum restart:** UI/API/runtime baru belum aktif pada service berjalan.
+- Semantics penting: 5% pada field baru berarti margin 5% available, bukan loss pasti 5%. Loss di SL = `abs(entry-SL)×quantity`; RR hanya rasio reward terhadap risk posisi.
+- Partial TP lama memakai fraction dari remaining size. Label/config 30/30/40 tidak menghasilkan exact initial-size 30/30/40; belum diubah.
+- HOLD sengaja mengalahkan fixed TP ladder; configured RR tetap tersimpan tetapi tidak memaksa close.
+- Dokumentasi resmi exchange terhalang anti-bot/403; jangan mengklaim kutipan langsung.
+- Command luas kadang timeout/output tidak tertangkap; gunakan command/test sempit.
+- Disk aktual `configs/paper_trading.json` teramati `risk_percent=0.5`, berbeda dari handoff lama 1.0; cek sumber aktual sebelum tindakan operasional.
+
+### 5. Keputusan teknis
+- Fixed-margin override authoritative hanya saat diisi; kosong = backward-compatible default.
+- Sinkron leverage berarti margin target dikali leverage untuk memperoleh notional/quantity. PnL tidak dikali leverage kedua kali.
+- RR override membentuk planned TP geometry; HOLD, trailing, stop, dan agent EXIT tetap authoritative setelah entry.
+- Preference disimpan per exchange; validasi modal dan RR `(0,100]`.
+- Perubahan hanya forward-looking dan paper-first. Live tetap OFF.
+- Hindari RAM/lag: tidak membaca JSONL besar, tidak menjalankan full suite, dan tidak restart pada sesi ini.
+
+### 6. Next step chat baru
+1. Review diff/status; working tree mengandung perubahan lintas sesi.
+2. Konfirmasi lagi dengan user bahwa **Modal dimainkan = margin allocation**. Bila user ingin fixed loss 5% akun, tambahkan field risk terpisah dan safety cap.
+3. Putuskan apakah TP fraction harus exact 30/30/40 dari initial size; implement + test jika ya.
+4. Tambahkan lifecycle integration test fixed-margin/RR bersama HOLD, partial, trailing, dan EXIT.
+5. Bila akan diaktifkan: simpan Settings, restart API dan realtime secara terkendali dengan live OFF, hard refresh browser, dan jangan ubah posisi lama.
+6. Verifikasi posisi paper baru dan metadata: margin%, leverage, quantity, actual risk, RR, source, remaining margin, HOLD/trailing/EXIT.
+7. Sebelum live, tambahkan/konfirmasi max account-risk dan liquidation buffer untuk fixed-margin leverage tinggi.
+
+---
+
 ## Handoff sesi 2026-07-29 — Agent conflict, Active Orders margin/ROE, P&L Stream, risk 1%
 
 **Environment:** `/opt/crypto-quant-bot`

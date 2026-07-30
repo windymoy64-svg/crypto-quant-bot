@@ -257,12 +257,15 @@ def test_trading_settings_are_isolated_per_exchange(client: TestClient) -> None:
             "stop_loss_percent": 1.25,
             "trailing_stop_percent": 0.8,
             "leverage": 20,
+            "target_margin_percent": 5,
         },
     )
 
     assert response.status_code == 200
     assert response.json()["leverage"] == 20
     assert response.json()["take_profit_percent"] == 4.5
+    assert response.json()["target_margin_percent"] == 5
+    assert response.json()["target_risk_reward"] is None
 
     binance = client.get("/api/settings/trading?exchange=binance").json()
     assert binance["leverage"] is None
@@ -283,6 +286,8 @@ def test_trading_settings_blank_values_restore_defaults(client: TestClient) -> N
             "stop_loss_percent": None,
             "trailing_stop_percent": None,
             "leverage": None,
+            "target_margin_percent": None,
+            "target_risk_reward": None,
         },
     )
 
@@ -290,6 +295,8 @@ def test_trading_settings_blank_values_restore_defaults(client: TestClient) -> N
     body = response.json()
     assert body["stop_loss_percent"] is None
     assert body["leverage"] is None
+    assert body["target_margin_percent"] is None
+    assert body["target_risk_reward"] is None
 
 
 def test_trading_settings_reject_invalid_percent_and_leverage(
@@ -303,6 +310,34 @@ def test_trading_settings_reject_invalid_percent_and_leverage(
         "/api/settings/trading",
         json={"exchange": "bitunix", "leverage": 126},
     )
+    margin = client.put(
+        "/api/settings/trading",
+        json={"exchange": "bitunix", "target_margin_percent": 101},
+    )
+    rr = client.put(
+        "/api/settings/trading",
+        json={"exchange": "bitunix", "target_risk_reward": 0},
+    )
 
     assert percent.status_code == 400
     assert leverage.status_code == 400
+    assert margin.status_code == 400
+    assert rr.status_code == 400
+
+
+@pytest.mark.parametrize("manual_field", ["take_profit_percent", "stop_loss_percent"])
+def test_trading_settings_reject_rr_with_manual_tp_or_sl(
+    client: TestClient,
+    manual_field: str,
+) -> None:
+    response = client.put(
+        "/api/settings/trading",
+        json={
+            "exchange": "binance",
+            manual_field: 2,
+            "target_risk_reward": 2,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "cannot be combined" in response.json()["detail"]

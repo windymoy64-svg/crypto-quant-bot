@@ -25,6 +25,8 @@ class TradingPreferences:
     stop_loss_percent: float | None = None
     trailing_stop_percent: float | None = None
     leverage: int | None = None
+    target_margin_percent: float | None = None
+    target_risk_reward: float | None = None
     updated_at: str | None = None
 
 
@@ -51,6 +53,12 @@ def load_trading_preferences(
             store.get(_key(exchange, "trailing_stop_percent"))
         ),
         "leverage": _optional_int(store.get(_key(exchange, "leverage"))),
+        "target_margin_percent": _optional_float(
+            store.get(_key(exchange, "target_margin_percent"))
+        ),
+        "target_risk_reward": _optional_float(
+            store.get(_key(exchange, "target_risk_reward"))
+        ),
     }
     timestamps = [
         store.updated_at(_key(exchange, field))
@@ -71,6 +79,8 @@ def save_trading_preferences(
     stop_loss_percent: float | None = None,
     trailing_stop_percent: float | None = None,
     leverage: int | None = None,
+    target_margin_percent: float | None = None,
+    target_risk_reward: float | None = None,
     store: SecretsStore | None = None,
 ) -> TradingPreferences:
     store = store or get_secrets_store()
@@ -84,6 +94,10 @@ def save_trading_preferences(
             "trailing_stop_percent", trailing_stop_percent
         ),
         "leverage": _validate_leverage(exchange, leverage),
+        "target_margin_percent": _validate_percent(
+            "target_margin_percent", target_margin_percent
+        ),
+        "target_risk_reward": _validate_risk_reward(target_risk_reward),
     }
     for field, value in values.items():
         key = _key(exchange, field)
@@ -133,4 +147,13 @@ def _validate_leverage(exchange: str, value: int | None) -> int | None:
         raise ValueError(
             f"leverage for {exchange} must be within [{minimum}, {maximum}]"
         )
+    return parsed
+
+
+def _validate_risk_reward(value: float | None) -> float | None:
+    if value is None:
+        return None
+    parsed = float(value)
+    if not 0 < parsed <= 100:
+        raise ValueError("target_risk_reward must be within (0, 100]")
     return parsed

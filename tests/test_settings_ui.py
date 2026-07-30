@@ -35,8 +35,29 @@ def test_trading_default_controls_are_present() -> None:
         "settings-sl-percent",
         "settings-trailing-percent",
         "settings-leverage",
+        "settings-target-rr",
+        "settings-exit-mode-hint",
     ):
         assert f'id="{control_id}"' in html
+
+
+def test_tp_sl_and_target_rr_are_mutually_exclusive_in_ui() -> None:
+    html = TEMPLATE.read_text(encoding="utf-8")
+    javascript = SCRIPT.read_text(encoding="utf-8")
+    css = (ROOT / "app/dashboard/static/dashboard.css").read_text(encoding="utf-8")
+
+    assert 'id="settings-tp-field"' in html
+    assert 'id="settings-sl-field"' in html
+    assert 'id="settings-rr-field"' in html
+    assert "function syncTradingExitMode" in javascript
+    assert "tp.disabled = hasRr" in javascript
+    assert "sl.disabled = hasRr" in javascript
+    assert "rr.disabled = !hasRr && hasManual" in javascript
+    assert 'classList.toggle("exit-mode-active"' in javascript
+    assert 'classList.toggle("exit-mode-disabled"' in javascript
+    assert 'target_risk_reward: byId("settings-target-rr")?.disabled ? null' in javascript
+    assert ".settings-fields-grid label.exit-mode-active" in css
+    assert ".settings-fields-grid label.exit-mode-disabled" in css
 
 
 def test_multi_exchange_controls_and_dynamic_overview_are_present() -> None:

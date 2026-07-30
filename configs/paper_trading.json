@@ -1,7 +1,7 @@
 {
   "enabled": true,
   "starting_balance": 10000,
-  "risk_percent": 1.0,
+  "risk_percent": 0.5,
   "max_open_positions": 20,
   "max_position_size_percent": 10.0,
   "pending_order_ttl_seconds": 900.0,

@@ -807,6 +807,8 @@ def run_once(
                 "stop_loss_percent": preferences.stop_loss_percent,
                 "trailing_stop_percent": preferences.trailing_stop_percent,
                 "leverage": preferences.leverage,
+                "target_margin_percent": preferences.target_margin_percent,
+                "target_risk_reward": preferences.target_risk_reward,
             }
         paper_config = PaperTradingConfig.from_dict(
             paper_data

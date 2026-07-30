@@ -357,6 +357,8 @@ def _trading_summary(exchange: str) -> dict[str, Any]:
         "stop_loss_percent": preferences.stop_loss_percent,
         "trailing_stop_percent": preferences.trailing_stop_percent,
         "leverage": preferences.leverage,
+        "target_margin_percent": preferences.target_margin_percent,
+        "target_risk_reward": preferences.target_risk_reward,
         "leverage_min": options[0],
         "leverage_max": options[-1],
         "leverage_options": options,
@@ -380,6 +382,15 @@ def get_trading_settings(
 def update_trading_settings(payload: dict[str, Any]) -> dict[str, Any]:
     exchange = _normalize_exchange_or_400(payload.get("exchange"))
     try:
+        take_profit_percent = _optional_number(payload, "take_profit_percent")
+        stop_loss_percent = _optional_number(payload, "stop_loss_percent")
+        target_risk_reward = _optional_number(payload, "target_risk_reward")
+        if target_risk_reward is not None and (
+            take_profit_percent is not None or stop_loss_percent is not None
+        ):
+            raise ValueError(
+                "target_risk_reward cannot be combined with take_profit_percent or stop_loss_percent"
+            )
         leverage_raw = payload.get("leverage")
         leverage = (
             None
@@ -388,10 +399,12 @@ def update_trading_settings(payload: dict[str, Any]) -> dict[str, Any]:
         )
         save_trading_preferences(
             exchange=exchange,
-            take_profit_percent=_optional_number(payload, "take_profit_percent"),
-            stop_loss_percent=_optional_number(payload, "stop_loss_percent"),
+            take_profit_percent=take_profit_percent,
+            stop_loss_percent=stop_loss_percent,
             trailing_stop_percent=_optional_number(payload, "trailing_stop_percent"),
             leverage=leverage,
+            target_margin_percent=_optional_number(payload, "target_margin_percent"),
+            target_risk_reward=target_risk_reward,
         )
         return _trading_summary(exchange)
     except ValueError as exc:
