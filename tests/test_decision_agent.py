@@ -176,8 +176,12 @@ def test_hold_enables_tp1_on_mid_confluence() -> None:
 
 def test_sell_entry() -> None:
     agent = DecisionMakerAgent()
-    decision = agent.decide_entry(_reading(bias="BEARISH"))
+    # Short geometry requires invalidation/SL above the entry zone.
+    decision = agent.decide_entry(_reading(bias="BEARISH", invalidation=103.0))
     assert decision.action == "ENTRY_SELL"
+    assert decision.entry_plan is not None
+    assert decision.entry_plan.stop_loss > decision.entry_plan.entry_price
+    assert decision.entry_plan.take_profit_1 < decision.entry_plan.entry_price
 
 
 def test_to_dict() -> None:

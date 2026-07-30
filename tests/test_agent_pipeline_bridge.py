@@ -18,6 +18,15 @@ from app.market.data_service import MarketDataResult
 from app.events.bus import event_bus
 
 
+@pytest.fixture(autouse=True)
+def _disable_operator_llm_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bridge unit tests must stay deterministic and never call a real provider."""
+    monkeypatch.setattr(
+        "app.llm.factory.build_agent_llm",
+        lambda _agent: (None, None, ""),
+    )
+
+
 def test_conflict_policy_defaults_to_reject_and_validates_enum() -> None:
     assert AgentPipelineRuntimeConfig.from_dict({}).scanner_chart_conflict_policy == "REJECT"
     assert (

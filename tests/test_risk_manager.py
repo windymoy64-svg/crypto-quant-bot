@@ -110,7 +110,9 @@ class TestRiskManager(unittest.TestCase):
         
         self.assertTrue(result.passed)
         self.assertEqual(len(result.hard_gates_failed), 0)
-        self.assertGreater(len(result.soft_penalties_applied), 0)  # Some minor penalties may apply
+        # Semua indikator berada di sisi aman ambang soft penalty.
+        self.assertEqual(result.soft_penalties_applied, {})
+        self.assertEqual(result.total_penalty, 0.0)
         
         # Invalid data that should fail
         invalid_data = {

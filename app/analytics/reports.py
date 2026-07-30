@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -172,11 +173,13 @@ class AnalyticsEngine:
 
 
 class AnalyticsEventCollector:
-    def __init__(self) -> None:
-        self.paper_fills: list[dict[str, object]] = []
-        self.paper_closes: list[dict[str, object]] = []
-        self.portfolio_snapshots: list[dict[str, object]] = []
-        self.backtests: list[dict[str, object]] = []
+    def __init__(self, max_events: int = 10_000) -> None:
+        """Collect recent analytics events without unbounded RAM growth."""
+        maxlen = max(1, int(max_events))
+        self.paper_fills: deque[dict[str, object]] = deque(maxlen=maxlen)
+        self.paper_closes: deque[dict[str, object]] = deque(maxlen=maxlen)
+        self.portfolio_snapshots: deque[dict[str, object]] = deque(maxlen=maxlen)
+        self.backtests: deque[dict[str, object]] = deque(maxlen=maxlen)
         self._subscribed = False
 
     def subscribe(self) -> None:
@@ -213,8 +216,8 @@ class AnalyticsEventCollector:
 
     def report(self, config: AnalyticsConfig | None = None) -> AnalyticsReport:
         active_config = config or AnalyticsConfig(include_paper_state=False, include_backtests=False)
-        journal = TradeJournal.from_paper_fills(self.paper_fills, source="event_bus")
-        equity = EquityCurve.from_portfolio_snapshots(self.portfolio_snapshots, source="event_bus")
+        journal = TradeJournal.from_paper_fills(list(self.paper_fills), source="event_bus")
+        equity = EquityCurve.from_portfolio_snapshots(list(self.portfolio_snapshots), source="event_bus")
         return AnalyticsEngine().build_report(active_config, journal=journal, equity_curve=equity)
 
     def _event_types(self) -> tuple[type[object], ...]:

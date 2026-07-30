@@ -6,8 +6,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from app.core.models import Candle
+from app.analytics.reports import AnalyticsEventCollector
 from app.dashboard.services import iter_jsonl_file, read_json_file, read_jsonl_file
 from app.dashboard.websocket import DashboardEventHub
+from app.events.events import PaperBalanceUpdated
 from app.market.data_service import MarketDataService
 from app.learning_agent.insight_store import LLMInsightStore
 from app.learning_agent.models import ChartObservation
@@ -108,6 +110,17 @@ def test_dashboard_event_queue_drops_oldest_when_full() -> None:
     assert hub._queue.qsize() == 2
     assert hub._queue.get_nowait() == {"id": 2}
     assert hub._queue.get_nowait() == {"id": 3}
+
+
+def test_analytics_event_collector_drops_oldest_when_full() -> None:
+    collector = AnalyticsEventCollector(max_events=2)
+    for index in range(3):
+        collector.handle(PaperBalanceUpdated(
+            account={"cash": float(index)}, equity=float(index),
+        ))
+
+    assert len(collector.portfolio_snapshots) == 2
+    assert [row["cash"] for row in collector.portfolio_snapshots] == [1.0, 2.0]
 
 
 def test_observation_tail_cache_invalidates_after_append(tmp_path: Path) -> None:
