@@ -289,6 +289,8 @@ def apply_entry_guards(
 
 def build_runtime_agent_coordinator(
     *, config: AgentPipelineRuntimeConfig, exchange: str,
+    pending_entry_symbols: set[str] | None = None,
+    exchange_positions: list[dict[str, Any]] | None = None,
 ) -> AgentPipelineCoordinator:
     """Build coordinator with optional per-agent LLM + exchange executor.
 
@@ -362,6 +364,11 @@ def build_runtime_agent_coordinator(
         )
 
     network_enabled = execution.network_enabled
+    try:
+        trading = load_trading_preferences(exchange=exchange)
+        leverage = trading.leverage or 1
+    except Exception:
+        leverage = 1
     adapter = BitunixFuturesExecutorAdapter(
         BitunixCredentials(credentials.api_key, credentials.api_secret),
         safety_gate=BitunixLiveSafetyGate(
@@ -369,15 +376,16 @@ def build_runtime_agent_coordinator(
             dry_run=not network_enabled,
             confirm_live=execution.live_confirmed,
         ),
+        leverage=leverage,
+        blocked_entry_symbols=pending_entry_symbols,
     )
+    if network_enabled and config.allow_live_orders and exchange_positions:
+        adapter.reconcile_take_profits(
+            exchange_positions, timestamp=datetime.now(tz=UTC).isoformat(),
+        )
     balance = 10_000.0
     if network_enabled:
         balance = adapter.available_balance("USDT")
-    try:
-        trading = load_trading_preferences(exchange=exchange)
-        leverage = trading.leverage or 1
-    except Exception:
-        leverage = 1
     return AgentPipelineCoordinator(
         executor_agent=ExecutorAgent(
             balance=balance,
@@ -986,12 +994,27 @@ def run_once(
     live_decisions: list[dict[str, object]] = []
     if bool(runtime_config.get("live_execution_enabled", False)):
         live_settings = LiveTradingSettings.from_dict(load_json(live_config_path))
-        live_executor = LiveExecutor(live_settings)
-        # Live evaluation must use the same ACR-confirmed payload that paper
-        # and the agent pipeline consume. Never bypass the shared gate here.
-        live_decisions = [
-            live_executor.evaluate_signal(signal) for signal in pipeline_signals
-        ]
+        if live_settings.exchange.lower() != exchange.lower():
+            # Never let the legacy CCXT route submit to a different venue than
+            # the scanner/active execution exchange. The agent adapter path is
+            # the canonical futures execution route.
+            live_decisions = [
+                {
+                    "status": "blocked",
+                    "symbol": str(signal.get("symbol", "")),
+                    "reason": "live_exchange_mismatch",
+                    "scanner_exchange": exchange.lower(),
+                    "live_exchange": live_settings.exchange.lower(),
+                }
+                for signal in pipeline_signals
+            ]
+        else:
+            live_executor = LiveExecutor(live_settings)
+            # Live evaluation must use the same ACR-confirmed payload that paper
+            # and the agent pipeline consume. Never bypass the shared gate here.
+            live_decisions = [
+                live_executor.evaluate_signal(signal) for signal in pipeline_signals
+            ]
 
     write_scan_outputs(
         results,
@@ -1029,15 +1052,26 @@ def run_once(
     )
     if agent_pipeline_config.enabled:
         open_positions_map: dict[str, dict[str, object]] = {}
+        pending_entry_symbols: set[str] = set()
+        pending_orders_read_ok = execution_preferences.mode not in {"dry_run", "live"}
         if execution_preferences.mode in {"dry_run", "live"} and exchange.lower() == "bitunix":
             try:
                 from app.dashboard.routes.multi_portfolio import _load_bitunix_details
                 creds = load_exchange_credentials(exchange=exchange.lower())
                 if creds is not None and creds.is_configured:
                     details = _load_bitunix_details(creds.api_key, creds.api_secret)
+                    warnings = [str(value) for value in details.get("warnings", [])]
+                    pending_orders_read_ok = not any(
+                        value.startswith("pending_orders:") for value in warnings
+                    )
                     for pos in details.get("positions", []) or []:
                         if isinstance(pos, dict) and pos.get("symbol"):
-                            symbol = str(pos["symbol"]).upper().replace("-", "/")
+                            compact = str(pos["symbol"]).upper().replace("-", "/")
+                            symbol = (
+                                f"{compact[:-4]}/USDT"
+                                if "/" not in compact and compact.endswith("USDT")
+                                else compact
+                            )
                             open_positions_map[symbol] = {
                                 **pos,
                                 "side": (
@@ -1046,7 +1080,26 @@ def run_once(
                                 ),
                                 "remaining_size": pos.get("quantity"),
                             }
+                    for order in details.get("open_orders", []) or []:
+                        if not isinstance(order, dict):
+                            continue
+                        # A pending entry already reserves this symbol. Do not
+                        # submit another LIMIT while the exchange order remains
+                        # NEW/PART_FILLED. Protective reduce-only orders do not
+                        # block a new entry, but get_pending_orders only returns
+                        # the entry orders for this path in normal operation.
+                        if bool(order.get("reduce_only")):
+                            continue
+                        status = str(order.get("status") or "").upper().rstrip("_")
+                        if status in {"NEW", "PART_FILLED", "INIT"} and order.get("symbol"):
+                            compact = str(order["symbol"]).upper().replace("-", "/")
+                            pending_entry_symbols.add(
+                                f"{compact[:-4]}/USDT"
+                                if "/" not in compact and compact.endswith("USDT")
+                                else compact
+                            )
             except Exception as exc:  # noqa: BLE001
+                pending_orders_read_ok = False
                 print(f"bitunix positions fallback to paper: {exc}", flush=True)
         if not open_positions_map and paper is not None:
             for pos in paper.get("open_positions", []) or []:
@@ -1056,7 +1109,18 @@ def run_once(
             coordinator = build_runtime_agent_coordinator(
                 config=agent_pipeline_config,
                 exchange=exchange.lower(),
+                pending_entry_symbols=pending_entry_symbols,
+                exchange_positions=list(open_positions_map.values()),
             )
+            # Private pending-order state is a mandatory live idempotency input.
+            # If Bitunix cannot be read, fail closed instead of assuming no
+            # pending entries and risking duplicate exposure.
+            if (
+                execution_preferences.mode == "live"
+                and exchange.lower() == "bitunix"
+                and not pending_orders_read_ok
+            ):
+                coordinator.executor_agent.live = False
             # Soft-entry needs raw scanner WATCH rows. ACR enrichment often
             # rewrites non-confirmed directional rows to SKIP, which would hide
             # WATCH candidates from the agent entirely.
@@ -1082,6 +1146,7 @@ def run_once(
                 config=agent_pipeline_config,
                 scanner_results=agent_scanner_results,
                 open_positions=open_positions_map,
+                pending_entry_symbols=pending_entry_symbols,
                 market_data=market_data,
                 coordinator=coordinator,
             )
@@ -1105,9 +1170,8 @@ def run_once(
             and paper_enabled
             and paper_engine is not None
         ):
-            # Route approved Chart/Decision Agent entries to paper. The agent
-            # supplies the zone; fill at market only when current price is
-            # already inside it, otherwise persist a LIMIT pending order.
+            # Route approved Chart/Decision Agent entries to paper immediately
+            # at market. The chart zone remains metadata for observability.
             agent_entry_signals: list[dict[str, object]] = []
             current_by_symbol = {
                 str(item.get("symbol")): float(item.get("entry", 0.0))

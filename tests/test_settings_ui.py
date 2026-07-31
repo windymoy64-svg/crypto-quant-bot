@@ -80,6 +80,26 @@ def test_multi_exchange_controls_and_dynamic_overview_are_present() -> None:
     assert "function renderMultiPortfolio" not in javascript
 
 
+def test_all_dashboard_menus_share_the_live_exchange_refresh() -> None:
+    html = TEMPLATE.read_text(encoding="utf-8")
+    javascript = SCRIPT.read_text(encoding="utf-8")
+
+    assert '["multiPortfolio","/api/portfolio/multi"]' in javascript
+    assert "dashboardRefreshRunning" in javascript
+    assert "setInterval(() => loadAll().catch(handleError), 10000)" in javascript
+    assert "window.syncLivePanels(payload)" in javascript
+    assert "window.syncLivePanels = function(payload)" in html
+    assert 'getJSON("/api/portfolio/multi")' not in html
+
+
+def test_agent_entries_show_exchange_execution_rejection() -> None:
+    javascript = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'const exchangeReject = executionResults.find' in javascript
+    assert '"ENTRY_REJECTED"' in javascript
+    assert "executionReason || riskReason" in javascript
+
+
 def test_static_all_mode_badges_were_replaced_by_dynamic_badges() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
 

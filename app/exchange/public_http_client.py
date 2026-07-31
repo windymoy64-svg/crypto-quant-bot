@@ -92,6 +92,12 @@ class PublicHttpExchangeClient(ExchangeClient):
         excluded_base_assets: set[str] | frozenset[str] | None = None,
     ) -> list[TickerSnapshot]:
         """Ambil snapshot 24h (price, % change, dual volume) untuk prefilter."""
+        if self.exchange_id == "bitunix":
+            return self._fetch_bitunix_24h_ticker_snapshots(
+                quote_asset=quote_asset,
+                min_quote_volume_usdt=min_quote_volume_usdt,
+                excluded_base_assets=excluded_base_assets,
+            )
         if self.exchange_id != "binance":
             raise ValueError(
                 f"fetch_24h_ticker_snapshots belum didukung untuk {self.exchange_id}"
@@ -162,6 +168,105 @@ class PublicHttpExchangeClient(ExchangeClient):
                 )
             )
         return snapshots
+
+    def _fetch_bitunix_24h_ticker_snapshots(
+        self,
+        *,
+        quote_asset: str,
+        min_quote_volume_usdt: float,
+        excluded_base_assets: set[str] | frozenset[str] | None,
+    ) -> list[TickerSnapshot]:
+        """Parse the public Bitunix futures ticker collection.
+
+        Bitunix has used both ``data: []`` and nested list payloads, and field
+        names differ slightly between API revisions. Keep this read-only parser
+        tolerant so a harmless response change does not disable scanner breadth.
+        """
+
+        payload = self._get_json(
+            "https://fapi.bitunix.com/api/v1/futures/market/tickers", {}
+        )
+        if isinstance(payload, dict) and payload.get("code") not in (None, 0):
+            raise ValueError(f"bitunix_error: {payload.get('msg', 'unknown')}")
+        data = payload.get("data", []) if isinstance(payload, dict) else payload
+        if isinstance(data, dict):
+            rows = next(
+                (data.get(key) for key in ("tickerList", "list", "rows") if isinstance(data.get(key), list)),
+                [],
+            )
+        else:
+            rows = data if isinstance(data, list) else []
+
+        quote = quote_asset.upper()
+        excluded = {str(value).strip().upper() for value in (excluded_base_assets or set())}
+        snapshots: list[TickerSnapshot] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            market_symbol = str(row.get("symbol") or row.get("s") or "").upper()
+            if not market_symbol.endswith(quote) or len(market_symbol) <= len(quote):
+                continue
+            base = market_symbol[:-len(quote)]
+            if base in excluded:
+                continue
+            try:
+                last_price = float(row.get("lastPrice") or row.get("last") or row.get("markPrice") or 0)
+                change_pct = float(
+                    row.get("priceChangePercent")
+                    or row.get("change24h")
+                    or row.get("changeRate")
+                    or row.get("priceChangeRate")
+                    or 0
+                )
+                # Some revisions expose changeRate as a ratio (0.05 = 5%).
+                if abs(change_pct) <= 1 and any(
+                    key in row for key in ("changeRate", "priceChangeRate")
+                ):
+                    change_pct *= 100
+                if not any(
+                    key in row
+                    for key in ("priceChangePercent", "change24h", "changeRate", "priceChangeRate")
+                ):
+                    open_price = float(row.get("open") or 0)
+                    if open_price > 0:
+                        change_pct = ((last_price - open_price) / open_price) * 100
+                vol_coin = float(row.get("baseVol") or row.get("volume") or 0)
+                quote_vol = float(
+                    row.get("quoteVol") or row.get("quoteVolume") or row.get("turnover") or 0
+                )
+                if quote_vol <= 0 and vol_coin > 0 and last_price > 0:
+                    quote_vol = vol_coin * last_price
+                trade_count = int(float(row.get("tradeCount") or row.get("count") or 0))
+            except (TypeError, ValueError):
+                continue
+            if last_price <= 0 or quote_vol <= 0:
+                continue
+            if min_quote_volume_usdt > 0 and quote_vol < min_quote_volume_usdt:
+                continue
+            snapshots.append(TickerSnapshot(
+                symbol=f"{base}/{quote}",
+                market_symbol=market_symbol,
+                last_price=last_price,
+                change_24h_pct=change_pct,
+                vol_coin_24h=vol_coin,
+                vol_usdt_24h=quote_vol,
+                trade_count_24h=trade_count,
+            ))
+        return snapshots
+
+    def fetch_bitunix_trading_pairs(self) -> list[dict[str, object]]:
+        """Return official Bitunix pair metadata including OpenAPI support."""
+
+        if self.exchange_id != "bitunix":
+            raise ValueError("Bitunix trading-pair metadata requires exchange_id=bitunix")
+        payload = self._get_json(
+            "https://fapi.bitunix.com/api/v1/futures/market/trading_pairs", {}
+        )
+        if not isinstance(payload, dict) or payload.get("code") != 0:
+            message = payload.get("msg") if isinstance(payload, dict) else "invalid response"
+            raise ValueError(f"bitunix_trading_pairs_error: {message}")
+        rows = payload.get("data", [])
+        return [dict(row) for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
     def prefilter_symbols(

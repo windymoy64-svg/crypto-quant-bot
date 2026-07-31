@@ -24,6 +24,9 @@ class RiskRewardValidator:
         if entry <= 0 or risk <= 0 or reward <= 0:
             return RiskRewardCheck(False, "invalid_risk_reward", 0.0, self.minimum_ratio)
         ratio = reward / risk
-        valid = ratio >= self.minimum_ratio
+        # Decimal price levels commonly produce 1.99999999999999 for an exact
+        # 2R setup. Use the same tiny tolerance as the shared geometry gate so
+        # the displayed ratio and execution decision cannot contradict.
+        valid = ratio + 1e-12 >= self.minimum_ratio
         reason = "ok" if valid else "risk_reward_too_low"
         return RiskRewardCheck(valid, reason, round(ratio, 4), self.minimum_ratio)

@@ -80,9 +80,9 @@ class ExecutorAgent:
 
         orders: list[OrderRequest] = [
             OrderRequest(
-                symbol=decision.symbol, side=entry_side, order_type="LIMIT",
-                quantity=quantity, price=plan.entry_price,
-                meta={"role": "entry"},
+                symbol=decision.symbol, side=entry_side, order_type="MARKET",
+                quantity=quantity,
+                meta={"role": "entry", "reference_price": plan.entry_price},
             ),
             OrderRequest(
                 symbol=decision.symbol, side=sl_side, order_type="STOP_MARKET",
@@ -195,7 +195,11 @@ class ExecutorAgent:
     def _simulate(self, orders: list[OrderRequest], now: str) -> list[ExecutionResult]:
         results: list[ExecutionResult] = []
         for order in orders:
-            fill_price = order.price or order.stop_price or 0.0
+            fill_price = (
+                order.price
+                or order.stop_price
+                or float(order.meta.get("reference_price", 0.0))
+            )
             role = str(order.meta.get("role", ""))
             is_immediate = role in {"entry", "exit"}
             status = "FILLED" if is_immediate else "SUBMITTED"

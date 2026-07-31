@@ -4,6 +4,7 @@ from app.core.models import Candle
 from app.decision_agent.models import Decision, EntryPlan
 from app.risk.geometry import validate_entry_geometry
 from app.risk.risk_agent import RiskAgent
+from app.risk.takeprofit import RiskRewardValidator
 
 
 def test_accepts_valid_long_and_short_at_two_r() -> None:
@@ -17,6 +18,19 @@ def test_accepts_valid_long_and_short_at_two_r() -> None:
     assert short_result.valid is True
     assert long_result.risk_reward == 2.0
     assert short_result.risk_reward == 2.0
+
+
+def test_legacy_risk_reward_validator_accepts_decimal_levels_at_exact_two_r() -> None:
+    # These production-style decimal levels evaluate microscopically below 2.0
+    # in binary floating point even though their mathematical RR is exactly 2R.
+    check = RiskRewardValidator(minimum_ratio=2.0).validate_long(
+        entry=4.4307,
+        stop_loss=4.3376,
+        take_profit=4.6169,
+    )
+
+    assert check.ratio == 2.0
+    assert check.valid is True
 
 
 def test_rejects_wrong_side_and_low_rr() -> None:

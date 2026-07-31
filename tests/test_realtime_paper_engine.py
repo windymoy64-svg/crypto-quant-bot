@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from app.paper.realtime_engine import PaperTradingConfig, RealtimePaperTradingEngine
@@ -407,7 +408,7 @@ def test_close_from_decision_next_candle_skips_flat_pnl(tmp_path: Path) -> None:
     assert closed is None
 
 
-def test_chart_agent_limit_order_pending_then_fills_in_zone(tmp_path: Path) -> None:
+def test_chart_agent_legacy_limit_signal_enters_market_immediately(tmp_path: Path) -> None:
     config = PaperTradingConfig(
         enabled=True, starting_balance=10_000, risk_percent=1,
         max_open_positions=3, state_path=str(tmp_path / "state.json"),
@@ -420,15 +421,7 @@ def test_chart_agent_limit_order_pending_then_fills_in_zone(tmp_path: Path) -> N
         "entry_mode": "LIMIT", "stop_loss": 92.0,
         "take_profit": [101.0, 104.0, 107.0], "confidence": 90.0,
     }])
-    assert not result["open_positions"]
-    assert result["pending_orders"][0]["status"] == "PENDING"
-    assert result["pending_orders"][0]["current_price"] == 100.0
-
-    result = engine.process_signals([{
-        "symbol": "BTC/USDT", "action": "SKIP", "entry": 95.0,
-        "current_price": 95.0, "confidence": 0.0,
-    }])
-    assert result["open_positions"][0]["entry"] == 95.0
+    assert result["open_positions"][0]["entry"] == 100.0
     assert result["pending_orders"] == []
 
 
@@ -447,6 +440,32 @@ def test_chart_agent_market_entry_when_price_inside_zone(tmp_path: Path) -> None
     }])
     assert result["open_positions"][0]["entry"] == 95.5
     assert result["pending_orders"] == []
+
+
+def test_legacy_pending_limit_order_is_cancelled(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({
+        "balance": 10_000.0,
+        "open_positions": {},
+        "pending_orders": {
+            "ETH/USDT": {
+                "symbol": "ETH/USDT", "status": "PENDING",
+                "entry_zone": [3000.0, 3100.0],
+            },
+        },
+        "closed_trades": [],
+    }))
+    engine = RealtimePaperTradingEngine(PaperTradingConfig(
+        enabled=True, starting_balance=10_000, risk_percent=1,
+        max_open_positions=3, state_path=str(state_path),
+        trades_path=str(tmp_path / "trades.jsonl"),
+    ))
+
+    result = engine.process_signals([])
+
+    assert result["pending_orders"] == []
+    assert result["events"][0]["type"] == "order_cancelled"
+    assert result["events"][0]["reason"] == "market_entry_only"
 
 
 def test_update_tp1_flag_sets_position_field(tmp_path: Path) -> None:

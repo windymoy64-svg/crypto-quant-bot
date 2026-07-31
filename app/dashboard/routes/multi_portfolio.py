@@ -112,6 +112,16 @@ def _build_multi_portfolio_payload() -> dict[str, Any]:
         if len(environments) <= 1
         else None
     )
+    aggregate_balance = (
+        sum(_as_float(account.get("account_balance_usdt")) for account in visible)
+        if len(environments) <= 1
+        else None
+    )
+    aggregate_equity = (
+        sum(_as_float(account.get("equity_usdt")) for account in visible)
+        if len(environments) <= 1
+        else None
+    )
     return {
         "view_mode": preferences.view_mode,
         "multi_exchange_enabled": preferences.multi_exchange_enabled,
@@ -125,6 +135,8 @@ def _build_multi_portfolio_payload() -> dict[str, Any]:
             next(iter(environments), "paper") if len(environments) == 1 else "mixed"
         ),
         "available_balance_usdt": aggregate_available,
+        "account_balance_usdt": aggregate_balance,
+        "equity_usdt": aggregate_equity,
         "open_positions_count": len(positions),
         "open_orders_count": len(open_orders),
         "positions": positions,
@@ -219,6 +231,8 @@ def _account_snapshot(exchange: str) -> dict[str, Any]:
         "open_orders": details.get("open_orders", []),
         "warnings": details.get("warnings", []),
         "available_balance_usdt": _available_usdt(exchange, result, details),
+        "account_balance_usdt": _account_balance_usdt(exchange, result, details),
+        "equity_usdt": _equity_usdt(exchange, result, details),
         "read_only": True,
     }
 
@@ -435,11 +449,22 @@ def _normalize_bitunix_order(row: dict[str, Any]) -> dict[str, Any]:
         "symbol": row.get("symbol"),
         "side": row.get("side"),
         "type": row.get("orderType", row.get("type")),
-        "status": row.get("status"),
+        "order_type": row.get("orderType", row.get("type")),
+        "status": str(row.get("status") or "").strip().rstrip("_"),
         "price": row.get("price"),
         "quantity": row.get("qty", row.get("quantity")),
-        "executed_quantity": row.get("dealVolume", row.get("filledQty")),
+        "executed_quantity": row.get("tradeQty", row.get("dealVolume", row.get("filledQty"))),
         "reduce_only": row.get("reduceOnly"),
+        "leverage": row.get("leverage"),
+        "margin_type": row.get("marginMode"),
+        "position_mode": row.get("positionMode"),
+        "take_profit": row.get("tpPrice"),
+        "stop_loss": row.get("slPrice"),
+        "fee": row.get("fee"),
+        "realized_pnl": row.get("realizedPNL"),
+        "created_at": _millis_to_iso(row.get("ctime")),
+        "updated_at": _millis_to_iso(row.get("mtime")),
+        "reason": "pending_exchange_order",
     }
 
 
@@ -466,6 +491,30 @@ def _available_usdt(
         if isinstance(row, dict) and str(row.get("asset", "")).upper() == "USDT"
     )
     return spot + futures
+
+
+def _account_balance_usdt(
+    exchange: str, result: dict[str, Any], details: dict[str, Any]
+) -> float:
+    if exchange == "bitunix":
+        # Bitunix separates immediately available collateral, order-frozen
+        # collateral, and position margin. All remain account funds.
+        return _sum_numbers(
+            result.get("available"), result.get("frozen"), result.get("margin")
+        )
+    return _available_usdt(exchange, result, details)
+
+
+def _equity_usdt(
+    exchange: str, result: dict[str, Any], details: dict[str, Any]
+) -> float:
+    balance = _account_balance_usdt(exchange, result, details)
+    if exchange == "bitunix":
+        return balance + _sum_numbers(
+            result.get("cross_unrealized_pnl"),
+            result.get("isolation_unrealized_pnl"),
+        )
+    return balance
 
 
 def _balances(exchange: str, result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -511,6 +560,18 @@ def _as_float(value: object) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _millis_to_iso(value: object) -> str | None:
+    try:
+        millis = int(float(value or 0))
+    except (TypeError, ValueError):
+        return None
+    if millis <= 0:
+        return None
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(millis / 1000, tz=UTC).isoformat()
 
 
 def _error_account(

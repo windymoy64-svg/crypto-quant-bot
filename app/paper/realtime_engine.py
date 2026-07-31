@@ -286,7 +286,8 @@ class RealtimePaperTradingEngine:
         state = self._load_state()
         events: list[dict[str, object]] = []
 
-        # Pending chart-agent limit orders are evaluated before new orders.
+        # Pending limit entries from older versions must never keep waiting.
+        # They are cancelled before immediate market entries are evaluated.
         events.extend(self._process_pending_orders(state, signals))
 
         for signal in signals:
@@ -341,41 +342,13 @@ class RealtimePaperTradingEngine:
         side = "BUY" if action == "BUY" else "SHORT"
         symbol = str(signal["symbol"])
 
-        # Chart Agent can provide an entry zone and explicit market/limit mode.
-        # A limit order is persisted instead of being chased at the current close.
-        entry_mode = str(signal.get("entry_mode", "MARKET")).upper()
-        zone = signal.get("entry_zone")
-        if entry_mode == "LIMIT" and isinstance(zone, (list, tuple)) and len(zone) == 2:
-            current = float(signal.get("current_price", signal.get("entry", 0.0)))
-            low, high = sorted((float(zone[0]), float(zone[1])))
-            if not low <= current <= high:
-                pending = state.setdefault("pending_orders", {})
-                if not isinstance(pending, dict):
-                    pending = {}
-                    state["pending_orders"] = pending
-                if symbol in pending:
-                    return None
-                pending[symbol] = {
-                    "symbol": symbol,
-                    "side": "LONG" if action == "BUY" else "SHORT",
-                    "action": action,
-                    "entry": float(signal["entry"]),
-                    "current_price": current,
-                    "last_price_at": self._now(),
-                    "entry_zone": [low, high],
-                    "stop_loss": signal.get("stop_loss"),
-                    "take_profit": signal.get("take_profit", []),
-                    "status": "PENDING",
-                    "created_at": self._now(),
-                    "expires_at": self._expiry_iso(float(signal.get("expires_in_seconds", self.config.pending_order_ttl_seconds))),
-                    "confidence": signal.get("confidence"),
-                    "reason": signal.get("entry_reason", "chart_agent_zone"),
-                    "signal": dict(signal),
-                }
-                return self._event("pending_order", symbol, "limit_order_created", signal)
-            # Price is already inside the zone: convert to market fill.
+        # Entry is always filled immediately at the latest available market
+        # price. Ignore legacy LIMIT mode/entry-zone requests from old signals.
+        current = float(signal.get("current_price", signal.get("entry", 0.0)))
+        if current > 0:
             signal = dict(signal)
             signal["entry"] = current
+            signal["entry_mode"] = "MARKET"
 
         open_positions = state["open_positions"]
         if not isinstance(open_positions, dict):
@@ -548,36 +521,13 @@ class RealtimePaperTradingEngine:
         pending = state.get("pending_orders")
         if not isinstance(pending, dict):
             return []
-        now = datetime.now(tz=UTC)
         events: list[dict[str, object]] = []
         for symbol, order in list(pending.items()):
-            if not isinstance(order, dict):
-                pending.pop(symbol, None)
-                continue
-            try:
-                expires = datetime.fromisoformat(str(order.get("expires_at")).replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                expires = now
-            if now >= expires:
-                pending.pop(symbol, None)
-                events.append(self._event("order_expired", symbol, "limit_order_ttl", order))
-                continue
-            signal = next((s for s in signals if str(s.get("symbol")) == symbol), None)
-            if not isinstance(signal, dict):
-                continue
-            current = float(signal.get("current_price", signal.get("entry", 0.0)))
-            order["current_price"] = current
-            order["last_price_at"] = self._now()
-            low, high = order.get("entry_zone", [0.0, 0.0])
-            if float(low) <= current <= float(high):
-                filled = dict(order.get("signal") or signal)
-                filled["entry"] = current
-                filled["entry_mode"] = "MARKET"
-                pending.pop(symbol, None)
-                event = self._maybe_open_position(state, filled)
-                if event:
-                    events.append(event)
-                    events.append(self._event("order_filled", symbol, "limit_zone_touched", filled))
+            pending.pop(symbol, None)
+            payload = order if isinstance(order, dict) else {"symbol": symbol}
+            events.append(self._event(
+                "order_cancelled", symbol, "market_entry_only", payload,
+            ))
         return events
 
     def _expiry_iso(self, seconds: float | None = None) -> str:

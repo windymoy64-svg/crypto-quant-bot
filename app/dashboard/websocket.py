@@ -8,10 +8,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.dashboard.services import dashboard_service, utc_now_iso
 from app.dashboard.routes.multi_portfolio import multi_portfolio
-from app.dashboard.routes.agent import synchronized_snapshot
+from app.dashboard.routes.agent import pipeline_snapshot, synchronized_snapshot
 from app.events.subscriber import subscribe
 from app.exchange.binance.stream import BinanceStreamCallbacks
 from app.exchange.binance.websocket import BinanceWebSocket
+from app.exchange.public_http_client import PublicHttpExchangeClient
 
 
 router = APIRouter()
@@ -27,10 +28,12 @@ class DashboardEventHub:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._drain_task: asyncio.Task[None] | None = None
         self._snapshot_task: asyncio.Task[None] | None = None
+        self._agent_pipeline_task: asyncio.Task[None] | None = None
         self._price_stream_task: asyncio.Task[None] | None = None
         self._subscribed = False
         self._binance_ws: BinanceWebSocket | None = None
         self._tracked_symbols: list[str] = []
+        self._price_exchange = ""
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -56,6 +59,8 @@ class DashboardEventHub:
             self._drain_task.cancel()
         if self._snapshot_task and not self._snapshot_task.done():
             self._snapshot_task.cancel()
+        if self._agent_pipeline_task and not self._agent_pipeline_task.done():
+            self._agent_pipeline_task.cancel()
         if self._price_stream_task and not self._price_stream_task.done():
             self._price_stream_task.cancel()
         if self._binance_ws is not None:
@@ -131,15 +136,22 @@ class DashboardEventHub:
             self._drain_task.cancel()
         if loop_changed and self._snapshot_task and not self._snapshot_task.done():
             self._snapshot_task.cancel()
+        if loop_changed and self._agent_pipeline_task and not self._agent_pipeline_task.done():
+            self._agent_pipeline_task.cancel()
         if self._queue is None or loop_changed:
             self._loop = loop
             self._queue = asyncio.Queue(maxsize=self._max_pending_events)
             self._drain_task = None
             self._snapshot_task = None
+            self._agent_pipeline_task = None
         if self._drain_task is None or self._drain_task.done():
             self._drain_task = asyncio.create_task(self._drain())
         if self._snapshot_task is None or self._snapshot_task.done():
             self._snapshot_task = asyncio.create_task(self._broadcast_snapshots())
+        if self._agent_pipeline_task is None or self._agent_pipeline_task.done():
+            self._agent_pipeline_task = asyncio.create_task(
+                self._broadcast_agent_pipeline_updates()
+            )
         if self._price_stream_task is None or self._price_stream_task.done():
             self._price_stream_task = asyncio.create_task(self._sync_price_stream())
         if not self._subscribed:
@@ -174,20 +186,51 @@ class DashboardEventHub:
             except Exception:
                 logger.exception("Periodic snapshot broadcast failed")
 
-    async def _sync_price_stream(self, interval_seconds: int = 10) -> None:
-        """Periodically check open positions and restart Binance WS if changed."""
+    async def _broadcast_agent_pipeline_updates(
+        self, interval_seconds: float = 1.0,
+    ) -> None:
+        """Stream cross-process pipeline progress without polling heavy panels."""
+
+        last_generated_at = ""
         while True:
             await asyncio.sleep(interval_seconds)
             if not self.connections:
                 continue
             try:
-                symbols = self._open_position_symbols()
-                if symbols != self._tracked_symbols:
+                pipeline = await asyncio.to_thread(pipeline_snapshot)
+                generated_at = str(pipeline.get("generated_at") or "")
+                if not generated_at or generated_at == last_generated_at:
+                    continue
+                last_generated_at = generated_at
+                await self.broadcast({
+                    "type": "agent_pipeline_update",
+                    "payload": pipeline,
+                })
+            except Exception:
+                logger.exception("Realtime agent pipeline broadcast failed")
+
+    async def _sync_price_stream(self, interval_seconds: int = 2) -> None:
+        """Keep active prices near-realtime using the selected exchange source."""
+        while True:
+            await asyncio.sleep(interval_seconds)
+            if not self.connections:
+                continue
+            try:
+                symbols, exchange = self._open_position_symbols()
+                if exchange == "bitunix":
+                    if self._binance_ws is not None:
+                        self._binance_ws.stop()
+                        self._binance_ws = None
+                    self._tracked_symbols = symbols
+                    self._price_exchange = exchange
+                    await self._poll_bitunix_prices(symbols)
+                elif symbols != self._tracked_symbols or exchange != self._price_exchange:
+                    self._price_exchange = exchange
                     self._restart_price_stream(symbols)
             except Exception:
                 logger.exception("Realtime price stream sync failed")
 
-    def _open_position_symbols(self) -> list[str]:
+    def _open_position_symbols(self) -> tuple[list[str], str]:
         """Symbols that need live price ticks (paper + multi-portfolio)."""
         symbols: list[str] = []
         seen: set[str] = set()
@@ -214,11 +257,40 @@ class DashboardEventHub:
         except Exception:
             multi = None
         if isinstance(multi, dict):
-            for row in multi.get("positions") or []:
-                if isinstance(row, dict):
-                    _add(row.get("symbol"))
+            for bucket in (multi.get("positions"), multi.get("open_orders")):
+                for row in bucket or []:
+                    if isinstance(row, dict):
+                        _add(row.get("symbol"))
+            exchange = str(multi.get("active_execution_exchange") or "binance").lower()
+        else:
+            exchange = "binance"
 
-        return symbols
+        return symbols, exchange
+
+    async def _poll_bitunix_prices(self, symbols: list[str]) -> None:
+        """Publish genuine Bitunix prices for every live position/pending order."""
+
+        if not symbols:
+            return
+        client = PublicHttpExchangeClient("bitunix", timeout_seconds=5)
+        for symbol in symbols:
+            try:
+                ticker = await asyncio.to_thread(client.fetch_ticker, symbol)
+                price = float(ticker.get("last") or 0)
+            except Exception:
+                logger.warning("Bitunix ticker refresh failed for %s", symbol, exc_info=True)
+                continue
+            if price <= 0:
+                continue
+            self._enqueue_latest({
+                "type": "price_update",
+                "payload": {
+                    "symbol": symbol,
+                    "price": price,
+                    "source": "bitunix_public_ticker",
+                    "timestamp": utc_now_iso(),
+                },
+            })
 
     def _restart_price_stream(self, symbols: list[str]) -> None:
         if self._binance_ws is not None:

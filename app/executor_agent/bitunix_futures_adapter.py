@@ -35,6 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from app.executor_agent.models import (
@@ -48,6 +49,10 @@ BITUNIX_FUTURES_BASE = "https://fapi.bitunix.com"
 BITUNIX_USER_AGENT = "crypto-quant-bot/1.0 (+executor-agent)"
 BITUNIX_PLACE_ORDER_PATH = "/api/v1/futures/trade/place_order"
 BITUNIX_ACCOUNT_PATH = "/api/v1/futures/account"
+BITUNIX_CHANGE_LEVERAGE_PATH = "/api/v1/futures/account/change_leverage"
+BITUNIX_TPSL_PLACE_PATH = "/api/v1/futures/tpsl/place_order"
+BITUNIX_OPENAPI_BLOCKLIST_PATH = Path("logs/bitunix_openapi_unsupported.json")
+BITUNIX_PENDING_TP_PATH = Path("logs/bitunix_pending_take_profits.json")
 
 
 @dataclass(frozen=True)
@@ -92,11 +97,19 @@ class BitunixFuturesExecutorAdapter:
         safety_gate: BitunixLiveSafetyGate | None = None,
         base_url: str = BITUNIX_FUTURES_BASE,
         transport: Any = None,
+        leverage: int | None = None,
+        blocked_entry_symbols: set[str] | None = None,
+        pending_tp_path: Path | None = None,
     ) -> None:
         self._credentials = credentials
         self._safety_gate = safety_gate or BitunixLiveSafetyGate()
         self._base_url = base_url.rstrip("/")
         self._transport = transport  # optional callable(url, headers, body) -> dict
+        self._leverage = int(leverage) if leverage is not None else None
+        self._pending_tp_path = pending_tp_path or BITUNIX_PENDING_TP_PATH
+        self._blocked_entry_symbols = {
+            _canonical_symbol(symbol) for symbol in (blocked_entry_symbols or set())
+        }
 
     def place_order(
         self,
@@ -187,22 +200,34 @@ class BitunixFuturesExecutorAdapter:
             return [self._reject(item, timestamp, gate_block) for item in orders]
         if not self._credentials.configured:
             return [self._reject(item, timestamp, "credentials_missing") for item in orders]
+        if _canonical_symbol(entry.symbol) in self._blocked_entry_symbols:
+            return [
+                self._reject(item, timestamp, "pending_entry_exists") for item in orders
+            ]
 
         stop = next((item for item in orders if item.meta.get("role") == "stop_loss"), None)
-        take_profit = next(
-            (item for item in orders if str(item.meta.get("role", "")).startswith("take_profit_")),
-            None,
-        )
+        take_profits = [
+            item for item in orders
+            if str(item.meta.get("role", "")).startswith("take_profit_")
+        ]
         if stop is None or stop.stop_price is None or stop.stop_price <= 0:
             return [
                 self._reject(item, timestamp, "protective_stop_required_before_live_entry")
                 for item in orders
             ]
-        if take_profit is None or take_profit.price is None or take_profit.price <= 0:
+        if not take_profits or any(item.price is None or item.price <= 0 for item in take_profits):
             return [
                 self._reject(item, timestamp, "take_profit_required_before_live_entry")
                 for item in orders
             ]
+
+        if self._leverage is not None:
+            leverage_error = self.change_leverage(entry.symbol, self._leverage)
+            if leverage_error is not None:
+                return [
+                    self._reject(item, timestamp, f"change_leverage_failed: {leverage_error}")
+                    for item in orders
+                ]
 
         try:
             body = self._build_body(entry)
@@ -210,9 +235,6 @@ class BitunixFuturesExecutorAdapter:
                 "slPrice": _fmt_number(stop.stop_price),
                 "slStopType": "MARK",
                 "slOrderType": "MARKET",
-                "tpPrice": _fmt_number(take_profit.price),
-                "tpStopType": "MARK",
-                "tpOrderType": "MARKET",
             })
         except ValueError as exc:
             return [self._reject(item, timestamp, f"invalid_request: {exc}") for item in orders]
@@ -228,19 +250,174 @@ class BitunixFuturesExecutorAdapter:
             return [self._reject(item, timestamp, f"http_error: {exc}") for item in orders]
 
         entry_result = self._to_execution_result(payload, entry, timestamp)
-        protective_results = [
-            ExecutionResult(
-                status="SUBMITTED" if entry_result.status != "REJECTED" else "REJECTED",
-                order_id=entry_result.order_id,
+        if entry_result.status != "REJECTED":
+            self._queue_take_profits(entry, take_profits, entry_result.order_id)
+        attached_items = {id(stop)}
+        protective_results: list[ExecutionResult] = []
+        for item in orders:
+            if item is entry:
+                continue
+
+            attached = id(item) in attached_items
+            accepted = entry_result.status != "REJECTED"
+            if not accepted:
+                status = "REJECTED"
+                reason = entry_result.reason
+            elif attached:
+                status = "SUBMITTED"
+                reason = "attached_to_entry"
+            else:
+                status = "PENDING"
+                reason = "queued_until_position_id_available"
+
+            protective_results.append(ExecutionResult(
+                status=status,
+                order_id=entry_result.order_id if attached else "",
                 symbol=item.symbol, side=item.side, order_type=item.order_type,
                 requested_quantity=item.quantity, filled_quantity=0.0,
                 average_price=0.0, timestamp=timestamp,
-                reason=("attached_to_entry" if entry_result.status != "REJECTED" else entry_result.reason),
-                meta={**item.meta, "attached_to_entry": True},
-            )
-            for item in orders if item is not entry
-        ]
+                reason=reason,
+                meta={
+                    **item.meta,
+                    "attached_to_entry": attached,
+                    "exchange_order_created": bool(accepted and attached),
+                },
+            ))
         return [entry_result, *protective_results]
+
+    def reconcile_take_profits(
+        self, positions: list[dict[str, Any]], *, timestamp: str,
+    ) -> list[ExecutionResult]:
+        """Create queued TP1/TP2/TP3 after Bitunix exposes a positionId."""
+
+        pending = self._load_pending_take_profits()
+        if not pending:
+            return []
+        by_symbol: dict[str, list[dict[str, Any]]] = {}
+        for position in positions:
+            symbol = _canonical_symbol(position.get("symbol"))
+            if position.get("position_id") and symbol:
+                by_symbol.setdefault(symbol, []).append(position)
+
+        results: list[ExecutionResult] = []
+        remaining: list[dict[str, Any]] = []
+        for plan in pending:
+            symbol = _canonical_symbol(plan.get("symbol"))
+            expected_side = str(plan.get("position_side") or "").upper()
+            candidates = by_symbol.get(symbol, [])
+            position = next((
+                row for row in candidates
+                if not expected_side or _canonical_position_side(row.get("side")) == expected_side
+            ), None)
+            if position is None:
+                remaining.append(plan)
+                continue
+            position_id = str(position.get("position_id") or "")
+            queued = [
+                dict(raw) for raw in plan.get("take_profits", [])
+                if isinstance(raw, dict)
+            ]
+            unsent: list[dict[str, Any]] = []
+            for index, raw in enumerate(queued):
+                order = OrderRequest(
+                    symbol=symbol,
+                    side=str(raw["side"]).upper(),
+                    order_type="LIMIT",
+                    quantity=float(raw["quantity"]),
+                    price=float(raw["price"]),
+                    reduce_only=True,
+                    meta={"role": raw["role"], "position_id": position_id},
+                )
+                result = self._place_take_profit(order, position_id, timestamp)
+                results.append(result)
+                if result.status == "REJECTED":
+                    # Keep only the failed TP and later levels. Earlier levels
+                    # were accepted and must not be duplicated on the next scan.
+                    unsent = queued[index:]
+                    break
+            if unsent:
+                remaining.append({**plan, "take_profits": unsent})
+        self._save_pending_take_profits(remaining)
+        return results
+
+    def _place_take_profit(
+        self, order: OrderRequest, position_id: str, timestamp: str,
+    ) -> ExecutionResult:
+        gate_block = self._safety_gate.evaluate()
+        if gate_block is not None:
+            return self._reject(order, timestamp, gate_block)
+        body = {
+            "symbol": order.symbol.replace("/", "").upper(),
+            "positionId": position_id,
+            "tpPrice": _fmt_number(float(order.price or 0.0)),
+            "tpStopType": "MARK_PRICE",
+            "tpOrderType": "MARKET",
+            "tpQty": _fmt_number(order.quantity),
+        }
+        headers = self._sign_headers(body_json=json.dumps(body, separators=(",", ":")))
+        try:
+            payload = self._send(
+                url=f"{self._base_url}{BITUNIX_TPSL_PLACE_PATH}",
+                headers=headers, body=body,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._reject(order, timestamp, f"http_error: {exc}")
+        return self._to_execution_result(payload, order, timestamp)
+
+    def _queue_take_profits(
+        self, entry: OrderRequest, take_profits: list[OrderRequest], order_id: str,
+    ) -> None:
+        plans = self._load_pending_take_profits()
+        key = str(order_id or entry.meta.get("client_order_id") or "")
+        if key and any(str(item.get("entry_order_id")) == key for item in plans):
+            return
+        plans.append({
+            "entry_order_id": key,
+            "symbol": _canonical_symbol(entry.symbol),
+            "position_side": "LONG" if entry.side == "BUY" else "SHORT",
+            "take_profits": [{
+                "role": str(item.meta.get("role")), "side": item.side,
+                "quantity": item.quantity, "price": item.price,
+            } for item in take_profits],
+        })
+        self._save_pending_take_profits(plans)
+
+    def _load_pending_take_profits(self) -> list[dict[str, Any]]:
+        try:
+            payload = json.loads(self._pending_tp_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        rows = payload.get("plans", []) if isinstance(payload, dict) else []
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    def _save_pending_take_profits(self, plans: list[dict[str, Any]]) -> None:
+        self._pending_tp_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._pending_tp_path.with_suffix(self._pending_tp_path.suffix + ".tmp")
+        temporary.write_text(json.dumps({"plans": plans}, indent=2), encoding="utf-8")
+        temporary.replace(self._pending_tp_path)
+
+    def change_leverage(self, symbol: str, leverage: int) -> str | None:
+        """Apply the configured leverage before opening a Bitunix order."""
+
+        if not 1 <= int(leverage) <= 125:
+            return "leverage_out_of_range"
+        body = {
+            "marginCoin": "USDT",
+            "symbol": symbol.replace("/", "").replace("-", "").upper(),
+            "leverage": int(leverage),
+        }
+        headers = self._sign_headers(body_json=json.dumps(body, separators=(",", ":")))
+        try:
+            payload = self._send(
+                url=f"{self._base_url}{BITUNIX_CHANGE_LEVERAGE_PATH}",
+                headers=headers,
+                body=body,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return f"http_error: {exc}"
+        if not isinstance(payload, dict) or payload.get("code") != 0:
+            return str(payload.get("msg") if isinstance(payload, dict) else "invalid_response")
+        return None
 
     def _build_body(self, order: OrderRequest) -> dict[str, Any]:
         if order.order_type not in {"MARKET", "LIMIT"}:
@@ -315,6 +492,8 @@ class BitunixFuturesExecutorAdapter:
     ) -> ExecutionResult:
         code = payload.get("code")
         if code != 0:
+            if code == 710002:
+                _remember_openapi_unsupported(order.symbol)
             return ExecutionResult(
                 status="REJECTED", order_id="", symbol=order.symbol,
                 side=order.side, order_type=order.order_type,
@@ -381,8 +560,53 @@ def _fmt_number(value: float) -> str:
     return format(float(value), "f").rstrip("0").rstrip(".") or "0"
 
 
+def _canonical_symbol(value: object) -> str:
+    symbol = str(value or "").strip().upper().replace("-", "/")
+    if "/" not in symbol and symbol.endswith("USDT") and len(symbol) > 4:
+        symbol = f"{symbol[:-4]}/USDT"
+    return symbol
+
+
+def _canonical_position_side(value: object) -> str:
+    side = str(value or "").strip().upper()
+    if side in {"BUY", "LONG"}:
+        return "LONG"
+    if side in {"SELL", "SHORT"}:
+        return "SHORT"
+    return side
+
+
 def _float(value: Any) -> float:
     try:
         return float(value) if value is not None else 0.0
     except (TypeError, ValueError):
         return 0.0
+
+
+def _remember_openapi_unsupported(symbol: str) -> None:
+    """Persist pairs Bitunix explicitly rejects for OpenAPI trading."""
+
+    normalized = str(symbol or "").strip().upper().replace("-", "/")
+    if not normalized:
+        return
+    path = BITUNIX_OPENAPI_BLOCKLIST_PATH
+    try:
+        current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        current = {}
+    symbols = current.get("symbols", []) if isinstance(current, dict) else []
+    blocked = {str(value).strip().upper().replace("-", "/") for value in symbols}
+    blocked.add(normalized)
+    payload = {
+        "symbols": sorted(blocked),
+        "reason": "bitunix_openapi_error_710002",
+        "updated_at_ms": int(time.time() * 1000),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        # Failure to persist observability must not alter the exchange result.
+        return

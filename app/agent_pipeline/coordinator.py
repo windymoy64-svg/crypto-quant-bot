@@ -405,7 +405,9 @@ class AgentPipelineCoordinator:
             risk_reward=round(rr, 2),
             position_size_percent=old_plan.position_size_percent if old_plan else 1.0,
             entry_zone=old_plan.entry_zone if old_plan else None,
-            order_type=old_plan.order_type if old_plan else "LIMIT",
+            # Entry execution is always immediate; chart levels remain inputs
+            # for sizing and protection, not a reason to queue a limit order.
+            order_type="MARKET",
             expires_in_seconds=old_plan.expires_in_seconds if old_plan else 900.0,
         )
         meta = dict(decision.meta)

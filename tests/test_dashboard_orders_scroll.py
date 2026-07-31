@@ -28,6 +28,22 @@ def test_price_update_tidak_merebuild_tabel_active_orders() -> None:
     assert "byId(`ao-pnl-${sym}`)" in js
 
 
+def test_real_exchange_pending_orders_feed_active_orders() -> None:
+    js = _js()
+
+    assert "const pendingOrders=realConnected?list(p.multiPortfolio.open_orders)" in js
+    assert "renderActiveOrders(positions,pendingOrders)" in js
+    assert "renderActiveOrders(positions,p.paper?.pending_orders??[])" not in js
+
+
+def test_bitunix_pending_orders_are_in_realtime_price_universe() -> None:
+    websocket = Path("app/dashboard/websocket.py").read_text(encoding="utf-8")
+
+    assert 'multi.get("open_orders")' in websocket
+    assert 'PublicHttpExchangeClient("bitunix"' in websocket
+    assert '"source": "bitunix_public_ticker"' in websocket
+
+
 def test_snapshot_orders_tidak_memakai_debounce_agresif() -> None:
     """View orders memakai debounce sama dengan view lain (800ms)."""
     js = _js()

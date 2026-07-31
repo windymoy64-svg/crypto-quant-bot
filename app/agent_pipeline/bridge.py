@@ -52,6 +52,15 @@ def _parse_conflict_policy(value: object) -> str:
     return policy
 
 
+def _canonical_symbol(value: object) -> str:
+    """Normalize Bitunix compact symbols and slash/dash variants."""
+
+    symbol = str(value or "").strip().upper().replace("-", "/")
+    if "/" not in symbol and symbol.endswith("USDT") and len(symbol) > 4:
+        symbol = f"{symbol[:-4]}/USDT"
+    return symbol
+
+
 @dataclass(frozen=True)
 class AgentPipelineRuntimeConfig:
     """Runtime configuration for the pipeline bridge.
@@ -202,11 +211,17 @@ def _position_context(raw: dict[str, Any]) -> PositionContext | None:
         position_id=str(raw.get("position_id") or raw.get("id") or "") or None,
     )
 
-def _write_output(path: str, payload: dict[str, Any]) -> None:
+def _write_output(
+    path: str, payload: dict[str, Any], *, append_history: bool = True,
+) -> None:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", encoding="utf-8") as file:
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as file:
         json.dump(payload, file, indent=2)
+    temporary.replace(output)
+    if not append_history:
+        return
     history = (
         output.with_name(output.stem + "_history.jsonl")
         if output.suffix == ".json"
@@ -229,6 +244,7 @@ def run_pipeline_bridge(
     config: AgentPipelineRuntimeConfig,
     scanner_results: list[dict[str, Any]],
     open_positions: dict[str, dict[str, Any]],
+    pending_entry_symbols: set[str] | None = None,
     market_data: MarketDataService,
     coordinator: AgentPipelineCoordinator | None = None,
 ) -> dict[str, Any]:
@@ -283,12 +299,42 @@ def run_pipeline_bridge(
     fetch_ltf = _candle_fetcher(market_data, config.ltf_timeframe, config.ltf_limit)
 
     entries: list[dict[str, Any]] = []
+    pending_symbols = {
+        _canonical_symbol(symbol)
+        for symbol in (pending_entry_symbols or set())
+        if str(symbol).strip()
+    }
     filter_counts: Counter[str] = Counter()
     candidates_seen = 0
     candidates_directional = 0
     candidates_watch = 0
     scanned = 0
     watch_evaluated = 0
+
+    cycle_started_at = datetime.now(tz=UTC).isoformat()
+
+    def _write_progress() -> None:
+        """Expose accepted scanner candidates while agents are still working."""
+
+        _write_output(config.output_path, {
+            "enabled": True,
+            "generated_at": datetime.now(tz=UTC).isoformat(),
+            "cycle_started_at": cycle_started_at,
+            "processing": True,
+            "execute_decisions": config.execute_decisions,
+            "allow_live_orders": config.allow_live_orders,
+            "executor_mode": "live" if executor_live else "dry_run",
+            "live_ready": live_ready,
+            "entries": entries,
+            "monitor": [],
+            "summary": {
+                "scanner_results_in": len(scanner_results),
+                "candidates_seen": candidates_seen,
+                "candidates_directional": candidates_directional,
+                "candidates_watch": candidates_watch,
+                "entry_filter_counts": dict(filter_counts),
+            },
+        }, append_history=False)
 
     hard_candidates: list[ScannerCandidate] = []
     soft_candidates: list[ScannerCandidate] = []
@@ -306,6 +352,45 @@ def run_pipeline_bridge(
 
     hard_candidates.sort(key=lambda c: c.confidence, reverse=True)
     soft_candidates.sort(key=lambda c: c.confidence, reverse=True)
+
+    preview_candidates: list[tuple[ScannerCandidate, bool]] = []
+    for candidate in hard_candidates:
+        if len(preview_candidates) >= config.max_entry_symbols:
+            break
+        if (
+            candidate.confidence >= config.min_scanner_confidence
+            and not candidate.failed_gates
+            and _canonical_symbol(candidate.symbol) not in pending_symbols
+        ):
+            preview_candidates.append((candidate, False))
+    if config.allow_watch_soft_entry:
+        soft_slots = min(
+            config.max_watch_soft_entry,
+            max(0, config.max_entry_symbols - len(preview_candidates)),
+        )
+        for candidate in soft_candidates:
+            if sum(1 for _, soft in preview_candidates if soft) >= soft_slots:
+                break
+            if (
+                candidate.confidence >= config.min_watch_confidence
+                and not candidate.failed_gates
+                and _canonical_symbol(candidate.symbol) not in pending_symbols
+            ):
+                preview_candidates.append((candidate, True))
+
+    preview_at = datetime.now(tz=UTC).isoformat()
+    entries.extend({
+        "symbol": candidate.symbol,
+        "scanner_confidence": candidate.confidence,
+        "scanner_action": candidate.action,
+        "soft_entry": soft,
+        "processing": True,
+        "status": "PROCESSING",
+        "timestamp": preview_at,
+    } for candidate, soft in preview_candidates)
+    if entries:
+        filter_counts["processing"] = len(entries)
+        _write_progress()
 
     def _evaluate(candidate: ScannerCandidate, *, soft: bool) -> None:
         nonlocal scanned, watch_evaluated
@@ -325,6 +410,37 @@ def run_pipeline_bridge(
         if candidate.failed_gates:
             filter_counts["failed_gates"] += 1
             return
+        if _canonical_symbol(candidate.symbol) in pending_symbols:
+            filter_counts["pending_entry_exists"] += 1
+            entries.append({
+                "symbol": candidate.symbol,
+                "skipped": True,
+                "reason": "pending_entry_exists",
+                "soft_entry": soft,
+                "scanner_action": candidate.action,
+            })
+            return
+
+        processing_record = next(
+            (
+                item for item in entries
+                if item.get("processing") and item.get("symbol") == candidate.symbol
+            ),
+            None,
+        )
+        if processing_record is None:
+            processing_record = {
+                "symbol": candidate.symbol,
+                "scanner_confidence": candidate.confidence,
+                "scanner_action": candidate.action,
+                "soft_entry": soft,
+                "processing": True,
+                "status": "PROCESSING",
+                "timestamp": datetime.now(tz=UTC).isoformat(),
+            }
+            entries.append(processing_record)
+            filter_counts["processing"] += 1
+            _write_progress()
 
         fetched = {
             "htf": fetch_htf(candidate.symbol),
@@ -339,7 +455,8 @@ def run_pipeline_bridge(
                 else "missing_multi_timeframe_candles"
             )
             filter_counts[reason] += 1
-            entries.append({
+            processing_record.clear()
+            processing_record.update({
                 "symbol": candidate.symbol,
                 "skipped": True,
                 "reason": reason,
@@ -349,7 +466,10 @@ def run_pipeline_bridge(
                 },
                 "soft_entry": soft,
                 "scanner_action": candidate.action,
+                "timestamp": datetime.now(tz=UTC).isoformat(),
             })
+            filter_counts["processing"] -= 1
+            _write_progress()
             return
 
         result = coordinator.process_entry_candidate(
@@ -365,7 +485,7 @@ def run_pipeline_bridge(
             "soft_entry": soft,
             "result": result.to_dict(),
         }
-        entries.append(entry_record)
+        filter_counts["processing"] -= 1
         scanned += 1
         if soft:
             watch_evaluated += 1
@@ -392,6 +512,10 @@ def run_pipeline_bridge(
                 f"error_type={exc.__class__.__name__}",
                 flush=True,
             )
+        processing_record.clear()
+        processing_record.update(entry_record)
+        processing_record["timestamp"] = datetime.now(tz=UTC).isoformat()
+        _write_progress()
 
     for candidate in hard_candidates:
         if scanned >= config.max_entry_symbols:
@@ -479,6 +603,7 @@ def run_pipeline_bridge(
         ),
         "positions_skipped": monitor_skipped,
         "position_symbols": list(open_positions),
+        "pending_entry_symbols": sorted(pending_symbols),
     }
     print(
         "agent_pipeline"
@@ -496,6 +621,8 @@ def run_pipeline_bridge(
     payload: dict[str, Any] = {
         "enabled": True,
         "generated_at": datetime.now(tz=UTC).isoformat(),
+        "cycle_started_at": cycle_started_at,
+        "processing": False,
         "execute_decisions": config.execute_decisions,
         "allow_live_orders": config.allow_live_orders,
         "executor_mode": "live" if executor_live else "dry_run",

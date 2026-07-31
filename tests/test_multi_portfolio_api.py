@@ -224,6 +224,8 @@ def test_multi_portfolio_returns_both_accounts_without_false_cross_asset_total(
             "testnet": False,
             "margin_coin": "USDT",
             "available": "250",
+            "frozen": "25",
+            "margin": "10",
             "cross_unrealized_pnl": "3.5",
             "isolation_unrealized_pnl": "-1",
         },
@@ -249,6 +251,27 @@ def test_multi_portfolio_returns_both_accounts_without_false_cross_asset_total(
     assert by_exchange["binance"]["balances"][0]["asset"] == "USDT"
     assert by_exchange["bitunix"]["balances"][0]["available"] == "250"
     assert by_exchange["bitunix"]["balances"][0]["unrealized_pnl"] == 2.5
+    assert by_exchange["bitunix"]["account_balance_usdt"] == 285
+    assert by_exchange["bitunix"]["equity_usdt"] == 287.5
+
+
+def test_bitunix_pending_order_normalization_includes_live_fields() -> None:
+    row = {
+        "orderId": "1", "symbol": "ETHUSDT", "qty": "0.006",
+        "tradeQty": "0", "price": "1942.70", "side": "SELL",
+        "orderType": "LIMIT", "status": "NEW_", "leverage": 20,
+        "marginMode": "CROSS", "tpPrice": "1927.93", "slPrice": "1950.08",
+        "ctime": 1785480480000, "mtime": 1785480481000,
+    }
+
+    order = multi_route._normalize_bitunix_order(row)
+
+    assert order["executed_quantity"] == "0"
+    assert order["status"] == "NEW"
+    assert order["leverage"] == 20
+    assert order["take_profit"] == "1927.93"
+    assert order["stop_loss"] == "1950.08"
+    assert order["created_at"].endswith("+00:00")
 
 
 def test_multi_portfolio_keeps_healthy_exchange_when_other_exchange_fails(

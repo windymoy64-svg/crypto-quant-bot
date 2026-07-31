@@ -27,6 +27,7 @@
   "agent_pipeline": {
     "enabled": true,
     "execute_decisions": true,
+    "allow_live_orders": true,
     "min_scanner_confidence": 80.0,
     "min_hold_seconds": 300.0,
     "htf_timeframe": "4h",

@@ -100,6 +100,80 @@ def test_public_http_client_formats_symbols() -> None:
     assert client._okx_symbol("BTC/USDT") == "BTC-USDT"
 
 
+def test_bitunix_bulk_tickers_feed_prefilter_and_breadth() -> None:
+    client = PublicHttpExchangeClient("bitunix")
+    client._get_json = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+        "code": 0,
+        "data": [
+            {"symbol": "BTCUSDT", "lastPrice": "100", "changeRate": "0.05", "baseVol": "200000"},
+            {"symbol": "ETHUSDT", "lastPrice": "20", "open": "25", "quoteVol": "6000000"},
+            {"symbol": "USDCUSDT", "lastPrice": "1", "changeRate": "0", "quoteVol": "9000000"},
+        ],
+    }
+
+    symbols, snapshots, by_symbol = client.prefilter_symbols(
+        top_n=10,
+        min_quote_volume_usdt=5_000_000,
+        mode="momentum_liquid",
+        min_move_pct=3,
+        excluded_base_assets={"USDC"},
+    )
+
+    assert symbols == ["BTC/USDT", "ETH/USDT"]
+    assert len(snapshots) == 2
+    assert by_symbol["BTC/USDT"].change_24h_pct == 5
+    assert by_symbol["ETH/USDT"].change_24h_pct == -20
+    assert compute_market_breadth(snapshots)["tickers_count"] == 2
+
+
+def test_bitunix_openapi_blocklist_excludes_known_unsupported_pair(
+    tmp_path: Path,
+) -> None:
+    blocklist = tmp_path / "unsupported.json"
+    blocklist.write_text('{"symbols":["TSLA/USDT"]}', encoding="utf-8")
+    config = {
+        "exchange": "bitunix",
+        "symbol_mode": "static",
+        "symbols": ["TSLA/USDT", "BTC/USDT"],
+        "bitunix_openapi_blocklist_path": str(blocklist),
+    }
+
+    symbols, _, _ = __import__(
+        "app.market.scanner", fromlist=["resolve_symbols"]
+    ).resolve_symbols(config, "bitunix")
+
+    assert symbols == ["BTC/USDT"]
+
+
+def test_bitunix_official_metadata_excludes_api_disabled_and_closed_pairs(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from app.exchange.public_http_client import PublicHttpExchangeClient
+
+    monkeypatch.setattr(
+        PublicHttpExchangeClient,
+        "fetch_bitunix_trading_pairs",
+        lambda _self: [
+            {"symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "symbolStatus": "OPEN", "isApiSupported": True},
+            {"symbol": "TSLAUSDT", "base": "TSLA", "quote": "USDT", "symbolStatus": "OPEN", "isApiSupported": False},
+            {"symbol": "OLDUSDT", "base": "OLD", "quote": "USDT", "symbolStatus": "STOP", "isApiSupported": True},
+        ],
+    )
+    config = {
+        "exchange": "bitunix",
+        "symbol_mode": "static",
+        "symbols": ["BTC/USDT", "TSLA/USDT", "OLD/USDT"],
+        "bitunix_openapi_blocklist_path": str(tmp_path / "missing.json"),
+        "bitunix_trading_pairs_cache_path": str(tmp_path / "pairs.json"),
+    }
+
+    symbols, _, _ = __import__(
+        "app.market.scanner", fromlist=["resolve_symbols"]
+    ).resolve_symbols(config, "bitunix")
+
+    assert symbols == ["BTC/USDT"]
+
+
 def test_stablecoin_base_assets_are_excluded_from_new_entries() -> None:
     config = {"excluded_base_assets": ["USDC", "FDUSD", "USD1"]}
 

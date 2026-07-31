@@ -259,6 +259,55 @@ def resolve_symbols(
     momentum_sort = str(config.get("momentum_sort", "quote_volume"))
     excluded = _excluded_base_set(config)
 
+    # Bitunix public tickers include a small set of markets that reject order
+    # placement through OpenAPI (error 710002). The executor learns those pairs
+    # from real exchange responses and persists them for subsequent scans.
+    openapi_blocked: set[str] = set()
+    if exchange.lower() == "bitunix":
+        blocklist_path = Path(str(config.get(
+            "bitunix_openapi_blocklist_path", "logs/bitunix_openapi_unsupported.json"
+        )))
+        try:
+            blocklist = json.loads(blocklist_path.read_text(encoding="utf-8"))
+            values = blocklist.get("symbols", []) if isinstance(blocklist, dict) else []
+            openapi_blocked = {
+                str(value).strip().upper().replace("-", "/") for value in values
+            }
+        except (OSError, json.JSONDecodeError):
+            openapi_blocked = set()
+
+        # Official metadata is authoritative: only OPEN + API-supported pairs
+        # can reach the entry scanner. Cache it because this Bitunix endpoint
+        # can occasionally be slower than the ticker endpoint.
+        metadata_cache = Path(str(config.get(
+            "bitunix_trading_pairs_cache_path", "logs/bitunix_trading_pairs.json"
+        )))
+        metadata_rows: list[dict[str, object]] = []
+        try:
+            metadata_rows = PublicHttpExchangeClient(exchange).fetch_bitunix_trading_pairs()
+            metadata_cache.parent.mkdir(parents=True, exist_ok=True)
+            temporary = metadata_cache.with_suffix(metadata_cache.suffix + ".tmp")
+            temporary.write_text(json.dumps({"pairs": metadata_rows}, indent=2), encoding="utf-8")
+            temporary.replace(metadata_cache)
+        except (ValueError, OSError):
+            try:
+                cached = json.loads(metadata_cache.read_text(encoding="utf-8"))
+                metadata_rows = cached.get("pairs", []) if isinstance(cached, dict) else []
+            except (OSError, json.JSONDecodeError):
+                metadata_rows = []
+        for row in metadata_rows:
+            market_symbol = str(row.get("symbol") or "").upper()
+            if not market_symbol:
+                continue
+            api_supported = row.get("isApiSupported") is True
+            status_open = str(row.get("symbolStatus") or "").upper() == "OPEN"
+            if not api_supported or not status_open:
+                quote = str(row.get("quote") or config.get("quote_asset", "USDT")).upper()
+                base = str(row.get("base") or (
+                    market_symbol[:-len(quote)] if quote and market_symbol.endswith(quote) else market_symbol
+                )).upper()
+                openapi_blocked.add(f"{base}/{quote}" if quote else base)
+
     if mode in DYNAMIC_PREFILTER_MODES:
         client = PublicHttpExchangeClient(exchange)
         try:
@@ -272,7 +321,11 @@ def resolve_symbols(
                 excluded_base_assets=excluded,
             )
             if symbols:
-                return symbols, snapshots, by_symbol
+                allowed_symbols = [symbol for symbol in symbols if symbol not in openapi_blocked]
+                allowed_map = {symbol: snap for symbol, snap in by_symbol.items() if symbol not in openapi_blocked}
+                allowed_snapshots = [snap for snap in snapshots if snap.symbol not in openapi_blocked]
+                if allowed_symbols:
+                    return allowed_symbols, allowed_snapshots, allowed_map
         except ValueError:
             pass
         configured = [str(symbol) for symbol in config.get("symbols", [])]
@@ -293,7 +346,10 @@ def resolve_symbols(
             symbols = symbols[:max_symbols]
         return symbols, [], {}
 
-    return [str(symbol) for symbol in config.get("symbols", [])], [], {}
+    return [
+        str(symbol) for symbol in config.get("symbols", [])
+        if str(symbol).strip().upper().replace("-", "/") not in openapi_blocked
+    ], [], {}
 
 
 def _failed_gates(buckets: object) -> list[str]:

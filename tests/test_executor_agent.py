@@ -39,6 +39,8 @@ def test_execute_entry_dry_run() -> None:
     assert report.total_filled_quantity > 0
     assert report.average_entry_price == 100.0
     assert report.results[0].status == "FILLED"
+    assert report.plan.orders[0].order_type == "MARKET"
+    assert report.plan.orders[0].price is None
     assert all(result.status == "SUBMITTED" for result in report.results[1:])
 
 

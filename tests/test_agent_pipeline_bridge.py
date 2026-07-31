@@ -110,6 +110,31 @@ def test_bridge_skips_low_confidence_candidates(tmp_path: Path) -> None:
     assert summary["entry_filter_counts"]["action_WATCH"] == 1
 
 
+def test_bridge_skips_candidate_when_exchange_entry_is_pending(tmp_path: Path) -> None:
+    config = AgentPipelineRuntimeConfig.from_dict({
+        "enabled": True,
+        "min_scanner_confidence": 80.0,
+        "output_path": str(tmp_path / "pipeline.json"),
+        "monitor_positions": False,
+    })
+
+    result = run_pipeline_bridge(
+        config=config,
+        scanner_results=[{
+            "symbol": "LINK/USDT", "action": "SELL", "confidence": 95.0,
+            "failed_gates": [],
+        }],
+        open_positions={},
+        # Bitunix private endpoints return compact symbols; scanner uses slash.
+        pending_entry_symbols={"LINKUSDT"},
+        market_data=_market_data_stub(),
+    )
+
+    assert result["entries"][0]["skipped"] is True
+    assert result["entries"][0]["reason"] == "pending_entry_exists"
+    assert result["summary"]["entry_filter_counts"]["pending_entry_exists"] == 1
+
+
 def test_bridge_processes_qualified_candidate(tmp_path: Path) -> None:
     config = AgentPipelineRuntimeConfig.from_dict({
         "enabled": True,
@@ -254,6 +279,46 @@ def test_bridge_publishes_typed_entry_candidate_event(tmp_path: Path) -> None:
     assert event.to_dict()["symbol"] == "BTC/USDT"
     assert result["entries"][0]["publish_status"] == "published"
     assert result["summary"]["entry_filter_counts"]["events_published"] == 1
+
+
+def test_bridge_exposes_all_eligible_candidates_before_agent_fetch(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "pipeline.json"
+    snapshots: list[dict[str, Any]] = []
+    market_data = _market_data_stub()
+    original_fetch = market_data.fetch_ohlcv
+
+    def fetch_with_snapshot(*args, **kwargs):
+        if not snapshots:
+            snapshots.append(json.loads(output.read_text(encoding="utf-8")))
+        return original_fetch(*args, **kwargs)
+
+    market_data.fetch_ohlcv = fetch_with_snapshot
+    config = AgentPipelineRuntimeConfig.from_dict({
+        "enabled": True,
+        "min_scanner_confidence": 80.0,
+        "max_entry_symbols": 5,
+        "output_path": str(output),
+        "monitor_positions": False,
+    })
+
+    run_pipeline_bridge(
+        config=config,
+        scanner_results=[
+            {"symbol": "BTC/USDT", "action": "BUY", "confidence": 95.0, "failed_gates": []},
+            {"symbol": "ETH/USDT", "action": "BUY", "confidence": 90.0, "failed_gates": []},
+        ],
+        open_positions={},
+        market_data=market_data,
+    )
+
+    preview = snapshots[0]
+    assert preview["processing"] is True
+    assert {row["symbol"] for row in preview["entries"]} == {
+        "BTC/USDT", "ETH/USDT",
+    }
+    assert all(row["status"] == "PROCESSING" for row in preview["entries"])
 
 
 def test_bridge_config_from_dict_defaults() -> None:

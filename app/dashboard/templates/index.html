@@ -1329,10 +1329,11 @@
             const positions = Array.isArray(multi?.positions)
               ? multi.positions.map(normalizeRealPosition)
               : [];
-            const balance = Number(multi?.available_balance_usdt ?? 0);
+            const balance = Number(multi?.account_balance_usdt ?? multi?.available_balance_usdt ?? 0);
+            const equity = Number(multi?.equity_usdt ?? balance);
             return {
               balance: Number.isFinite(balance) ? balance : 0,
-              equity: Number.isFinite(balance) ? balance : 0,
+              equity: Number.isFinite(equity) ? equity : (Number.isFinite(balance) ? balance : 0),
               open_positions: positions,
               fills: [],
               trades: [],
@@ -1353,14 +1354,12 @@
             return p?.paper || liveCache.paper || {};
           };
 
-          async function tick(){
+          window.syncLivePanels = function(payload){
             try {
-              const [market, paper, analytics, multi] = await Promise.all([
-                getJSON("/api/market").catch(()=>({})),
-                getJSON("/api/paper").catch(()=>({})),
-                getJSON("/api/analytics").catch(()=>({})),
-                getJSON("/api/portfolio/multi").catch(()=>({})),
-              ]);
+              const market = payload?.market || {};
+              const paper = payload?.paper || {};
+              const analytics = payload?.analytics || {};
+              const multi = payload?.multiPortfolio || payload?.multi_portfolio || {};
               liveCache.market = market || {};
               liveCache.paper = paper || {};
               liveCache.analytics = analytics || {};
@@ -1372,17 +1371,12 @@
               renderPnl(source);
               renderKpiExtra(source);
             } catch (e) {
-              console.warn("panel tick error:", e);
+              console.warn("panel sync error:", e);
             }
-          }
+          };
 
-          document.addEventListener("DOMContentLoaded", ()=>{ 
-            tick(); 
-            // Auto-refresh KPI dan PnL tiap 10 detik. Update harga sub-detik
-            // tetap ditangani WebSocket (handlePriceUpdate -> renderPnl/renderStats),
-            // jadi interval ini hanya untuk sinkronisasi state akun/posisi.
-            setInterval(tick, 10000);
-          });
+          // Refresh HTTP dilakukan terpusat oleh dashboard.js. Panel tambahan
+          // menerima snapshot yang sama; WebSocket tetap menangani update harga.
 
           // Expose renderPnl agar dashboard.js bisa memanggilnya pada setiap
           // price_update WebSocket -> P&L Stream ikut update sub-detik seperti Active Orders.
