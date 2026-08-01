@@ -86,7 +86,9 @@ def test_all_dashboard_menus_share_the_live_exchange_refresh() -> None:
 
     assert '["multiPortfolio","/api/portfolio/multi"]' in javascript
     assert "dashboardRefreshRunning" in javascript
-    assert "setInterval(() => loadAll().catch(handleError), 10000)" in javascript
+    assert "state.dashboardRefreshTimer=setInterval(()=>loadAll().catch(handleError),10000)" in javascript
+    assert 'document.addEventListener("visibilitychange",()=>setDashboardActivity(!document.hidden))' in javascript
+    assert "function disconnectWs()" in javascript
     assert "window.syncLivePanels(payload)" in javascript
     assert "window.syncLivePanels = function(payload)" in html
     assert 'getJSON("/api/portfolio/multi")' not in html
@@ -96,7 +98,7 @@ def test_agent_entries_show_exchange_execution_rejection() -> None:
     javascript = SCRIPT.read_text(encoding="utf-8")
 
     assert 'const exchangeReject = executionResults.find' in javascript
-    assert '"ENTRY_REJECTED"' in javascript
+    assert 'executionFailed ? "Rejected"' in javascript
     assert "executionReason || riskReason" in javascript
 
 

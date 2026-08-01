@@ -222,7 +222,9 @@ def test_executor_agent_uses_bitunix_adapter_when_live() -> None:
     adapter, transport = _adapter(response={
         "code": 0, "data": {"orderId": "1", "dealVolume": "0.5", "dealAvgPrice": "100"},
     })
-    executor = ExecutorAgent(live=True, exchange_adapter=adapter)
+    executor = ExecutorAgent(
+        live=True, exchange_adapter=adapter, paper_parity_verified=True,
+    )
 
     decision = Decision(
         action="ENTRY_BUY", symbol="BTC/USDT",
@@ -247,7 +249,9 @@ def test_live_entry_attaches_stop_and_queues_take_profit(tmp_path) -> None:
         BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
         transport=transport, pending_tp_path=tmp_path / "pending-tp.json",
     )
-    executor = ExecutorAgent(live=True, exchange_adapter=adapter)
+    executor = ExecutorAgent(
+        live=True, exchange_adapter=adapter, paper_parity_verified=True,
+    )
 
     report = executor.execute(Decision(
         action="ENTRY_BUY", symbol="BTC/USDT", confidence="HIGH",
@@ -270,7 +274,7 @@ def test_live_entry_attaches_stop_and_queues_take_profit(tmp_path) -> None:
     assert "tpPrice" not in body
     assert report.results[0].order_id == "protected-1"
     assert all(result.status != "REJECTED" for result in report.results)
-    assert [result.status for result in report.results[2:]] == ["PENDING", "PENDING"]
+    assert [result.status for result in report.results[2:]] == ["PENDING"]
 
 
 def test_configured_leverage_is_applied_before_live_entry() -> None:
@@ -364,7 +368,7 @@ def test_plan_dry_run_never_calls_network() -> None:
     assert all(result.reason == "safety_gate_dry_run" for result in results)
 
 
-def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) -> None:
+def test_plan_reconciles_only_tp1_through_official_tpsl_endpoint(tmp_path) -> None:
     transport = _capturing_transport({
         "code": 0, "data": {"orderId": "entry-1"},
     })
@@ -399,23 +403,101 @@ def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) ->
     by_role = {result.meta["role"]: result for result in results}
     assert by_role["stop_loss"].reason == "attached_to_entry"
     assert by_role["take_profit_1"].status == "PENDING"
-    assert by_role["take_profit_2"].status == "PENDING"
-    assert by_role["take_profit_3"].status == "PENDING"
+    assert by_role["take_profit_2"].reason == "queued_until_position_id_available"
+    assert by_role["take_profit_3"].reason == "queued_until_position_id_available"
 
     reconciled = adapter.reconcile_take_profits([{
         "position_id": "position-1", "symbol": "BTCUSDT", "side": "BUY",
     }], timestamp="2026-01-01T00:01:00Z")
 
-    assert len(reconciled) == 3
+    assert len(reconciled) == 1
     tp_calls = transport.calls[1:]
     assert all(call["url"].endswith("/tpsl/place_order") for call in tp_calls)
-    assert [call["body"]["tpPrice"] for call in tp_calls] == ["106", "109", "112"]
-    assert [call["body"]["tpQty"] for call in tp_calls] == ["0.3", "0.3", "0.4"]
+    assert [call["body"]["tpPrice"] for call in tp_calls] == ["106"]
+    assert [call["body"]["tpQty"] for call in tp_calls] == ["0.3"]
     assert all(call["body"]["positionId"] == "position-1" for call in tp_calls)
     assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
 
 
-def test_tp_reconcile_retry_does_not_duplicate_accepted_levels(tmp_path) -> None:
+def test_reconcile_preserves_legacy_ladder_without_submitting_it(tmp_path) -> None:
+    transport = _capturing_transport({"code": 0, "data": {"orderId": "tp"}})
+    pending_path = tmp_path / "pending-tp.json"
+    legacy = {
+        "entry_order_id": "old-entry", "symbol": "BNB/USDT",
+        "position_side": "LONG",
+        "take_profits": [
+            {"role": "take_profit_1", "side": "SELL", "quantity": 0.1, "price": 600},
+            {"role": "take_profit_2", "side": "SELL", "quantity": 0.1, "price": 610},
+        ],
+    }
+    pending_path.write_text(json.dumps({"plans": [legacy]}), encoding="utf-8")
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=pending_path,
+    )
+
+    results = adapter.reconcile_take_profits([{
+        "position_id": "current-position", "symbol": "BNBUSDT", "side": "BUY",
+    }], timestamp="2026-01-01T00:01:00Z")
+
+    assert results == []
+    assert transport.calls == []
+    assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == [legacy]
+
+
+def test_live_exit_persists_bot_reason_by_exchange_order_id(tmp_path) -> None:
+    metadata_path = tmp_path / "order-metadata.json"
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=_capturing_transport({"code": 0, "data": {"orderId": "exit-123"}}),
+        pending_tp_path=tmp_path / "pending-tp.json",
+        order_metadata_path=metadata_path,
+    )
+    order = OrderRequest(
+        symbol="BTC/USDT", side="SELL", order_type="MARKET", quantity=0.1,
+        reduce_only=True,
+        meta={
+            "role": "exit", "reason": "choch_bearish_against_long",
+            "position_id": "position-1",
+        },
+    )
+
+    result = adapter.place_order(order, timestamp="2026-01-01T00:00:00Z")
+
+    assert result.order_id == "exit-123"
+    saved = json.loads(metadata_path.read_text(encoding="utf-8"))["orders"]["exit-123"]
+    assert saved["reason"] == "choch_bearish_against_long"
+    assert saved["role"] == "exit"
+    assert saved["position_id"] == "position-1"
+
+
+def test_metadata_write_failure_never_changes_accepted_exchange_order(
+    tmp_path, monkeypatch,
+) -> None:
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=_capturing_transport({"code": 0, "data": {"orderId": "accepted-1"}}),
+        order_metadata_path=tmp_path / "order-metadata.json",
+    )
+    monkeypatch.setattr(
+        adapter, "_record_order_metadata",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk busy")),
+    )
+
+    result = adapter.place_order(
+        OrderRequest(
+            symbol="BTC/USDT", side="SELL", order_type="MARKET", quantity=0.1,
+            reduce_only=True,
+            meta={"role": "exit", "reason": "stop_loss", "position_id": "p1"},
+        ),
+        timestamp="2026-01-01T00:00:00Z",
+    )
+
+    assert result.order_id == "accepted-1"
+    assert result.status == "SUBMITTED"
+
+
+def test_tp1_reconcile_does_not_duplicate_accepted_order(tmp_path) -> None:
     calls: list[dict[str, Any]] = []
 
     def transport(*, url, headers, body):
@@ -454,7 +536,89 @@ def test_tp_reconcile_retry_does_not_duplicate_accepted_levels(tmp_path) -> None
     first = adapter.reconcile_take_profits(position, timestamp="2026-01-01T00:01:00Z")
     second = adapter.reconcile_take_profits(position, timestamp="2026-01-01T00:02:00Z")
 
-    assert [result.status for result in first] == ["SUBMITTED", "REJECTED"]
-    assert [result.status for result in second] == ["SUBMITTED", "SUBMITTED"]
+    assert [result.status for result in first] == ["SUBMITTED"]
+    assert second == []
     tp_prices = [call["body"].get("tpPrice") for call in calls if "/tpsl/" in call["url"]]
-    assert tp_prices == ["106", "109", "109", "112"]
+    assert tp_prices == ["106"]
+
+
+def test_reconcile_submits_only_newest_matching_tp_plan(tmp_path) -> None:
+    transport = _capturing_transport({"code": 0, "data": {"orderId": "tp-latest"}})
+    pending_path = tmp_path / "pending-tp.json"
+    plans = [{
+        "entry_order_id": order_id,
+        "symbol": "SUI/USDT",
+        "position_side": "SHORT",
+        "strategy": "tp1_partial_trailing_v1",
+        "take_profits": [{
+            "role": "take_profit_1", "side": "BUY",
+            "quantity": quantity, "price": 0.678525,
+        }],
+    } for order_id, quantity in (("older", 4.48), ("latest", 4.23))]
+    pending_path.write_text(json.dumps({"plans": plans}), encoding="utf-8")
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=pending_path,
+    )
+
+    results = adapter.reconcile_take_profits([{
+        "position_id": "sui-position", "symbol": "SUIUSDT", "side": "SELL",
+        "quantity": 21.4,
+    }], timestamp="2026-07-31T15:10:00Z")
+
+    assert [result.status for result in results] == ["SUBMITTED"]
+    assert len(transport.calls) == 1
+    assert transport.calls[0]["body"]["positionId"] == "sui-position"
+    assert transport.calls[0]["body"]["tpQty"] == "4.23"
+    assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
+
+
+def test_reconcile_prunes_queue_when_position_already_has_tp(tmp_path) -> None:
+    transport = _capturing_transport({"code": 0, "data": {"orderId": "unexpected"}})
+    pending_path = tmp_path / "pending-tp.json"
+    pending_path.write_text(json.dumps({"plans": [{
+        "entry_order_id": "stale", "symbol": "SUI/USDT",
+        "position_side": "SHORT", "strategy": "tp1_partial_trailing_v1",
+        "take_profits": [{
+            "role": "take_profit_1", "side": "BUY",
+            "quantity": 4.2, "price": 0.678525,
+        }],
+    }]}), encoding="utf-8")
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=pending_path,
+    )
+
+    results = adapter.reconcile_take_profits([{
+        "position_id": "p1", "symbol": "SUIUSDT", "side": "SELL",
+        "take_profit": "0.6785",
+    }], timestamp="2026-07-31T15:15:00Z")
+
+    assert results == []
+    assert transport.calls == []
+    assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
+
+
+def test_reconcile_recomputes_rr_tp_from_exchange_entry_and_stop(tmp_path) -> None:
+    transport = _capturing_transport({"code": 0, "data": {"orderId": "tp-rr2"}})
+    pending_path = tmp_path / "pending-tp.json"
+    pending_path.write_text(json.dumps({"plans": [{
+        "entry_order_id": "entry", "symbol": "SUI/USDT",
+        "position_side": "SHORT", "strategy": "tp1_partial_trailing_v1",
+        "take_profits": [{
+            "role": "take_profit_1", "side": "BUY", "quantity": 4.2,
+            "price": 0.678525, "target_risk_reward": 2.0,
+        }],
+    }]}), encoding="utf-8")
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=pending_path,
+    )
+
+    results = adapter.reconcile_take_profits([{
+        "position_id": "p1", "symbol": "SUIUSDT", "side": "SELL",
+        "entry_price": "0.6847", "stop_loss": "0.6926", "take_profit": None,
+    }], timestamp="2026-07-31T15:20:00Z")
+
+    assert results[0].meta["tp_level_source"] == "configured_rr_exchange_fill"
+    assert transport.calls[0]["body"]["tpPrice"] == "0.6689"

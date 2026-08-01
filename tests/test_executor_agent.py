@@ -44,6 +44,42 @@ def test_execute_entry_dry_run() -> None:
     assert all(result.status == "SUBMITTED" for result in report.results[1:])
 
 
+def test_entry_uses_only_tp1_for_forty_percent_then_leaves_runner() -> None:
+    report = ExecutorAgent(balance=10_000.0, risk_percent=1.0).execute(
+        _entry_decision()
+    )
+
+    entry = report.plan.orders[0]
+    take_profits = [
+        order for order in report.plan.orders
+        if str(order.meta.get("role", "")).startswith("take_profit_")
+    ]
+    assert len(take_profits) == 1
+    assert take_profits[0].meta["role"] == "take_profit_1"
+    assert take_profits[0].price == 106.0
+    assert take_profits[0].quantity == round(entry.quantity * 0.40, 8)
+    assert take_profits[0].meta["strategy"] == "tp1_partial_trailing_v1"
+
+
+def test_configured_rr_overrides_decision_tp_for_live_parity() -> None:
+    report = ExecutorAgent(
+        balance=100.0, leverage=25, target_risk_reward=2.0,
+    ).execute(_entry_decision("ENTRY_SELL"))
+
+    tp = next(order for order in report.plan.orders if order.meta.get("role") == "take_profit_1")
+    assert tp.price == 94.0
+    assert tp.meta["target_risk_reward"] == 2.0
+
+
+def test_configured_margin_sizes_notional_from_margin_and_leverage() -> None:
+    report = ExecutorAgent(
+        balance=100.0, leverage=25, target_margin_percent=10.0,
+    ).execute(_entry_decision())
+
+    # $10 margin * 25x / $100 entry = 2.5 units.
+    assert report.plan.orders[0].quantity == 2.5
+
+
 def test_execute_entry_sell() -> None:
     agent = ExecutorAgent(balance=10_000.0)
     report = agent.execute(_entry_decision("ENTRY_SELL"))
@@ -157,6 +193,52 @@ def test_live_mode_rejected_without_adapter() -> None:
     assert report.plan.dry_run is False
     for result in report.results:
         assert result.status == "REJECTED"
+
+
+def test_live_entry_is_blocked_until_full_paper_parity_is_verified() -> None:
+    agent = ExecutorAgent(
+        live=True,
+        exchange_adapter=object(),
+        paper_parity_verified=False,
+    )
+
+    report = agent.execute(_entry_decision())
+
+    assert report.success is False
+    assert report.results == []
+    assert report.errors == ["live_entry_blocked_paper_parity_incomplete"]
+
+
+def test_paper_parity_gate_does_not_block_existing_position_exit() -> None:
+    class ExitAdapter:
+        def place_order(self, order, *, timestamp):
+            from app.executor_agent.models import ExecutionResult
+            return ExecutionResult(
+                status="FILLED", order_id="exit-1", symbol=order.symbol,
+                side=order.side, order_type=order.order_type,
+                requested_quantity=order.quantity, filled_quantity=order.quantity,
+                average_price=float(order.price or 100), timestamp=timestamp,
+                meta=order.meta,
+            )
+
+    agent = ExecutorAgent(
+        live=True,
+        exchange_adapter=ExitAdapter(),
+        paper_parity_verified=False,
+    )
+    decision = Decision(
+        action="EXIT", symbol="BTC/USDT", confidence="HIGH",
+        confidence_score=80.0, reasons=["structure invalid"],
+        exit_plan=ExitPlan(urgency="IMMEDIATE", reason="structure_invalidation"),
+    )
+
+    report = agent.execute(
+        decision,
+        PositionContext(side="BUY", quantity=1.0, current_price=100.0),
+    )
+
+    assert report.success is True
+    assert report.results[0].meta["reason"] == "structure_invalidation"
 
 
 def test_to_dict() -> None:

@@ -292,7 +292,18 @@ def run_pipeline_bridge(
     if executor_live and not config.allow_live_orders:
         coordinator.executor_agent.live = False
         executor_live = False
-    live_ready = bool(config.execute_decisions and config.allow_live_orders and executor_live)
+    parity_verified = bool(
+        getattr(coordinator.executor_agent, "paper_parity_verified", not executor_live)
+    )
+    live_ready = bool(
+        config.execute_decisions
+        and config.allow_live_orders
+        and executor_live
+        and parity_verified
+    )
+    live_blocker = (
+        "paper_parity_incomplete" if executor_live and not parity_verified else None
+    )
 
     fetch_htf = _candle_fetcher(market_data, config.htf_timeframe, config.htf_limit)
     fetch_mtf = _candle_fetcher(market_data, config.mtf_timeframe, config.mtf_limit)
@@ -325,6 +336,7 @@ def run_pipeline_bridge(
             "allow_live_orders": config.allow_live_orders,
             "executor_mode": "live" if executor_live else "dry_run",
             "live_ready": live_ready,
+            "live_blocker": live_blocker,
             "entries": entries,
             "monitor": [],
             "summary": {
@@ -627,6 +639,7 @@ def run_pipeline_bridge(
         "allow_live_orders": config.allow_live_orders,
         "executor_mode": "live" if executor_live else "dry_run",
         "live_ready": live_ready,
+        "live_blocker": live_blocker,
         "entries": entries,
         "monitor": monitor,
         "summary": summary,

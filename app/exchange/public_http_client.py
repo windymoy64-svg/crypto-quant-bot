@@ -398,6 +398,43 @@ class PublicHttpExchangeClient(ExchangeClient):
             }
         raise ValueError(f"Unsupported public HTTP exchange: {self.exchange_id}")
 
+    def fetch_tickers(self, symbols: list[str]) -> dict[str, dict[str, float | str]]:
+        """Fetch selected tickers in one request, currently optimized for Bitunix."""
+        if self.exchange_id != "bitunix":
+            return {symbol: self.fetch_ticker(symbol) for symbol in symbols}
+        requested = {
+            self._bitunix_symbol(symbol): symbol
+            for symbol in symbols
+            if self._bitunix_symbol(symbol)
+        }
+        if not requested:
+            return {}
+        payload = self._get_json(
+            "https://fapi.bitunix.com/api/v1/futures/market/tickers",
+            {"symbols": ",".join(requested)},
+        )
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+        result: dict[str, dict[str, float | str]] = {}
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            compact = self._bitunix_symbol(str(row.get("symbol") or ""))
+            original = requested.get(compact)
+            if original is None:
+                continue
+            last = float(row.get("lastPrice") or row.get("last") or row.get("markPrice") or 0)
+            if last <= 0:
+                continue
+            result[original] = {
+                "symbol": original,
+                "bid": last,
+                "ask": last,
+                "last": last,
+                "mark": float(row.get("markPrice") or last),
+                "volume": float(row.get("baseVol") or row.get("quoteVol") or 0),
+            }
+        return result
+
     def _fetch_binance_candles(self, symbol: str, timeframe: str, limit: int) -> list[Candle]:
         market_symbol = self._binance_symbol(symbol)
         rows = self._get_json(

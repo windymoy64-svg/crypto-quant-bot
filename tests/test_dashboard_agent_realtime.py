@@ -16,7 +16,7 @@ def test_agent_candidate_processing_state_is_rendered_and_deduplicated() -> None
     javascript = Path("app/dashboard/static/dashboard.js").read_text(encoding="utf-8")
 
     assert 'item.processing === true' in javascript
-    assert 'processing ? "PROCESSING"' in javascript
+    assert 'processing ? "Processing"' in javascript
     assert "Scanner passed · Chart/Decision Agent processing" in javascript
     assert ".filter(item=>String(item?.symbol" in javascript
     assert "setInterval(() => loadAgentPanels().catch(console.warn), 30000)" not in javascript

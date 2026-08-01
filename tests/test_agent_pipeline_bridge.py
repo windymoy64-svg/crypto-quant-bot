@@ -229,6 +229,31 @@ def test_bridge_execution_stays_off_by_default(tmp_path: Path) -> None:
     assert result["entries"][0]["result"]["execution"] is None
 
 
+def test_live_ready_requires_verified_full_paper_parity(tmp_path: Path) -> None:
+    coordinator = _coordinator(execute=True)
+    coordinator.executor_agent.live = True
+    coordinator.executor_agent.paper_parity_verified = False
+    config = AgentPipelineRuntimeConfig.from_dict({
+        "enabled": True,
+        "execute_decisions": True,
+        "allow_live_orders": True,
+        "output_path": str(tmp_path / "pipeline.json"),
+        "monitor_positions": False,
+    })
+
+    result = run_pipeline_bridge(
+        config=config,
+        scanner_results=[],
+        open_positions={},
+        market_data=_market_data_stub(),
+        coordinator=coordinator,
+    )
+
+    assert result["executor_mode"] == "live"
+    assert result["live_ready"] is False
+    assert result["live_blocker"] == "paper_parity_incomplete"
+
+
 def test_bridge_classifies_candle_fetch_error(tmp_path: Path) -> None:
     market_data = MagicMock()
     market_data.fetch_ohlcv.side_effect = TimeoutError("provider timed out")

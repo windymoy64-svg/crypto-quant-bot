@@ -274,25 +274,21 @@ class DashboardService:
         history: list[dict[str, Any]] = []
         for ev in events:
             etype = ev.get("type")
-            # Order History hanya berisi eksekusi yang menutup/mengurangi posisi
-            # (punya realized PnL). Event entry ("opened") tidak dimasukkan karena
+            # Order History hanya berisi posisi yang sudah tertutup penuh. Event
+            # partial TP/SL tidak menjadi baris terpisah karena satu posisi harus
+            # direpresentasikan sebagai satu completed trade.
+            # Event entry ("opened") tidak dimasukkan karena
             # posisi yang masih aktif sudah tampil di panel "Active Orders", dan
             # signal yang gagal entry ("ignored") memang bukan order tereksekusi.
-            if etype not in ("partial_close", "closed"):
+            if etype != "closed":
                 continue
             position = ev.get("position") if isinstance(ev.get("position"), dict) else {}
             side = str(position.get("side", ev.get("action", "-")) or "-").upper()
             pnl: float | None = None
-            if etype == "partial_close":
-                status = "PARTIAL"
-                qty = position.get("partial_size_closed", position.get("remaining_size", 0))
-                # PnL terealisasi dari partial exit ini.
-                pnl = position.get("partial_realized_pnl", position.get("realized_pnl_partial"))
-            else:  # closed
-                status = "CLOSED"
-                qty = position.get("final_size_closed", position.get("size", 0))
-                # PnL total posisi saat ditutup (mencakup semua partial + final).
-                pnl = position.get("realized_pnl", position.get("final_realized_pnl"))
+            status = "CLOSED"
+            qty = position.get("size", position.get("final_size_closed", 0))
+            # PnL total posisi saat ditutup (mencakup semua partial + final).
+            pnl = position.get("realized_pnl", position.get("final_realized_pnl"))
             # Modal = kapital saat entry (harga entry x ukuran posisi awal).
             entry_price = position.get("entry")
             entry_size = position.get("size")
@@ -308,17 +304,14 @@ class DashboardService:
                     "side": side,
                     "status": status,
                     "quantity": qty,
-                    "price": ev.get("price"),
+                    # Tampilan completed trade memakai harga entry; TP/SL/exit
+                    # tidak dihitung sebagai order history terpisah.
+                    "price": entry_price,
                     "entry": entry_price,
                     "modal": modal,
                     "pnl": pnl,
                     "reason": ev.get("reason"),
-                    "close_scope": ev.get("close_scope", "partial" if etype == "partial_close" else "full"),
-                    "close_label": ev.get(
-                        "close_label",
-                        f"{'Partial' if etype == 'partial_close' else 'Full'} close — "
-                        f"{str(ev.get('reason') or 'unknown').replace('_', ' ')}",
-                    ),
+                    "close_scope": "full",
                     "update_time": ev.get("timestamp"),
                 }
             )

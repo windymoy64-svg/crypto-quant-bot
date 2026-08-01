@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import logging
 import signal
 import time
 from datetime import UTC, datetime
@@ -45,6 +46,9 @@ from app.learning_agent.runtime import (
     LearningRecorderConfig,
     build_recorder_if_enabled,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def release_unused_memory() -> None:
@@ -367,8 +371,12 @@ def build_runtime_agent_coordinator(
     try:
         trading = load_trading_preferences(exchange=exchange)
         leverage = trading.leverage or 1
+        target_margin_percent = trading.target_margin_percent
+        target_risk_reward = trading.target_risk_reward
     except Exception:
         leverage = 1
+        target_margin_percent = None
+        target_risk_reward = None
     adapter = BitunixFuturesExecutorAdapter(
         BitunixCredentials(credentials.api_key, credentials.api_secret),
         safety_gate=BitunixLiveSafetyGate(
@@ -380,9 +388,21 @@ def build_runtime_agent_coordinator(
         blocked_entry_symbols=pending_entry_symbols,
     )
     if network_enabled and config.allow_live_orders and exchange_positions:
-        adapter.reconcile_take_profits(
+        reconciliation = adapter.reconcile_take_profits(
             exchange_positions, timestamp=datetime.now(tz=UTC).isoformat(),
         )
+        for result in reconciliation:
+            log = logger.info if result.status != "REJECTED" else logger.error
+            log(
+                "Bitunix TP reconciliation symbol=%s role=%s status=%s "
+                "quantity=%s order_id=%s reason=%s",
+                result.symbol,
+                result.meta.get("role", "take_profit"),
+                result.status,
+                result.requested_quantity,
+                result.order_id,
+                result.reason,
+            )
     balance = 10_000.0
     if network_enabled:
         balance = adapter.available_balance("USDT")
@@ -390,11 +410,74 @@ def build_runtime_agent_coordinator(
         executor_agent=ExecutorAgent(
             balance=balance,
             leverage=leverage,
+            target_margin_percent=target_margin_percent,
+            target_risk_reward=target_risk_reward,
             live=True,
             exchange_adapter=adapter,
+            # Fail closed: live currently lacks the complete paper lifecycle
+            # (three-stage TP, BE/trailing and paper Decision EXIT gates).
+            paper_parity_verified=False,
         ),
         **llm_kwargs,
     )
+
+
+def reconcile_live_take_profits_at_startup(runtime_config: dict[str, object]) -> None:
+    """Protect existing Bitunix positions before the first market scan.
+
+    The normal agent bridge also reconciles queued TP1 plans, but it runs only
+    after market scanning. Startup protection must not wait for a slow scan.
+    """
+
+    execution = load_execution_preferences()
+    portfolio = load_portfolio_preferences()
+    agent_config = AgentPipelineRuntimeConfig.from_dict(
+        runtime_config.get("agent_pipeline")
+        if isinstance(runtime_config.get("agent_pipeline"), dict)
+        else None
+    )
+    exchange = str(portfolio.active_execution_exchange or "").lower()
+    if (
+        execution.mode != "live"
+        or not execution.network_enabled
+        or not execution.live_confirmed
+        or exchange != "bitunix"
+        or not agent_config.enabled
+        or not agent_config.allow_live_orders
+    ):
+        return
+
+    credentials = load_exchange_credentials(exchange="bitunix")
+    if credentials is None or not credentials.is_configured:
+        return
+    from app.dashboard.routes.multi_portfolio import _load_bitunix_details
+
+    details = _load_bitunix_details(credentials.api_key, credentials.api_secret)
+    # Include protected positions too so the adapter can prune stale local TP
+    # queues without submitting duplicate exchange orders.
+    positions = [
+        position for position in details.get("positions", []) or []
+        if isinstance(position, dict)
+    ]
+    if not positions:
+        return
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials(credentials.api_key, credentials.api_secret),
+        safety_gate=BitunixLiveSafetyGate(
+            enabled=True, dry_run=False, confirm_live=True,
+        ),
+    )
+    results = adapter.reconcile_take_profits(
+        positions, timestamp=datetime.now(tz=UTC).isoformat(),
+    )
+    for result in results:
+        log = logger.info if result.status != "REJECTED" else logger.error
+        log(
+            "Bitunix startup TP reconciliation symbol=%s status=%s quantity=%s "
+            "order_id=%s reason=%s",
+            result.symbol, result.status, result.requested_quantity,
+            result.order_id, result.reason,
+        )
 
 def write_scan_outputs(
     results: list[dict[str, object]],
@@ -1075,11 +1158,12 @@ def run_once(
                             open_positions_map[symbol] = {
                                 **pos,
                                 "side": (
-                                    "SELL" if str(pos.get("side", "")).upper() == "SHORT"
+                                    "SELL" if str(pos.get("side", "")).upper() in {"SHORT", "SELL"}
                                     else "BUY"
                                 ),
                                 "remaining_size": pos.get("quantity"),
                             }
+                            pending_entry_symbols.add(symbol)
                     for order in details.get("open_orders", []) or []:
                         if not isinstance(order, dict):
                             continue
@@ -1347,6 +1431,12 @@ def main() -> None:
     args = parser.parse_args()
 
     runtime_config = load_json(args.config)
+    try:
+        reconcile_live_take_profits_at_startup(runtime_config)
+    except Exception:
+        # Keep the scanner alive, but emit a loud error: existing SL remains
+        # exchange-side while TP reconciliation retries in the agent bridge.
+        logger.exception("Bitunix startup TP reconciliation failed")
     interval_seconds = int(runtime_config.get("interval_seconds", 60))
     market_data_cache: dict[tuple[str, bool], MarketDataService] = {}
     stop_requested = False

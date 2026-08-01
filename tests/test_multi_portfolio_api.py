@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -274,6 +275,70 @@ def test_bitunix_pending_order_normalization_includes_live_fields() -> None:
     assert order["created_at"].endswith("+00:00")
 
 
+def test_bitunix_filled_market_order_normalizes_price_margin_pnl_and_reason() -> None:
+    order = multi_route._normalize_bitunix_order({
+        "orderId": "o1", "symbol": "LINKUSDT", "side": "BUY",
+        "orderType": "MARKET", "status": "FILLED", "price": "MARKET",
+        "qty": "1.44", "tradeQty": "1.44", "dealAvgPrice": "8.25",
+        "reduceOnly": True, "leverage": 25,
+        "realizedPNL": "0.02", "fee": "0.004",
+    })
+
+    assert order["price"] == "8.25"
+    assert order["quantity"] == "1.44"
+    assert order["notional"] == pytest.approx(11.88)
+    assert order["modal"] == pytest.approx(0.4752)
+    assert order["net_pnl"] == pytest.approx(0.016)
+    assert order["reason"] == "position_reduced"
+
+
+def test_bitunix_order_history_restores_exact_bot_close_reason() -> None:
+    order = multi_route._normalize_bitunix_order(
+        {
+            "orderId": "exit-123", "symbol": "BTCUSDT", "side": "SELL",
+            "orderType": "MARKET", "status": "FILLED", "qty": "0.1",
+            "tradeQty": "0.1", "dealAvgPrice": "101", "reduceOnly": True,
+        },
+        {
+            "exit-123": {
+                "role": "exit", "reason": "choch_bearish_against_long",
+                "position_id": "position-1",
+            }
+        },
+    )
+
+    assert order["reason"] == "choch_bearish_against_long"
+    assert order["reason_source"] == "bot_order_metadata"
+    assert order["close_scope"] == "full"
+    assert order["close_label"] == "Full close — choch bearish against long"
+
+
+def test_bitunix_entry_metadata_is_not_used_as_close_reason() -> None:
+    order = multi_route._normalize_bitunix_order(
+        {
+            "orderId": "entry-123", "symbol": "BTCUSDT", "side": "BUY",
+            "status": "FILLED", "qty": "0.1", "tradeQty": "0.1",
+            "dealAvgPrice": "100", "reduceOnly": False,
+        },
+        {"entry-123": {"role": "entry", "reason": "entry"}},
+    )
+
+    assert order["reason"] == "entry_filled"
+    assert order["reason_source"] == "bitunix_order_lifecycle"
+    assert order["close_label"] is None
+
+
+def test_bitunix_order_history_deduplicates_same_order_id() -> None:
+    rows = multi_route._deduplicate_orders([
+        {"exchange": "bitunix", "order_id": "1", "updated_at": "2026-01-01"},
+        {"exchange": "bitunix", "order_id": "1", "updated_at": "2026-01-02"},
+        {"exchange": "bitunix", "order_id": "2", "updated_at": "2026-01-01"},
+    ])
+
+    assert len(rows) == 2
+    assert next(row for row in rows if row["order_id"] == "1")["updated_at"] == "2026-01-02"
+
+
 def test_multi_portfolio_keeps_healthy_exchange_when_other_exchange_fails(
     client: TestClient,
     isolated_store: SecretsStore,
@@ -446,6 +511,148 @@ def test_bitunix_private_get_is_signed_and_read_only(
     headers = {str(key).lower(): value for key, value in captured["headers"].items()}
     assert headers.get("api-key") == "key"
     assert headers.get("sign")
+
+
+def test_bitunix_position_normalization_preserves_attached_tp_sl() -> None:
+    position = multi_route._normalize_bitunix_position({
+        "symbol": "DOGEUSDT",
+        "side": "SHORT",
+        "qty": "80",
+        "avgOpenPrice": "0.08948",
+        "tpPrice": "0.08700",
+        "slPrice": "0.09100",
+        "ctime": 1691382137448,
+    })
+
+    assert position["take_profit"] == "0.08700"
+    assert position["stop_loss"] == "0.09100"
+    assert position["opened_at"].endswith("+00:00")
+
+
+def test_bitunix_position_derives_mark_price_from_exchange_unrealized_pnl() -> None:
+    position = multi_route._normalize_bitunix_position({
+        "symbol": "BNBUSDT", "side": "BUY", "qty": "0.07",
+        "avgOpenPrice": "593.24", "markPrice": None,
+        "unrealizedPNL": "-0.2921",
+    })
+
+    assert position["mark_price"] == pytest.approx(589.0671428571)
+
+
+def test_bitunix_pending_tpsl_is_attached_to_position() -> None:
+    positions = [{"position_id": "p1", "symbol": "DOGEUSDT"}]
+    multi_route._attach_bitunix_position_tpsl(positions, [{
+        "positionId": "p1", "symbol": "DOGEUSDT",
+        "tpPrice": "0.087", "slPrice": "0.091",
+    }])
+
+    assert positions[0]["take_profit"] == "0.087"
+    assert positions[0]["stop_loss"] == "0.091"
+    assert positions[0]["take_profit_order_count"] == 1
+    assert positions[0]["stop_loss_order_count"] == 1
+
+
+def test_bitunix_tpsl_falls_back_to_symbol_when_order_omits_position_id() -> None:
+    positions = [{"position_id": "p1", "symbol": "DOGE/USDT"}]
+
+    multi_route._attach_bitunix_position_tpsl(positions, [{
+        "symbol": "DOGEUSDT",
+        "takeProfit": {"price": "0.087"},
+        "stopLoss": {"slTriggerPrice": "0.091"},
+    }])
+
+    assert positions[0]["take_profit"] == "0.087"
+    assert positions[0]["stop_loss"] == "0.091"
+
+
+def test_bitunix_details_loads_all_read_only_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths: list[str] = []
+
+    def fake_get(_key, _secret, path, _params=None):
+        paths.append(path)
+        if "pending_positions" in path:
+            return {"positionList": [{"positionId": "p1", "symbol": "BTCUSDT", "qty": "1"}]}
+        if "tpsl" in path:
+            return {"orderList": [{"positionId": "p1", "tpPrice": "70000"}]}
+        if "history_positions" in path:
+            now_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
+            return {"positionList": [{
+                "positionId": "p0", "realizedPNL": "1.5", "mtime": now_ms,
+            }]}
+        return {"orderList": []}
+
+    monkeypatch.setattr(multi_route, "_bitunix_private_get", fake_get)
+
+    details = multi_route._load_bitunix_details("key", "secret")
+
+    assert len(paths) == 4
+    assert details["positions"][0]["take_profit"] == "70000"
+    assert details["order_history"] == []
+    assert details["closed_positions"][0]["net_pnl"] == pytest.approx(1.5)
+    assert details["warnings"] == []
+
+
+def test_closed_position_history_is_current_session_one_row_with_bot_reason() -> None:
+    positions = [
+        {
+            "position_id": "today-1", "symbol": "XRPUSDT", "side": "SHORT",
+            "quantity": "4.6", "entry_price": "1.0644", "leverage": "25",
+            "realized_pnl": 0.03, "closed_at": "2026-08-01T01:17:18+00:00",
+        },
+        {
+            "position_id": "yesterday-1", "symbol": "LINKUSDT", "side": "SHORT",
+            "quantity": "0.53", "entry_price": "8.16", "leverage": "25",
+            "realized_pnl": -0.03, "closed_at": "2026-07-31T23:59:59+00:00",
+        },
+    ]
+    metadata = {
+        "exit-order": {
+            "position_id": "today-1", "role": "exit",
+            "reason": "structure_invalidation", "created_at": "2026-08-01T01:17:17+00:00",
+        },
+        "entry-order": {
+            "position_id": "today-1", "role": "entry", "reason": "entry",
+        },
+    }
+
+    history = multi_route._build_closed_position_history(
+        positions, metadata, now=datetime(2026, 8, 1, 4, 0, tzinfo=UTC),
+    )
+
+    assert len(history) == 1
+    assert history[0]["position_id"] == "today-1"
+    assert history[0]["price"] == pytest.approx(1.0644)
+    assert history[0]["quantity"] == pytest.approx(4.6)
+    assert history[0]["modal"] == pytest.approx(1.0644 * 4.6 / 25)
+    assert history[0]["reason"] == "structure_invalidation"
+    assert history[0]["reason_source"] == "bot_order_metadata"
+
+
+def test_bitunix_closed_position_normalization_uses_net_pnl() -> None:
+    position = multi_route._normalize_bitunix_closed_position({
+        "positionId": "p1", "symbol": "BNBUSDT", "side": "LONG",
+        "maxQty": "0.07", "entryPrice": "593.24", "closePrice": "592.29",
+        "realizedPNL": "-0.0665", "fee": "0.01", "funding": "-0.002",
+        "ctime": 1691382137448, "mtime": 1691385737448,
+    })
+
+    assert position["status"] == "CLOSED"
+    assert position["net_pnl"] == pytest.approx(-0.0785)
+    assert position["closed_at"]
+
+
+@pytest.mark.parametrize("field", ["realizedPNL", "realizedPnl", "realized_pnl"])
+def test_bitunix_closed_position_preserves_positive_realized_pnl(field: str) -> None:
+    position = multi_route._normalize_bitunix_closed_position({
+        "positionId": "profit-1", "symbol": "FILUSDT", "side": "SHORT",
+        field: "1.55", "fee": "0.05", "funding": "0",
+        "ctime": 1691382137448, "mtime": 1691385737448,
+    })
+
+    assert position["realized_pnl"] == pytest.approx(1.55)
+    assert position["net_pnl"] == pytest.approx(1.50)
 
 
 def test_multi_portfolio_does_not_sum_testnet_with_mainnet(

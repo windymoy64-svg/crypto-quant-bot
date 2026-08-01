@@ -14,6 +14,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter
@@ -38,6 +40,7 @@ from app.settings.portfolio_preferences import load_portfolio_preferences
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["portfolio"])
+BITUNIX_ORDER_METADATA_PATH = "logs/bitunix_order_metadata.json"
 
 # ---------------------------------------------------------------------------
 # In-memory TTL cache untuk payload /api/portfolio/multi.
@@ -49,6 +52,7 @@ router = APIRouter(prefix="/api", tags=["portfolio"])
 # singkat menjaga dashboard tetap "near realtime" tanpa membebani exchange.
 # ---------------------------------------------------------------------------
 _MULTI_CACHE_TTL_SECONDS = 5.0
+_BITUNIX_DETAIL_TIMEOUT_SECONDS = 5.0
 _multi_cache_lock = threading.Lock()
 _multi_cache_payload: dict[str, Any] | None = None
 _multi_cache_expires_at: float = 0.0
@@ -65,6 +69,12 @@ def invalidate_multi_portfolio_cache() -> None:
     with _multi_cache_lock:
         _multi_cache_payload = None
         _multi_cache_expires_at = 0.0
+
+
+def cached_multi_portfolio() -> dict[str, Any] | None:
+    """Return the last snapshot without refreshing private exchange APIs."""
+    with _multi_cache_lock:
+        return _multi_cache_payload
 
 
 @router.get("/portfolio/multi")
@@ -106,6 +116,8 @@ def _build_multi_portfolio_payload() -> dict[str, Any]:
     )
     positions = [position for account in visible for position in account["positions"]]
     open_orders = [order for account in visible for order in account["open_orders"]]
+    order_history = [order for account in visible for order in account.get("order_history", [])]
+    closed_positions = [position for account in visible for position in account.get("closed_positions", [])]
     environments = {"testnet" if account.get("testnet") else "mainnet" for account in visible}
     aggregate_available = (
         sum(_as_float(account.get("available_balance_usdt")) for account in visible)
@@ -141,6 +153,8 @@ def _build_multi_portfolio_payload() -> dict[str, Any]:
         "open_orders_count": len(open_orders),
         "positions": positions,
         "open_orders": open_orders,
+        "order_history": order_history,
+        "closed_positions": closed_positions,
         "read_only": True,
         "aggregation_note": (
             "Balances are reported per exchange and currency; no cross-asset "
@@ -215,6 +229,8 @@ def _account_snapshot(exchange: str) -> dict[str, Any]:
             "balances": [],
             "positions": [],
             "open_orders": [],
+            "order_history": [],
+            "closed_positions": [],
             "warnings": [f"account_details: {exc}"],
         }
     balances = _balances(exchange, result)
@@ -229,6 +245,8 @@ def _account_snapshot(exchange: str) -> dict[str, Any]:
         "balances": balances,
         "positions": details.get("positions", []),
         "open_orders": details.get("open_orders", []),
+        "order_history": details.get("order_history", []),
+        "closed_positions": details.get("closed_positions", []),
         "warnings": details.get("warnings", []),
         "available_balance_usdt": _available_usdt(exchange, result, details),
         "account_balance_usdt": _account_balance_usdt(exchange, result, details),
@@ -325,39 +343,129 @@ def _load_binance_details(
 
 
 def _load_bitunix_details(api_key: str, api_secret: str) -> dict[str, Any]:
-    warnings: list[str] = []
-    positions: list[dict[str, Any]] = []
-    open_orders: list[dict[str, Any]] = []
-    try:
-        payload = _bitunix_private_get(
-            api_key,
-            api_secret,
-            "/api/v1/futures/position/get_pending_positions",
-        )
-        positions = [_normalize_bitunix_position(row) for row in _extract_rows(
-            payload, "positionList", "positions", "list"
-        )]
-    except RuntimeError as exc:
-        warnings.append(f"pending_positions: {exc}")
+    requests = {
+        "pending_positions": ("/api/v1/futures/position/get_pending_positions", None),
+        "pending_tpsl": ("/api/v1/futures/tpsl/get_pending_orders", {"limit": 100}),
+        "pending_orders": ("/api/v1/futures/trade/get_pending_orders", None),
+        "closed_positions": ("/api/v1/futures/position/get_history_positions", {"limit": 100}),
+    }
 
-    try:
-        payload = _bitunix_private_get(
-            api_key,
-            api_secret,
-            "/api/v1/futures/trade/get_pending_orders",
-        )
-        open_orders = [_normalize_bitunix_order(row) for row in _extract_rows(
-            payload, "orderList", "orders", "list"
-        )]
-    except RuntimeError as exc:
-        warnings.append(f"pending_orders: {exc}")
+    def fetch(item: tuple[str, tuple[str, dict[str, Any] | None]]) -> tuple[str, Any, str | None]:
+        name, (path, params) = item
+        try:
+            return name, _bitunix_private_get(api_key, api_secret, path, params), None
+        except RuntimeError as exc:
+            return name, None, str(exc)
+
+    # Kelima endpoint bersifat GET/read-only dan independen. Menjalankannya
+    # paralel mencegah latency dashboard menjadi jumlah seluruh timeout.
+    with ThreadPoolExecutor(max_workers=len(requests), thread_name_prefix="bitunix-read") as pool:
+        results = {name: (payload, error) for name, payload, error in pool.map(fetch, requests.items())}
+
+    warnings = [f"{name}: {error}" for name, (_, error) in results.items() if error]
+    positions = [_normalize_bitunix_position(row) for row in _extract_rows(
+        results["pending_positions"][0], "positionList", "positions", "list"
+    )]
+    _attach_bitunix_position_tpsl(
+        positions,
+        _extract_rows(results["pending_tpsl"][0], "orderList", "orders", "list"),
+    )
+    open_orders = [_normalize_bitunix_order(row) for row in _extract_rows(
+        results["pending_orders"][0], "orderList", "orders", "list"
+    )]
+    order_metadata = _load_bitunix_order_metadata()
+    closed_positions = [_normalize_bitunix_closed_position(row) for row in _extract_rows(
+        results["closed_positions"][0], "positionList", "positions", "list"
+    )]
+    closed_positions = _build_closed_position_history(closed_positions, order_metadata)
 
     return {
         "balances": [],
         "positions": positions,
         "open_orders": open_orders,
+        # Completed-trade history comes from closed_positions. Do not fetch or
+        # expose raw entry/TP/SL order history in the periodic dashboard poll.
+        "order_history": [],
+        "closed_positions": closed_positions,
         "warnings": warnings,
     }
+
+
+def _attach_bitunix_position_tpsl(
+    positions: list[dict[str, Any]], orders: list[dict[str, Any]]
+) -> None:
+    """Attach pending Bitunix TP/SL orders to their live positions."""
+    for position in positions:
+        position_id = str(position.get("position_id") or "")
+        symbol = _compact_symbol(position.get("symbol"))
+        matches = [order for order in orders if (
+            (position_id and str(order.get("positionId") or "") == position_id)
+            # Some Bitunix TPSL responses omit positionId even though the
+            # position endpoint supplies it. In that case symbol is the only
+            # stable read-only join key available.
+            or (
+                symbol
+                and not order.get("positionId")
+                and _compact_symbol(order.get("symbol")) == symbol
+            )
+        )]
+        tp = next((_bitunix_protection_price(row, "tp") for row in matches
+                   if _bitunix_protection_price(row, "tp") is not None), None)
+        sl = next((_bitunix_protection_price(row, "sl") for row in matches
+                   if _bitunix_protection_price(row, "sl") is not None), None)
+        if tp is not None:
+            position["take_profit"] = tp
+        if sl is not None:
+            position["stop_loss"] = sl
+        tp_orders = [row for row in matches if _bitunix_protection_price(row, "tp") is not None]
+        sl_orders = [row for row in matches if _bitunix_protection_price(row, "sl") is not None]
+        position["take_profit_order_count"] = len(tp_orders)
+        position["stop_loss_order_count"] = len(sl_orders)
+        position["take_profit_total_quantity"] = sum(
+            _as_float(row.get("tpQty", row.get("qty"))) for row in tp_orders
+        )
+        position["stop_loss_total_quantity"] = sum(
+            _as_float(row.get("slQty", row.get("qty"))) for row in sl_orders
+        )
+        entry = _as_float(position.get("entry_price"))
+        risk_distance = abs(entry - _as_float(position.get("stop_loss")))
+        position["actual_risk_reward"] = (
+            abs(entry - _as_float(position.get("take_profit"))) / risk_distance
+            if entry > 0 and risk_distance > 0 and _as_float(position.get("take_profit")) > 0
+            else None
+        )
+
+
+def _compact_symbol(value: Any) -> str:
+    return "".join(char for char in str(value or "").upper() if char.isalnum())
+
+
+def _bitunix_protection_price(row: dict[str, Any], kind: str) -> Any | None:
+    """Read TP/SL trigger price across Bitunix response variants."""
+    keys = (
+        ("tpPrice", "takeProfitPrice", "tpTriggerPrice")
+        if kind == "tp"
+        else ("slPrice", "stopLossPrice", "slTriggerPrice")
+    )
+    candidates = [row]
+    nested_keys = (
+        ("tpOrder", "takeProfit")
+        if kind == "tp"
+        else ("slOrder", "stopLoss")
+    )
+    for nested_key in nested_keys:
+        nested = row.get(nested_key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    for candidate in candidates:
+        for key in keys:
+            value = candidate.get(key)
+            if _as_float(value) > 0:
+                return value
+        # A nested protection object may expose its trigger simply as price.
+        if candidate is not row and _as_float(candidate.get("price")) > 0:
+            return candidate.get("price")
+    return None
 
 
 def _bitunix_private_get(
@@ -396,7 +504,7 @@ def _bitunix_private_get(
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=_BITUNIX_DETAIL_TIMEOUT_SECONDS) as response:
             raw = response.read().decode("utf-8")
             payload = json.loads(raw) if raw else {}
     except urllib.error.HTTPError as exc:
@@ -426,22 +534,84 @@ def _extract_rows(payload: Any, *keys: str) -> list[dict[str, Any]]:
 
 def _normalize_bitunix_position(row: dict[str, Any]) -> dict[str, Any]:
     quantity = _as_float(row.get("qty", row.get("positionQty", row.get("amount"))))
+    entry_price = _as_float(row.get("avgOpenPrice", row.get("entryPrice")))
+    unrealized_pnl = _as_float(row.get("unrealizedPNL", row.get("unrealizedPnl")))
+    side = str(row.get("side") or row.get("positionSide") or "").upper()
+    mark_price = row.get("markPrice")
+    # Bitunix currently returns markPrice=null for some live positions while
+    # unrealizedPNL remains fresh. Linear futures identity gives an exact
+    # fallback: PnL = (mark-entry) * qty * direction.
+    if _as_float(mark_price) <= 0 and entry_price > 0 and abs(quantity) > 0:
+        direction = -1 if side in {"SHORT", "SELL"} else 1
+        mark_price = entry_price + (unrealized_pnl / (abs(quantity) * direction))
+    take_profit = row.get("tpPrice", row.get("takeProfitPrice"))
+    stop_loss = row.get("slPrice", row.get("stopLossPrice"))
+    risk_distance = abs(entry_price - _as_float(stop_loss))
+    actual_risk_reward = (
+        abs(entry_price - _as_float(take_profit)) / risk_distance
+        if risk_distance > 0 and _as_float(take_profit) > 0
+        else None
+    )
     return {
         "exchange": "bitunix",
         "position_id": row.get("positionId"),
         "symbol": row.get("symbol"),
-        "side": str(row.get("side") or row.get("positionSide") or "").upper(),
+        "side": side,
+        # A live position is one executed trade.  Preserve its exchange open
+        # time so dashboard KPIs never have to infer entries from order
+        # history (which also contains closes, TP/SL and duplicate updates).
+        "opened_at": _millis_to_iso(row.get("ctime", row.get("createdTime"))),
         "quantity": abs(quantity),
         "entry_price": row.get("avgOpenPrice", row.get("entryPrice")),
-        "mark_price": row.get("markPrice"),
+        "mark_price": mark_price,
         "unrealized_pnl": row.get("unrealizedPNL", row.get("unrealizedPnl")),
         "leverage": row.get("leverage"),
         "liquidation_price": row.get("liqPrice", row.get("liquidationPrice")),
         "margin_type": row.get("marginMode", row.get("marginType")),
+        # Bitunix returns attached position protection on the position row.
+        # Preserve it for Active Orders instead of relying on pending orders:
+        # attached TP/SL are not necessarily exposed as standalone orders.
+        "take_profit": take_profit,
+        "stop_loss": stop_loss,
+        "actual_risk_reward": actual_risk_reward,
     }
 
 
-def _normalize_bitunix_order(row: dict[str, Any]) -> dict[str, Any]:
+def _normalize_bitunix_order(
+    row: dict[str, Any], order_metadata: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    status = str(row.get("status") or "").strip().rstrip("_").upper()
+    requested_quantity = row.get("qty", row.get("quantity"))
+    executed_quantity = row.get("tradeQty", row.get("dealVolume", row.get("filledQty")))
+    fill_price = next((value for value in (
+        row.get("dealAvgPrice"), row.get("avgPrice"), row.get("averagePrice"),
+        row.get("tradePrice"), row.get("filledPrice"), row.get("fillPrice"),
+        row.get("price"),
+    ) if _as_float(value) > 0), None)
+    quantity_for_value = _as_float(executed_quantity) or _as_float(requested_quantity)
+    leverage = max(_as_float(row.get("leverage")), 1.0)
+    notional = _as_float(fill_price) * quantity_for_value
+    realized = _as_float(row.get("realizedPNL", row.get("realizedPnl")))
+    fee = _as_float(row.get("fee"))
+    reduce_only = bool(row.get("reduceOnly"))
+    metadata = (order_metadata or {}).get(str(row.get("orderId") or ""), {})
+    bot_role = str(metadata.get("role") or "")
+    bot_reason = str(metadata.get("reason") or "")
+    has_bot_close_reason = bool(
+        reduce_only
+        and bot_reason
+        and (bot_role == "exit" or bot_role == "stop_loss" or bot_role.startswith("take_profit_"))
+    )
+    if has_bot_close_reason:
+        reason = bot_reason
+    elif status in {"FILLED", "PART_FILLED", "PARTIAL"}:
+        reason = "position_reduced" if reduce_only else "entry_filled"
+    elif "CANCEL" in status:
+        reason = "order_cancelled"
+    elif "REJECT" in status or "FAIL" in status:
+        reason = "order_rejected"
+    else:
+        reason = "exchange_order"
     return {
         "exchange": "bitunix",
         "order_id": row.get("orderId"),
@@ -450,21 +620,167 @@ def _normalize_bitunix_order(row: dict[str, Any]) -> dict[str, Any]:
         "side": row.get("side"),
         "type": row.get("orderType", row.get("type")),
         "order_type": row.get("orderType", row.get("type")),
-        "status": str(row.get("status") or "").strip().rstrip("_"),
-        "price": row.get("price"),
-        "quantity": row.get("qty", row.get("quantity")),
-        "executed_quantity": row.get("tradeQty", row.get("dealVolume", row.get("filledQty"))),
-        "reduce_only": row.get("reduceOnly"),
+        "status": status,
+        "price": fill_price,
+        "average_price": fill_price,
+        "quantity": executed_quantity or requested_quantity,
+        "requested_quantity": requested_quantity,
+        "executed_quantity": executed_quantity,
+        "reduce_only": reduce_only,
         "leverage": row.get("leverage"),
         "margin_type": row.get("marginMode"),
         "position_mode": row.get("positionMode"),
         "take_profit": row.get("tpPrice"),
         "stop_loss": row.get("slPrice"),
-        "fee": row.get("fee"),
-        "realized_pnl": row.get("realizedPNL"),
+        "fee": fee,
+        "realized_pnl": realized,
+        "net_pnl": realized - fee if reduce_only else -fee,
+        "notional": notional if notional > 0 else None,
+        "modal": (notional / leverage) if notional > 0 else None,
         "created_at": _millis_to_iso(row.get("ctime")),
         "updated_at": _millis_to_iso(row.get("mtime")),
-        "reason": "pending_exchange_order",
+        "reason": reason,
+        "bot_role": bot_role or None,
+        "reason_source": "bot_order_metadata" if has_bot_close_reason else "bitunix_order_lifecycle",
+        "close_scope": "partial" if bot_role.startswith("take_profit_") else ("full" if bot_role == "exit" else None),
+        "close_label": (
+            f"Partial close — {bot_reason.replace('_', ' ')}"
+            if has_bot_close_reason and bot_role.startswith("take_profit_")
+            else f"Full close — {bot_reason.replace('_', ' ')}"
+            if has_bot_close_reason and bot_role in {"exit", "stop_loss"}
+            else None
+        ),
+    }
+
+
+def _load_bitunix_order_metadata() -> dict[str, dict[str, Any]]:
+    try:
+        with open(BITUNIX_ORDER_METADATA_PATH, encoding="utf-8") as file:
+            payload = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    rows = payload.get("orders") if isinstance(payload, dict) else None
+    if not isinstance(rows, dict):
+        return {}
+    return {
+        str(order_id): dict(metadata)
+        for order_id, metadata in rows.items()
+        if isinstance(metadata, dict)
+    }
+
+
+def _build_closed_position_history(
+    positions: list[dict[str, Any]], order_metadata: dict[str, dict[str, Any]],
+    *, now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Return one current-WIB-session row per fully closed exchange position.
+
+    Exchange order history contains entry, TP, SL, partial and exit orders. The
+    dashboard instead represents a completed trade, using entry economics from
+    position history and the exact bot exit reason correlated by position ID.
+    """
+    current = (now or datetime.now(tz=UTC)).astimezone(UTC)
+    session_start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    reasons_by_position: dict[str, dict[str, Any]] = {}
+    for metadata in order_metadata.values():
+        position_id = str(metadata.get("position_id") or "")
+        role = str(metadata.get("role") or "")
+        reason = metadata.get("reason")
+        if (
+            not position_id
+            or not reason
+            or (role not in {"exit", "stop_loss"} and not role.startswith("take_profit_"))
+        ):
+            continue
+        previous = reasons_by_position.get(position_id)
+        if previous is None or str(metadata.get("created_at") or "") >= str(previous.get("created_at") or ""):
+            reasons_by_position[position_id] = metadata
+
+    history: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for position in positions:
+        position_id = str(position.get("position_id") or "")
+        closed_at = _parse_iso_datetime(position.get("closed_at"))
+        if closed_at is None or closed_at < session_start or closed_at > current:
+            continue
+        dedupe_key = position_id or f"{position.get('symbol')}:{position.get('closed_at')}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        entry_price = _as_float(position.get("entry_price"))
+        quantity = abs(_as_float(position.get("quantity")))
+        leverage = max(_as_float(position.get("leverage")), 1.0)
+        metadata = reasons_by_position.get(position_id, {})
+        history.append({
+            **position,
+            "status": "CLOSED",
+            "price": entry_price or None,
+            "entry": entry_price or None,
+            "quantity": quantity,
+            "modal": (entry_price * quantity / leverage) if entry_price and quantity else None,
+            "pnl": position.get("realized_pnl"),
+            "reason": metadata.get("reason"),
+            "reason_source": "bot_order_metadata" if metadata else None,
+            "close_scope": "full",
+            "update_time": position.get("closed_at"),
+        })
+    return history
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _deduplicate_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the freshest copy of each exchange order ID."""
+    by_key: dict[str, dict[str, Any]] = {}
+    without_id: list[dict[str, Any]] = []
+    for order in orders:
+        order_id = str(order.get("order_id") or "")
+        if not order_id:
+            without_id.append(order)
+            continue
+        key = f"{order.get('exchange', '')}:{order_id}"
+        current = by_key.get(key)
+        if current is None or str(order.get("updated_at") or "") >= str(current.get("updated_at") or ""):
+            by_key[key] = order
+    return [*by_key.values(), *without_id]
+
+
+def _normalize_bitunix_closed_position(row: dict[str, Any]) -> dict[str, Any]:
+    # Bitunix has returned both realizedPNL and realizedPnl in different
+    # endpoint/client versions. Preserve the sign for Overview win/loss KPI.
+    realized = _as_float(
+        row.get("realizedPNL", row.get("realizedPnl", row.get("realized_pnl")))
+    )
+    fee = _as_float(row.get("fee"))
+    funding = _as_float(row.get("funding"))
+    return {
+        "exchange": "bitunix",
+        "position_id": row.get("positionId"),
+        "symbol": row.get("symbol"),
+        "side": str(row.get("side") or "").upper(),
+        "quantity": row.get("maxQty"),
+        "entry_price": row.get("entryPrice"),
+        "close_price": row.get("closePrice"),
+        "leverage": row.get("leverage"),
+        "margin_type": row.get("marginMode"),
+        "realized_pnl": realized,
+        "fee": fee,
+        "funding": funding,
+        "net_pnl": realized - fee + funding,
+        "opened_at": _millis_to_iso(row.get("ctime")),
+        "closed_at": _millis_to_iso(row.get("mtime")),
+        "status": "CLOSED",
+        "reason": "closed_position",
     }
 
 

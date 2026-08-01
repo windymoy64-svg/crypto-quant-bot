@@ -1034,14 +1034,10 @@
               sessionStart.getTime() + (24 * 60 * 60 * 1000)
             );
 
-            function inSession(item) {
-              const timestamp =
-                item.opened_at ??
-                item.closed_at ??
-                item.timestamp ??
-                item.exit_time ??
-                item.entry_time ??
-                item.updated_at;
+            function inSession(item, lifecycle = "exit") {
+              const timestamp = lifecycle === "open"
+                ? (item.opened_at ?? item.entry_time ?? item.timestamp ?? item.updated_at)
+                : (item.closed_at ?? item.exit_time ?? item.timestamp ?? item.updated_at);
 
               if (!timestamp) return false;
 
@@ -1069,7 +1065,7 @@
              * Wins/losses/breakeven: hanya dari posisi yang tertutup penuh
              * (butuh hasil PnL final untuk klasifikasi).
              */
-            const sessionClosed = closedTrades.filter(inSession);
+            const sessionClosed = closedTrades.filter(item => inSession(item, "exit"));
 
             let wins = 0;
             let losses = 0;
@@ -1090,13 +1086,11 @@
 
             /*
              * Trade Today = jumlah posisi yang DIBUKA (entry) dalam sesi WIB.
-             * Fallback ke jumlah posisi tertutup jika `opened_trades` kosong
-             * (mis. server versi lama belum mengirim field ini).
+             * Jangan fallback ke order/close count: empty adalah hasil valid
+             * dan order history live juga memuat TP/SL serta partial close.
              */
-            const sessionOpens = openedTrades.filter(inSession);
-            const totalTrades = sessionOpens.length > 0
-              ? sessionOpens.length
-              : (wins + losses + breakeven);
+            const sessionOpens = openedTrades.filter(item => inSession(item, "open"));
+            const totalTrades = sessionOpens.length;
 
             /*
              * Profit Today: seluruh realized PnL dalam sesi WIB, termasuk
@@ -1105,7 +1099,7 @@
              */
             let sessionProfit = 0;
             realizedExits.forEach(exit => {
-              if (!inSession(exit)) return;
+              if (!inSession(exit, "exit")) return;
               const pnl = toPnl(exit);
               if (!Number.isFinite(pnl)) return;
               sessionProfit += pnl;
@@ -1323,22 +1317,43 @@
           // Bangun objek mirip /api/paper dari payload /api/portfolio/multi
           // supaya panel Overview (KPI, Live Signal, P&L Stream) menampilkan
           // data akun real (Bitunix) ketika execution mode = live/dry-run dan
-          // akun real terkoneksi. Trade history real belum tersedia -> KPI
-          // harian (Trade/Profit/Winrate) menampilkan 0, bukan angka paper.
+          // akun real terkoneksi. KPI trade bersumber dari lifecycle posisi real.
           function realSourceFromMulti(multi){
             const positions = Array.isArray(multi?.positions)
               ? multi.positions.map(normalizeRealPosition)
               : [];
             const balance = Number(multi?.account_balance_usdt ?? multi?.available_balance_usdt ?? 0);
             const equity = Number(multi?.equity_usdt ?? balance);
+            // Jangan infer closed trade dari reduceOnly: Bitunix tidak selalu
+            // menandainya pada semua jalur close. History position adalah
+            // sumber otoritatif untuk satu hasil trade yang sudah selesai.
+            const exits = Array.isArray(multi?.closed_positions)
+              ? multi.closed_positions.map(position => ({
+                  ...position,
+                  // KPI Overview mengikuti Realized PNL Bitunix. Net PnL
+                  // setelah fee/funding tetap tersedia di row untuk audit,
+                  // tetapi tidak boleh mengubah trade profit menjadi loss.
+                  pnl: Number(position.realized_pnl ?? position.net_pnl ?? 0),
+                }))
+              : [];
+            // Satu positionId = satu trade.  Gabungkan posisi yang sudah
+            // closed dan yang masih open, lalu dedupe. Jangan memakai filled
+            // orders: satu posisi dapat memiliki entry, TP, SL dan partials.
+            const openedByPosition = new Map();
+            [...exits, ...positions].forEach((position, index) => {
+              const key = String(position?.position_id ||
+                `${position?.exchange || "live"}:${position?.symbol || ""}:${position?.side || ""}:${position?.opened_at || index}`);
+              if (!openedByPosition.has(key)) openedByPosition.set(key, position);
+            });
+            const opened = [...openedByPosition.values()].filter(position => position?.opened_at);
             return {
               balance: Number.isFinite(balance) ? balance : 0,
               equity: Number.isFinite(equity) ? equity : (Number.isFinite(balance) ? balance : 0),
               open_positions: positions,
-              fills: [],
-              trades: [],
-              realized_exits: [],
-              opened_trades: [],
+              fills: exits,
+              trades: exits,
+              realized_exits: exits,
+              opened_trades: opened,
             };
           }
 

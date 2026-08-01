@@ -126,6 +126,29 @@ def test_bitunix_bulk_tickers_feed_prefilter_and_breadth() -> None:
     assert compute_market_breadth(snapshots)["tickers_count"] == 2
 
 
+def test_bitunix_selected_tickers_ignore_invalid_symbols_without_blocking_valid() -> None:
+    client = PublicHttpExchangeClient("bitunix")
+    captured = {}
+
+    def fake_get(_url, params):
+        captured.update(params)
+        return {"code": 0, "data": [
+            {"symbol": "BNBUSDT", "lastPrice": "591.76", "markPrice": "591.82"},
+        ]}
+
+    client._get_json = fake_get  # type: ignore[method-assign]
+
+    tickers = client.fetch_tickers(["U/USDT", "BNBUSDT", "EWYB/USDT"])
+
+    assert captured["symbols"] == "UUSDT,BNBUSDT,EWYBUSDT"
+    assert tickers == {
+        "BNBUSDT": {
+            "symbol": "BNBUSDT", "bid": 591.76, "ask": 591.76,
+            "last": 591.76, "mark": 591.82, "volume": 0.0,
+        }
+    }
+
+
 def test_bitunix_openapi_blocklist_excludes_known_unsupported_pair(
     tmp_path: Path,
 ) -> None:

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 import time
 import urllib.error
@@ -53,6 +54,9 @@ BITUNIX_CHANGE_LEVERAGE_PATH = "/api/v1/futures/account/change_leverage"
 BITUNIX_TPSL_PLACE_PATH = "/api/v1/futures/tpsl/place_order"
 BITUNIX_OPENAPI_BLOCKLIST_PATH = Path("logs/bitunix_openapi_unsupported.json")
 BITUNIX_PENDING_TP_PATH = Path("logs/bitunix_pending_take_profits.json")
+BITUNIX_ORDER_METADATA_PATH = Path("logs/bitunix_order_metadata.json")
+TP1_TRAILING_STRATEGY = "tp1_partial_trailing_v1"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -100,6 +104,7 @@ class BitunixFuturesExecutorAdapter:
         leverage: int | None = None,
         blocked_entry_symbols: set[str] | None = None,
         pending_tp_path: Path | None = None,
+        order_metadata_path: Path | None = None,
     ) -> None:
         self._credentials = credentials
         self._safety_gate = safety_gate or BitunixLiveSafetyGate()
@@ -107,6 +112,13 @@ class BitunixFuturesExecutorAdapter:
         self._transport = transport  # optional callable(url, headers, body) -> dict
         self._leverage = int(leverage) if leverage is not None else None
         self._pending_tp_path = pending_tp_path or BITUNIX_PENDING_TP_PATH
+        self._order_metadata_path = order_metadata_path or (
+            pending_tp_path.with_name("bitunix_order_metadata.json")
+            if pending_tp_path is not None
+            else BITUNIX_ORDER_METADATA_PATH
+            if transport is None
+            else None
+        )
         self._blocked_entry_symbols = {
             _canonical_symbol(symbol) for symbol in (blocked_entry_symbols or set())
         }
@@ -208,7 +220,7 @@ class BitunixFuturesExecutorAdapter:
         stop = next((item for item in orders if item.meta.get("role") == "stop_loss"), None)
         take_profits = [
             item for item in orders
-            if str(item.meta.get("role", "")).startswith("take_profit_")
+            if item.meta.get("role") == "take_profit_1"
         ]
         if stop is None or stop.stop_price is None or stop.stop_price <= 0:
             return [
@@ -288,7 +300,7 @@ class BitunixFuturesExecutorAdapter:
     def reconcile_take_profits(
         self, positions: list[dict[str, Any]], *, timestamp: str,
     ) -> list[ExecutionResult]:
-        """Create queued TP1/TP2/TP3 after Bitunix exposes a positionId."""
+        """Create the queued 40% TP1 after Bitunix exposes a positionId."""
 
         pending = self._load_pending_take_profits()
         if not pending:
@@ -301,9 +313,36 @@ class BitunixFuturesExecutorAdapter:
 
         results: list[ExecutionResult] = []
         remaining: list[dict[str, Any]] = []
-        for plan in pending:
+        # Repeated scanner decisions can queue several plans before Bitunix
+        # exposes the positionId. For one aggregated exchange position only the
+        # newest matching TP1 plan is valid; submitting every queued copy would
+        # create multiple exits for the same position.
+        newest_matching_index: dict[tuple[str, str], int] = {}
+        for index, plan in enumerate(pending):
+            if plan.get("strategy") != TP1_TRAILING_STRATEGY:
+                continue
+            key = (
+                _canonical_symbol(plan.get("symbol")),
+                str(plan.get("position_side") or "").upper(),
+            )
+            candidates = by_symbol.get(key[0], [])
+            if any(
+                not key[1]
+                or _canonical_position_side(row.get("side")) == key[1]
+                for row in candidates
+            ):
+                newest_matching_index[key] = index
+
+        for plan_index, plan in enumerate(pending):
+            # Legacy 30/30/40 plans cannot be safely joined to an aggregated
+            # Bitunix position by symbol alone. Preserve them for audit but do
+            # not risk creating stale TP2/TP3 orders on a current live position.
+            if plan.get("strategy") != TP1_TRAILING_STRATEGY:
+                remaining.append(plan)
+                continue
             symbol = _canonical_symbol(plan.get("symbol"))
             expected_side = str(plan.get("position_side") or "").upper()
+            plan_key = (symbol, expected_side)
             candidates = by_symbol.get(symbol, [])
             position = next((
                 row for row in candidates
@@ -312,21 +351,51 @@ class BitunixFuturesExecutorAdapter:
             if position is None:
                 remaining.append(plan)
                 continue
+            if _float(position.get("take_profit")) > 0:
+                # Exchange already confirms protection for this live position.
+                # Remove all matching modern queue copies without submitting
+                # another TPSL order.
+                continue
+            if newest_matching_index.get(plan_key) != plan_index:
+                # Stale duplicate for the currently active position. Drop it;
+                # only the latest plan below may create an exchange-side TP.
+                continue
             position_id = str(position.get("position_id") or "")
             queued = [
                 dict(raw) for raw in plan.get("take_profits", [])
-                if isinstance(raw, dict)
+                if isinstance(raw, dict) and raw.get("role") == "take_profit_1"
             ]
             unsent: list[dict[str, Any]] = []
             for index, raw in enumerate(queued):
+                price = float(raw["price"])
+                target_rr = _float(raw.get("target_risk_reward"))
+                entry_price = _float(
+                    position.get("entry_price", position.get("entry"))
+                )
+                stop_loss = _float(position.get("stop_loss"))
+                if target_rr > 0 and entry_price > 0 and stop_loss > 0:
+                    risk_distance = abs(entry_price - stop_loss)
+                    price = (
+                        entry_price + (target_rr * risk_distance)
+                        if expected_side == "LONG"
+                        else entry_price - (target_rr * risk_distance)
+                    )
                 order = OrderRequest(
                     symbol=symbol,
                     side=str(raw["side"]).upper(),
                     order_type="LIMIT",
                     quantity=float(raw["quantity"]),
-                    price=float(raw["price"]),
+                    price=price,
                     reduce_only=True,
-                    meta={"role": raw["role"], "position_id": position_id},
+                    meta={
+                        "role": raw["role"], "position_id": position_id,
+                        "target_risk_reward": target_rr or None,
+                        "tp_level_source": (
+                            "configured_rr_exchange_fill"
+                            if target_rr > 0 and entry_price > 0 and stop_loss > 0
+                            else "decision_plan"
+                        ),
+                    },
                 )
                 result = self._place_take_profit(order, position_id, timestamp)
                 results.append(result)
@@ -375,9 +444,11 @@ class BitunixFuturesExecutorAdapter:
             "entry_order_id": key,
             "symbol": _canonical_symbol(entry.symbol),
             "position_side": "LONG" if entry.side == "BUY" else "SHORT",
+            "strategy": TP1_TRAILING_STRATEGY,
             "take_profits": [{
                 "role": str(item.meta.get("role")), "side": item.side,
                 "quantity": item.quantity, "price": item.price,
+                "target_risk_reward": item.meta.get("target_risk_reward"),
             } for item in take_profits],
         })
         self._save_pending_take_profits(plans)
@@ -517,6 +588,19 @@ class BitunixFuturesExecutorAdapter:
                 requested=order.quantity,
             )
 
+        if order_id:
+            try:
+                self._record_order_metadata(order_id, order, timestamp)
+            except OSError:
+                # Metadata is observability only. An accepted exchange order
+                # must never be reported as failed because local persistence
+                # is temporarily unavailable.
+                logger.warning(
+                    "Could not persist Bitunix order metadata order_id=%s",
+                    order_id,
+                    exc_info=True,
+                )
+
         return ExecutionResult(
             status=status, order_id=order_id, symbol=order.symbol,
             side=order.side, order_type=order.order_type,
@@ -524,6 +608,40 @@ class BitunixFuturesExecutorAdapter:
             average_price=avg_price, timestamp=timestamp, reason="",
             meta={**order.meta, "raw": payload},
         )
+
+    def _record_order_metadata(
+        self, order_id: str, order: OrderRequest, timestamp: str,
+    ) -> None:
+        """Persist bot-owned reason/role for exact Bitunix order correlation."""
+
+        if self._order_metadata_path is None:
+            return
+        try:
+            payload = json.loads(self._order_metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        rows = payload.get("orders") if isinstance(payload, dict) else None
+        if not isinstance(rows, dict):
+            rows = {}
+        role = str(order.meta.get("role") or "")
+        reason = str(order.meta.get("reason") or role or "")
+        rows[str(order_id)] = {
+            "order_id": str(order_id),
+            "symbol": _canonical_symbol(order.symbol),
+            "role": role,
+            "reason": reason,
+            "position_id": str(order.meta.get("position_id") or ""),
+            "reduce_only": bool(order.reduce_only),
+            "created_at": timestamp,
+        }
+        # Keep the registry bounded while preserving insertion order.
+        rows = dict(list(rows.items())[-2000:])
+        self._order_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._order_metadata_path.with_suffix(
+            self._order_metadata_path.suffix + ".tmp"
+        )
+        temporary.write_text(json.dumps({"orders": rows}, indent=2), encoding="utf-8")
+        temporary.replace(self._order_metadata_path)
 
     def _reject(
         self, order: OrderRequest, timestamp: str, reason: str,

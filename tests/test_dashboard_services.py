@@ -25,7 +25,7 @@ def test_dashboard_service_market_portfolio_analytics_health_are_valid_objects()
     assert health["read_only"] is True
 
 
-def test_paper_order_history_labels_partial_and_full_close(monkeypatch) -> None:
+def test_paper_order_history_only_contains_fully_closed_position(monkeypatch) -> None:
     events = [
         {
             "type": "partial_close",
@@ -62,11 +62,9 @@ def test_paper_order_history_labels_partial_and_full_close(monkeypatch) -> None:
 
     history = dashboard_service._paper_order_history()
 
-    assert history[0]["status"] == "PARTIAL"
-    assert history[0]["close_scope"] == "partial"
-    assert history[0]["close_label"] == "Partial close — take profit 1"
-    assert history[0]["reason"] == "take_profit_1"
-    assert history[1]["status"] == "CLOSED"
-    assert history[1]["close_scope"] == "full"
-    assert history[1]["close_label"] == "Full close — trailing stop"
-    assert history[1]["reason"] == "trailing_stop"
+    assert len(history) == 1
+    assert history[0]["status"] == "CLOSED"
+    assert history[0]["close_scope"] == "full"
+    assert history[0]["reason"] == "trailing_stop"
+    assert history[0]["price"] == 100.0
+    assert history[0]["quantity"] == 1.0

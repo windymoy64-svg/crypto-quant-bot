@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.dashboard.services import dashboard_service, utc_now_iso
-from app.dashboard.routes.multi_portfolio import multi_portfolio
+from app.dashboard.routes.multi_portfolio import cached_multi_portfolio
 from app.dashboard.routes.agent import pipeline_snapshot, synchronized_snapshot
 from app.events.subscriber import subscribe
 from app.exchange.binance.stream import BinanceStreamCallbacks
@@ -232,7 +232,9 @@ class DashboardEventHub:
 
     def _open_position_symbols(self) -> tuple[list[str], str]:
         """Symbols that need live price ticks (paper + multi-portfolio)."""
-        symbols: list[str] = []
+        paper_symbols: list[str] = []
+        live_symbols: list[str] = []
+        symbols = paper_symbols
         seen: set[str] = set()
 
         def _add(raw: object) -> None:
@@ -252,16 +254,31 @@ class DashboardEventHub:
                         _add(row.get("symbol"))
 
         # Real / multi-account positions (same source as Overview P&L Stream).
-        try:
-            multi = multi_portfolio()
-        except Exception:
-            multi = None
+        # Price producer must never trigger slow private exchange requests.
+        # The HTTP portfolio endpoint refreshes this cache independently.
+        multi = cached_multi_portfolio()
         if isinstance(multi, dict):
+            seen = set()
+            live_exchanges: set[str] = set()
             for bucket in (multi.get("positions"), multi.get("open_orders")):
                 for row in bucket or []:
                     if isinstance(row, dict):
+                        symbols = live_symbols
                         _add(row.get("symbol"))
-            exchange = str(multi.get("active_execution_exchange") or "binance").lower()
+                        row_exchange = str(row.get("exchange") or "").lower()
+                        if row_exchange:
+                            live_exchanges.add(row_exchange)
+            # The execution preference can remain Binance while the only
+            # visible/live position belongs to Bitunix. Price source must
+            # follow the actual rows rendered in Active Orders.
+            if len(live_exchanges) == 1:
+                exchange = next(iter(live_exchanges))
+            else:
+                exchange = str(multi.get("active_execution_exchange") or "binance").lower()
+            # A connected real account takes precedence over stale paper
+            # symbols. In particular, invalid paper pairs must never delay a
+            # live Bitunix position's price update.
+            symbols = live_symbols or paper_symbols
         else:
             exchange = "binance"
 
@@ -273,13 +290,15 @@ class DashboardEventHub:
         if not symbols:
             return
         client = PublicHttpExchangeClient("bitunix", timeout_seconds=5)
-        for symbol in symbols:
-            try:
-                ticker = await asyncio.to_thread(client.fetch_ticker, symbol)
-                price = float(ticker.get("last") or 0)
-            except Exception:
-                logger.warning("Bitunix ticker refresh failed for %s", symbol, exc_info=True)
-                continue
+        try:
+            # One bulk call prevents an invalid/stale paper symbol from
+            # blocking every genuine live position for the full HTTP timeout.
+            tickers = await asyncio.to_thread(client.fetch_tickers, symbols)
+        except Exception:
+            logger.warning("Bitunix bulk ticker refresh failed", exc_info=True)
+            return
+        for symbol, ticker in tickers.items():
+            price = float(ticker.get("last") or 0)
             if price <= 0:
                 continue
             self._enqueue_latest({

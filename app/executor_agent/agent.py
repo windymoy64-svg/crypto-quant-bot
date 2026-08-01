@@ -24,6 +24,8 @@ from app.executor_agent.models import (
 DEFAULT_RISK_PERCENT = 1.0
 MAX_POSITION_SIZE_PERCENT = 15.0
 DEFAULT_LEVERAGE = 1
+TP1_PARTIAL_FRACTION = 0.40
+TP1_TRAILING_STRATEGY = "tp1_partial_trailing_v1"
 
 
 class ExecutorAgent:
@@ -38,15 +40,24 @@ class ExecutorAgent:
         risk_percent: float = DEFAULT_RISK_PERCENT,
         max_position_pct: float = MAX_POSITION_SIZE_PERCENT,
         leverage: int = DEFAULT_LEVERAGE,
+        target_margin_percent: float | None = None,
+        target_risk_reward: float | None = None,
         live: bool = False,
         exchange_adapter: Any = None,
+        paper_parity_verified: bool = False,
     ) -> None:
         self.balance = balance
         self.risk_percent = risk_percent
         self.max_position_pct = max_position_pct
         self.leverage = leverage
+        self.target_margin_percent = target_margin_percent
+        self.target_risk_reward = target_risk_reward
         self.live = live
         self._exchange = exchange_adapter
+        # Live entries must remain fail-closed until sizing, TP ladder, SL,
+        # breakeven, trailing, HOLD and Decision EXIT all share the paper
+        # lifecycle implementation. Existing-position EXIT remains available.
+        self.paper_parity_verified = paper_parity_verified
 
     def execute(
         self,
@@ -65,6 +76,10 @@ class ExecutorAgent:
         return self._error_report(decision, now, "unknown_action")
 
     def _execute_entry(self, decision: Decision, now: str) -> ExecutionReport:
+        if self.live and not self.paper_parity_verified:
+            return self._error_report(
+                decision, now, "live_entry_blocked_paper_parity_incomplete"
+            )
         plan = decision.entry_plan
         if plan is None:
             return self._error_report(decision, now, "no_entry_plan")
@@ -91,18 +106,29 @@ class ExecutorAgent:
             ),
         ]
 
-        # TP orders split 30/30/40
-        tp_fracs = [0.30, 0.30, 0.40]
-        tp_prices = [plan.take_profit_1, plan.take_profit_2, plan.take_profit_3]
-        for i, (frac, tp) in enumerate(zip(tp_fracs, tp_prices)):
-            if tp is None or tp <= 0:
-                continue
-            tp_qty = round(quantity * frac, 8)
+        # One exchange-side TP closes 40% of the initial position. The
+        # remaining 60% is intentionally left without TP2/TP3 so the existing
+        # HOLD/trailing lifecycle can manage trend continuation.
+        risk_distance = abs(plan.entry_price - plan.stop_loss)
+        tp1 = plan.take_profit_1
+        if self.target_risk_reward is not None and risk_distance > 0:
+            tp1 = (
+                plan.entry_price + (risk_distance * self.target_risk_reward)
+                if entry_side == "BUY"
+                else plan.entry_price - (risk_distance * self.target_risk_reward)
+            )
+        if tp1 is not None and tp1 > 0:
+            tp_qty = round(quantity * TP1_PARTIAL_FRACTION, 8)
             if tp_qty > 0:
                 orders.append(OrderRequest(
                     symbol=decision.symbol, side=sl_side, order_type="LIMIT",
-                    quantity=tp_qty, price=tp, reduce_only=True,
-                    meta={"role": f"take_profit_{i+1}"},
+                    quantity=tp_qty, price=tp1, reduce_only=True,
+                    meta={
+                        "role": "take_profit_1",
+                        "strategy": TP1_TRAILING_STRATEGY,
+                        "close_fraction": TP1_PARTIAL_FRACTION,
+                        "target_risk_reward": self.target_risk_reward,
+                    },
                 ))
 
         return self._finalize(decision, orders, now)
@@ -147,6 +173,10 @@ class ExecutorAgent:
     # ------------------------------------------------------------------
 
     def _calculate_quantity(self, plan: EntryPlan) -> float:
+        if self.target_margin_percent is not None:
+            target_margin = self.balance * (self.target_margin_percent / 100)
+            target_notional = target_margin * self.leverage
+            return round(target_notional / plan.entry_price, 8) if plan.entry_price > 0 else 0.0
         risk_amount = self.balance * (self.risk_percent / 100)
         risk_per_unit = abs(plan.entry_price - plan.stop_loss)
         if risk_per_unit <= 0:

@@ -24,16 +24,31 @@ def test_price_update_tidak_merebuild_tabel_active_orders() -> None:
     # Satu-satunya pemanggil renderActiveOrders adalah render() snapshot.
     assert js.count("renderActiveOrders(") == 2  # definisi + pemanggilan di render()
     # Patch surgical per-sel tetap dipertahankan.
-    assert "byId(`ao-price-${sym}`)" in js
-    assert "byId(`ao-pnl-${sym}`)" in js
+    assert "byId(`ao-price-${uiSym}`)" in js
+    assert "byId(`ao-pnl-${uiSym}`)" in js
 
 
 def test_real_exchange_pending_orders_feed_active_orders() -> None:
     js = _js()
 
-    assert "const pendingOrders=realConnected?list(p.multiPortfolio.open_orders)" in js
+    assert "const realSourceSelected=realConnected||Number(p.multiPortfolio?.accounts_configured??0)>0" in js
+    assert "const pendingOrders=realSourceSelected?list(p.multiPortfolio.open_orders)" in js
     assert "renderActiveOrders(positions,pendingOrders)" in js
     assert "renderActiveOrders(positions,p.paper?.pending_orders??[])" not in js
+
+
+def test_configured_real_exchange_never_falls_back_to_paper_history() -> None:
+    js = _js()
+
+    assert "const liveOrders=realSourceSelected?" in js
+    assert "closed_positions:list(p.multiPortfolio.closed_positions)" in js
+
+
+def test_closed_position_summary_is_the_only_live_order_history_source() -> None:
+    js = _js()
+
+    assert "function orderHistory(orders){ return list(orders?.closed_positions).length?" in js
+    assert 'list(orders?.order_history).filter(o=>String(o?.status||"").toUpperCase()==="CLOSED")' in js
 
 
 def test_bitunix_pending_orders_are_in_realtime_price_universe() -> None:
@@ -42,6 +57,19 @@ def test_bitunix_pending_orders_are_in_realtime_price_universe() -> None:
     assert 'multi.get("open_orders")' in websocket
     assert 'PublicHttpExchangeClient("bitunix"' in websocket
     assert '"source": "bitunix_public_ticker"' in websocket
+    assert "client.fetch_tickers, symbols" in websocket
+
+
+def test_realtime_price_source_follows_live_position_exchange() -> None:
+    websocket = Path("app/dashboard/websocket.py").read_text(encoding="utf-8")
+
+    assert 'row.get("exchange")' in websocket
+    assert "if len(live_exchanges) == 1:" in websocket
+    assert "exchange = next(iter(live_exchanges))" in websocket
+    assert "seen = set()" in websocket
+    assert "symbols = live_symbols or paper_symbols" in websocket
+    assert "multi = cached_multi_portfolio()" in websocket
+    assert "multi = multi_portfolio()" not in websocket
 
 
 def test_snapshot_orders_tidak_memakai_debounce_agresif() -> None:
@@ -80,6 +108,22 @@ def test_patcher_menjaga_posisi_scroll() -> None:
     assert 'keepScroll([node,node.querySelector(".ao-scroll"),cards]' in js
     # Order History: pemilik scroll `#live-orders` sendiri dan wrapper-nya.
     assert 'keepScroll([node,node.querySelector(".order-history-scroll")]' in js
+
+
+def test_order_history_shows_one_completed_trade_using_entry_values() -> None:
+    js = _js()
+
+    assert 'const dirLabel=`${isShort?"SHORT":"LONG"} CLOSED`' in js
+    assert "const price=Number(o.entry??o.entry_price??o.price??0)" in js
+    assert 'const status="CLOSED"' in js
+    # Samakan kolom PnL dengan realizedPNL Bitunix. Net PnL setelah fee/funding
+    # tetap tersedia sebagai fallback untuk sumber yang tidak punya realized PnL.
+    assert "const pnl=o.pnl??o.realized_pnl??o.net_pnl" in js
+    assert "Entry filled on Bitunix" not in js
+    assert "Exit filled on Bitunix" not in js
+    assert 'reason||"Reason bot tidak tersedia"' in js
+    assert "const rows=h.slice(0,100).map" in js
+    assert 'String(o.reason??o.close_reason??"").replace(/[_-]+/g," ")' in js
 
 
 def test_badge_leverage_mobile_bersebelahan_dengan_badge_arah() -> None:

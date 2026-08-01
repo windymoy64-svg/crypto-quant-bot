@@ -160,7 +160,9 @@ def test_executor_agent_uses_adapter_when_live() -> None:
     engine = MagicMock()
     engine.submit_order.return_value = _accepted_result()
     adapter = BinanceFuturesExecutorAdapter(engine)
-    executor = ExecutorAgent(live=True, exchange_adapter=adapter)
+    executor = ExecutorAgent(
+        live=True, exchange_adapter=adapter, paper_parity_verified=True,
+    )
 
     decision = Decision(
         action="ENTRY_BUY", symbol="BTC/USDT",
@@ -185,7 +187,9 @@ def test_executor_agent_recovers_when_adapter_raises() -> None:
         def place_order(self, order, *, timestamp):
             raise RuntimeError("boom")
 
-    executor = ExecutorAgent(live=True, exchange_adapter=BrokenAdapter())
+    executor = ExecutorAgent(
+        live=True, exchange_adapter=BrokenAdapter(), paper_parity_verified=True,
+    )
 
     decision = Decision(
         action="ENTRY_BUY", symbol="BTC/USDT",
