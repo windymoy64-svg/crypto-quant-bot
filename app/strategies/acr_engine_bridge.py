@@ -125,6 +125,17 @@ def _compute_swing_trailing(
     return candidate
 
 
+def compute_acr_trailing_stop(
+    position: dict[str, Any],
+    ltf_candles: list[Candle],
+    *,
+    buffer_pct: float = DEFAULT_TRAIL_BUFFER_PCT,
+) -> float | None:
+    """Pure shared paper/live ACR trailing target calculation."""
+
+    return _compute_swing_trailing(position, ltf_candles, buffer_pct)
+
+
 def apply_acr_trailing(
     position: dict[str, Any],
     ltf_candles: list[Candle],
@@ -219,6 +230,7 @@ __all__ = [
     "DEFAULT_TRAIL_BUFFER_PCT",
     "apply_acr_breakeven",
     "apply_acr_trailing",
+    "compute_acr_trailing_stop",
     "check_acr_invalidation",
 ]
 

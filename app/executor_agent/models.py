@@ -19,6 +19,11 @@ class PositionContext:
     quantity: float
     current_price: float | None = None
     position_id: str | None = None
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    leverage: float | None = None
+    lifecycle_version: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

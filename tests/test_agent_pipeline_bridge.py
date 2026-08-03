@@ -13,9 +13,12 @@ from app.agent_pipeline.bridge import (
     AgentPipelineRuntimeConfig,
     run_pipeline_bridge,
 )
+from app.agent_pipeline.coordinator import AgentPipelineConfig, AgentPipelineCoordinator
 from app.core.models import Candle
+from app.executor_agent.agent import ExecutorAgent
 from app.market.data_service import MarketDataResult
 from app.events.bus import event_bus
+from app.agent_pipeline.bridge import _position_context
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +42,20 @@ def test_conflict_policy_defaults_to_reject_and_validates_enum() -> None:
         AgentPipelineRuntimeConfig.from_dict(
             {"scanner_chart_conflict_policy": "ALLOW"}
         )
+
+
+def test_live_position_context_preserves_lifecycle_protection_fields() -> None:
+    context = _position_context({
+        "side": "SHORT", "remaining_size": 2, "current_price": 99,
+        "position_id": "p1", "entry_price": 100, "stop_loss": 103,
+        "take_profit": 94, "leverage": 5,
+        "lifecycle_version": "paper_live_lifecycle_v1",
+    })
+    assert context is not None
+    assert context.side == "SELL"
+    assert context.entry_price == 100
+    assert context.stop_loss == 103
+    assert context.lifecycle_version == "paper_live_lifecycle_v1"
 
 
 def _candle(i: int, base: float = 100.0) -> Candle:
@@ -230,9 +247,12 @@ def test_bridge_execution_stays_off_by_default(tmp_path: Path) -> None:
 
 
 def test_live_ready_requires_verified_full_paper_parity(tmp_path: Path) -> None:
-    coordinator = _coordinator(execute=True)
-    coordinator.executor_agent.live = True
-    coordinator.executor_agent.paper_parity_verified = False
+    coordinator = AgentPipelineCoordinator(
+        executor_agent=ExecutorAgent(
+            live=True, paper_parity_verified=False,
+        ),
+        config=AgentPipelineConfig(execute_decisions=True),
+    )
     config = AgentPipelineRuntimeConfig.from_dict({
         "enabled": True,
         "execute_decisions": True,

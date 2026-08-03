@@ -36,6 +36,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,7 @@ from app.executor_agent.models import (
     OrderRequest,
     OrderType,
 )
+from app.execution.lifecycle_contract import LIFECYCLE_VERSION, TP_ROLES
 
 
 BITUNIX_FUTURES_BASE = "https://fapi.bitunix.com"
@@ -52,10 +54,14 @@ BITUNIX_PLACE_ORDER_PATH = "/api/v1/futures/trade/place_order"
 BITUNIX_ACCOUNT_PATH = "/api/v1/futures/account"
 BITUNIX_CHANGE_LEVERAGE_PATH = "/api/v1/futures/account/change_leverage"
 BITUNIX_TPSL_PLACE_PATH = "/api/v1/futures/tpsl/place_order"
+BITUNIX_TPSL_PENDING_PATH = "/api/v1/futures/tpsl/get_pending_orders"
+BITUNIX_TPSL_MODIFY_PATH = "/api/v1/futures/tpsl/modify_order"
+BITUNIX_TPSL_CANCEL_PATH = "/api/v1/futures/tpsl/cancel_order"
 BITUNIX_OPENAPI_BLOCKLIST_PATH = Path("logs/bitunix_openapi_unsupported.json")
 BITUNIX_PENDING_TP_PATH = Path("logs/bitunix_pending_take_profits.json")
 BITUNIX_ORDER_METADATA_PATH = Path("logs/bitunix_order_metadata.json")
 TP1_TRAILING_STRATEGY = "tp1_partial_trailing_v1"
+SUPPORTED_TP_STRATEGIES = {TP1_TRAILING_STRATEGY, LIFECYCLE_VERSION}
 logger = logging.getLogger(__name__)
 
 
@@ -101,17 +107,24 @@ class BitunixFuturesExecutorAdapter:
         safety_gate: BitunixLiveSafetyGate | None = None,
         base_url: str = BITUNIX_FUTURES_BASE,
         transport: Any = None,
+        query_transport: Any = None,
         leverage: int | None = None,
         blocked_entry_symbols: set[str] | None = None,
         pending_tp_path: Path | None = None,
         order_metadata_path: Path | None = None,
+        lifecycle_store_path: Path | None = None,
     ) -> None:
         self._credentials = credentials
         self._safety_gate = safety_gate or BitunixLiveSafetyGate()
         self._base_url = base_url.rstrip("/")
         self._transport = transport  # optional callable(url, headers, body) -> dict
+        self._query_transport = query_transport
         self._leverage = int(leverage) if leverage is not None else None
         self._pending_tp_path = pending_tp_path or BITUNIX_PENDING_TP_PATH
+        self._lifecycle_store_path = lifecycle_store_path or (
+            pending_tp_path.with_name("bitunix_live_lifecycle.json")
+            if pending_tp_path is not None else Path("logs/bitunix_live_lifecycle.json")
+        )
         self._order_metadata_path = order_metadata_path or (
             pending_tp_path.with_name("bitunix_order_metadata.json")
             if pending_tp_path is not None
@@ -196,6 +209,153 @@ class BitunixFuturesExecutorAdapter:
             raise RuntimeError("available_balance_not_positive")
         return available
 
+    def pending_tpsl(
+        self, *, symbol: str | None = None, position_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read authoritative pending TP/SL orders from Bitunix."""
+
+        if not self._credentials.configured:
+            raise RuntimeError("credentials_missing")
+        params: dict[str, Any] = {"limit": 100}
+        if symbol:
+            params["symbol"] = symbol.replace("/", "").replace("-", "").upper()
+        if position_id:
+            params["positionId"] = str(position_id)
+        payload = self._private_get(BITUNIX_TPSL_PENDING_PATH, params)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(data, list):
+            rows = [dict(row) for row in data if isinstance(row, dict)]
+            return self._filter_tpsl_rows(
+                rows, symbol=symbol, position_id=position_id,
+            )
+        if isinstance(data, dict):
+            for key in ("orderList", "orders", "list"):
+                rows = data.get(key)
+                if isinstance(rows, list):
+                    return self._filter_tpsl_rows(
+                        [dict(row) for row in rows if isinstance(row, dict)],
+                        symbol=symbol, position_id=position_id,
+                    )
+        return []
+
+    @staticmethod
+    def _filter_tpsl_rows(
+        rows: list[dict[str, Any]], *, symbol: str | None, position_id: str | None,
+    ) -> list[dict[str, Any]]:
+        compact = _canonical_symbol(symbol) if symbol else ""
+        return [
+            row for row in rows
+            if (
+                not position_id
+                or str(row.get("positionId") or "") == str(position_id)
+            )
+            and (
+                not compact
+                or _canonical_symbol(row.get("symbol")) == compact
+            )
+        ]
+
+    def modify_tpsl_order(
+        self,
+        *,
+        order_id: str,
+        stop_price: float | None = None,
+        stop_quantity: float | None = None,
+        take_profit_price: float | None = None,
+        take_profit_quantity: float | None = None,
+    ) -> dict[str, Any]:
+        """Modify one TP/SL in place and verify its authoritative state."""
+
+        gate_block = self._safety_gate.evaluate()
+        if gate_block is not None:
+            raise RuntimeError(gate_block)
+        body: dict[str, Any] = {"orderId": str(order_id)}
+        if stop_price is not None:
+            body.update({
+                "slPrice": _fmt_number(stop_price), "slStopType": "MARK_PRICE",
+                "slOrderType": "MARKET",
+            })
+        if stop_quantity is not None:
+            body["slQty"] = _fmt_number(stop_quantity)
+        if take_profit_price is not None:
+            body.update({
+                "tpPrice": _fmt_number(take_profit_price), "tpStopType": "MARK_PRICE",
+                "tpOrderType": "MARKET",
+            })
+        if take_profit_quantity is not None:
+            body["tpQty"] = _fmt_number(take_profit_quantity)
+        if len(body) == 1:
+            raise ValueError("tpsl_modify_requires_price_or_quantity")
+        self._post_success(BITUNIX_TPSL_MODIFY_PATH, body)
+        matches = [row for row in self.pending_tpsl() if str(row.get("id")) == str(order_id)]
+        if len(matches) != 1:
+            raise RuntimeError("tpsl_modify_not_confirmed")
+        row = matches[0]
+        expected = {
+            "slPrice": stop_price, "slQty": stop_quantity,
+            "tpPrice": take_profit_price, "tpQty": take_profit_quantity,
+        }
+        for field, value in expected.items():
+            if value is not None and abs(_float(row.get(field)) - float(value)) > 1e-8:
+                raise RuntimeError(f"tpsl_modify_mismatch:{field}")
+        return row
+
+    def cancel_tpsl_order(self, *, symbol: str, order_id: str) -> bool:
+        """Cancel a TP/SL and confirm it disappeared from pending orders."""
+
+        gate_block = self._safety_gate.evaluate()
+        if gate_block is not None:
+            raise RuntimeError(gate_block)
+        body = {
+            "symbol": symbol.replace("/", "").replace("-", "").upper(),
+            "orderId": str(order_id),
+        }
+        self._post_success(BITUNIX_TPSL_CANCEL_PATH, body)
+        still_pending = any(
+            str(row.get("id")) == str(order_id)
+            for row in self.pending_tpsl(symbol=symbol)
+        )
+        if still_pending:
+            raise RuntimeError("tpsl_cancel_not_confirmed")
+        return True
+
+    def tighten_stop(
+        self, *, symbol: str, position_id: str, side: str, new_stop: float,
+        quantity: float,
+    ) -> dict[str, Any]:
+        """Tighten the single live SL; never cancel it or widen risk."""
+
+        rows = self.pending_tpsl(symbol=symbol, position_id=position_id)
+        stops = [row for row in rows if _float(row.get("slPrice")) > 0]
+        if len(stops) != 1:
+            raise RuntimeError("exactly_one_live_stop_required")
+        current = _float(stops[0].get("slPrice"))
+        is_short = _canonical_position_side(side) == "SHORT"
+        if new_stop <= 0 or (is_short and new_stop >= current) or (not is_short and new_stop <= current):
+            raise ValueError("stop_update_must_tighten_risk")
+        return self.modify_tpsl_order(
+            order_id=str(stops[0]["id"]), stop_price=new_stop,
+            stop_quantity=quantity,
+        )
+
+    def place_lifecycle_take_profit(
+        self, *, symbol: str, position_id: str, side: str, role: str,
+        price: float, quantity: float,
+    ) -> ExecutionResult:
+        if role not in TP_ROLES:
+            raise ValueError("invalid_take_profit_role")
+        order = OrderRequest(
+            symbol=symbol, side=str(side).upper(), order_type="LIMIT",
+            quantity=float(quantity), price=float(price), reduce_only=True,
+            meta={
+                "role": role, "position_id": str(position_id),
+                "lifecycle_version": LIFECYCLE_VERSION,
+            },
+        )
+        return self._place_take_profit(
+            order, str(position_id), datetime.now(tz=UTC).isoformat(),
+        )
+
     def place_orders(
         self, orders: list[OrderRequest], *, timestamp: str,
     ) -> list[ExecutionResult]:
@@ -220,7 +380,7 @@ class BitunixFuturesExecutorAdapter:
         stop = next((item for item in orders if item.meta.get("role") == "stop_loss"), None)
         take_profits = [
             item for item in orders
-            if item.meta.get("role") == "take_profit_1"
+            if item.meta.get("role") in TP_ROLES
         ]
         if stop is None or stop.stop_price is None or stop.stop_price <= 0:
             return [
@@ -263,7 +423,9 @@ class BitunixFuturesExecutorAdapter:
 
         entry_result = self._to_execution_result(payload, entry, timestamp)
         if entry_result.status != "REJECTED":
-            self._queue_take_profits(entry, take_profits, entry_result.order_id)
+            self._queue_take_profits(
+                entry, stop, take_profits, entry_result.order_id,
+            )
         attached_items = {id(stop)}
         protective_results: list[ExecutionResult] = []
         for item in orders:
@@ -300,7 +462,7 @@ class BitunixFuturesExecutorAdapter:
     def reconcile_take_profits(
         self, positions: list[dict[str, Any]], *, timestamp: str,
     ) -> list[ExecutionResult]:
-        """Create the queued 40% TP1 after Bitunix exposes a positionId."""
+        """Create queued lifecycle TPs after Bitunix exposes a positionId."""
 
         pending = self._load_pending_take_profits()
         if not pending:
@@ -319,7 +481,7 @@ class BitunixFuturesExecutorAdapter:
         # create multiple exits for the same position.
         newest_matching_index: dict[tuple[str, str], int] = {}
         for index, plan in enumerate(pending):
-            if plan.get("strategy") != TP1_TRAILING_STRATEGY:
+            if plan.get("strategy") not in SUPPORTED_TP_STRATEGIES:
                 continue
             key = (
                 _canonical_symbol(plan.get("symbol")),
@@ -334,10 +496,9 @@ class BitunixFuturesExecutorAdapter:
                 newest_matching_index[key] = index
 
         for plan_index, plan in enumerate(pending):
-            # Legacy 30/30/40 plans cannot be safely joined to an aggregated
-            # Bitunix position by symbol alone. Preserve them for audit but do
-            # not risk creating stale TP2/TP3 orders on a current live position.
-            if plan.get("strategy") != TP1_TRAILING_STRATEGY:
+            # Unknown legacy plans cannot be safely joined to an aggregated
+            # position by symbol alone. Preserve them for audit.
+            if plan.get("strategy") not in SUPPORTED_TP_STRATEGIES:
                 remaining.append(plan)
                 continue
             symbol = _canonical_symbol(plan.get("symbol"))
@@ -363,7 +524,7 @@ class BitunixFuturesExecutorAdapter:
             position_id = str(position.get("position_id") or "")
             queued = [
                 dict(raw) for raw in plan.get("take_profits", [])
-                if isinstance(raw, dict) and raw.get("role") == "take_profit_1"
+                if isinstance(raw, dict) and raw.get("role") in TP_ROLES
             ]
             unsent: list[dict[str, Any]] = []
             for index, raw in enumerate(queued):
@@ -389,6 +550,7 @@ class BitunixFuturesExecutorAdapter:
                     reduce_only=True,
                     meta={
                         "role": raw["role"], "position_id": position_id,
+                        "lifecycle_version": plan.get("lifecycle_version"),
                         "target_risk_reward": target_rr or None,
                         "tp_level_source": (
                             "configured_rr_exchange_fill"
@@ -406,6 +568,8 @@ class BitunixFuturesExecutorAdapter:
                     break
             if unsent:
                 remaining.append({**plan, "take_profits": unsent})
+            elif plan.get("strategy") == LIFECYCLE_VERSION:
+                self._register_live_lifecycle(plan, position, queued)
         self._save_pending_take_profits(remaining)
         return results
 
@@ -434,7 +598,8 @@ class BitunixFuturesExecutorAdapter:
         return self._to_execution_result(payload, order, timestamp)
 
     def _queue_take_profits(
-        self, entry: OrderRequest, take_profits: list[OrderRequest], order_id: str,
+        self, entry: OrderRequest, stop: OrderRequest,
+        take_profits: list[OrderRequest], order_id: str,
     ) -> None:
         plans = self._load_pending_take_profits()
         key = str(order_id or entry.meta.get("client_order_id") or "")
@@ -444,7 +609,15 @@ class BitunixFuturesExecutorAdapter:
             "entry_order_id": key,
             "symbol": _canonical_symbol(entry.symbol),
             "position_side": "LONG" if entry.side == "BUY" else "SHORT",
-            "strategy": TP1_TRAILING_STRATEGY,
+            "strategy": str(entry.meta.get("lifecycle_version") or LIFECYCLE_VERSION),
+            "lifecycle_version": str(
+                entry.meta.get("lifecycle_version") or LIFECYCLE_VERSION
+            ),
+            "initial_quantity": entry.quantity,
+            "initial_stop": stop.stop_price,
+            "reference_entry": entry.meta.get("reference_price"),
+            "strategy_version": entry.meta.get("strategy_version"),
+            "tp_levels": [float(item.price) for item in take_profits if item.price],
             "take_profits": [{
                 "role": str(item.meta.get("role")), "side": item.side,
                 "quantity": item.quantity, "price": item.price,
@@ -452,6 +625,49 @@ class BitunixFuturesExecutorAdapter:
             } for item in take_profits],
         })
         self._save_pending_take_profits(plans)
+
+    def _register_live_lifecycle(
+        self, plan: dict[str, Any], position: dict[str, Any],
+        take_profits: list[dict[str, Any]],
+    ) -> None:
+        """Register only a fully reconciled lifecycle-v1 exchange position."""
+
+        from app.execution.live_lifecycle import (
+            LiveLifecycleController, LiveLifecycleState, LiveLifecycleStore,
+        )
+
+        position_id = str(position.get("position_id") or "")
+        entry = _float(position.get("entry_price", position.get("entry")))
+        if not position_id or entry <= 0:
+            raise RuntimeError("lifecycle_registration_requires_exchange_fill")
+        initial_quantity = _float(plan.get("initial_quantity"))
+        remaining = _float(position.get("quantity", position.get("remaining_size")))
+        stop = _float(position.get("stop_loss")) or _float(plan.get("initial_stop"))
+        raw_levels = plan.get("tp_levels")
+        levels = (
+            [float(value) for value in raw_levels if _float(value) > 0]
+            if isinstance(raw_levels, list)
+            else [float(row["price"]) for row in take_profits if _float(row.get("price")) > 0]
+        )
+        if initial_quantity <= 0 or remaining <= 0 or stop <= 0 or len(levels) != 3:
+            raise RuntimeError("incomplete_lifecycle_registration_plan")
+        LiveLifecycleController(
+            self, LiveLifecycleStore(self._lifecycle_store_path),
+        ).register(LiveLifecycleState(
+            position_id=position_id,
+            symbol=_canonical_symbol(plan.get("symbol")),
+            side=str(plan.get("position_side") or ""),
+            entry_price=entry,
+            initial_stop=stop,
+            current_stop=stop,
+            initial_quantity=initial_quantity,
+            remaining_quantity=remaining,
+            tp_levels=levels,
+            strategy_version=(
+                dict(plan["strategy_version"])
+                if isinstance(plan.get("strategy_version"), dict) else None
+            ),
+        ))
 
     def _load_pending_take_profits(self) -> list[dict[str, Any]]:
         try:
@@ -543,6 +759,40 @@ class BitunixFuturesExecutorAdapter:
             "User-Agent": BITUNIX_USER_AGENT,
         }
 
+    def _private_get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        canonical = "".join(f"{key}{params[key]}" for key in sorted(params))
+        nonce = secrets.token_hex(16)
+        timestamp = str(int(time.time() * 1000))
+        digest = hashlib.sha256(
+            f"{nonce}{timestamp}{self._credentials.api_key}{canonical}".encode("utf-8")
+        ).hexdigest()
+        sign = hashlib.sha256(
+            f"{digest}{self._credentials.api_secret}".encode("utf-8")
+        ).hexdigest()
+        headers = {
+            "api-key": self._credentials.api_key, "sign": sign,
+            "nonce": nonce, "timestamp": timestamp, "language": "en-US",
+            "Content-Type": "application/json", "User-Agent": BITUNIX_USER_AGENT,
+        }
+        url = f"{self._base_url}{path}?{urllib.parse.urlencode(params)}"
+        if self._query_transport is not None:
+            payload = self._query_transport(url=url, headers=headers, params=params)
+        else:
+            request = urllib.request.Request(url, headers=headers, method="GET")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                raw = response.read().decode("utf-8")
+                payload = json.loads(raw) if raw else {}
+        if not isinstance(payload, dict) or payload.get("code") != 0:
+            raise RuntimeError(str(payload.get("msg") if isinstance(payload, dict) else "invalid_response"))
+        return payload
+
+    def _post_success(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        headers = self._sign_headers(body_json=json.dumps(body, separators=(",", ":")))
+        payload = self._send(url=f"{self._base_url}{path}", headers=headers, body=body)
+        if not isinstance(payload, dict) or payload.get("code") != 0:
+            raise RuntimeError(str(payload.get("msg") if isinstance(payload, dict) else "invalid_response"))
+        return payload
+
     def _send(
         self, *, url: str, headers: dict[str, str], body: dict[str, Any],
     ) -> dict[str, Any]:
@@ -632,6 +882,8 @@ class BitunixFuturesExecutorAdapter:
             "reason": reason,
             "position_id": str(order.meta.get("position_id") or ""),
             "reduce_only": bool(order.reduce_only),
+            "lifecycle_version": order.meta.get("lifecycle_version"),
+            "strategy_version": order.meta.get("strategy_version"),
             "created_at": timestamp,
         }
         # Keep the registry bounded while preserving insertion order.

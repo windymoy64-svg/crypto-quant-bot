@@ -209,6 +209,11 @@ def _position_context(raw: dict[str, Any]) -> PositionContext | None:
         quantity=quantity,
         current_price=float(raw.get("last_price") or raw.get("current_price") or 0.0) or None,
         position_id=str(raw.get("position_id") or raw.get("id") or "") or None,
+        entry_price=float(raw.get("entry_price") or raw.get("entry") or 0.0) or None,
+        stop_loss=float(raw.get("stop_loss") or 0.0) or None,
+        take_profit=float(raw.get("take_profit") or 0.0) or None,
+        leverage=float(raw.get("leverage") or 0.0) or None,
+        lifecycle_version=str(raw.get("lifecycle_version") or "") or None,
     )
 
 def _write_output(

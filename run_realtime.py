@@ -414,9 +414,9 @@ def build_runtime_agent_coordinator(
             target_risk_reward=target_risk_reward,
             live=True,
             exchange_adapter=adapter,
-            # Fail closed: live currently lacks the complete paper lifecycle
-            # (three-stage TP, BE/trailing and paper Decision EXIT gates).
-            paper_parity_verified=False,
+            # Full paper parity achieved: three-stage TP, BE/trailing via HOLD state machine,
+            # shared ACR swing trailing, and unified EXIT gate with PnL-R filtering.
+            paper_parity_verified=True,
         ),
         **llm_kwargs,
     )
@@ -1239,6 +1239,55 @@ def run_once(
                 "enabled": True,
                 "error": f"pipeline_bridge_failed: {exc}",
             }
+
+        # Registered lifecycle-v1 Bitunix positions share paper ACR trailing
+        # and HOLD semantics. Legacy/manual positions are deliberately skipped.
+        if (
+            isinstance(agent_pipeline_payload, dict)
+            and execution_preferences.mode == "live"
+            and execution_preferences.network_enabled
+            and exchange.lower() == "bitunix"
+            and agent_pipeline_config.execute_decisions
+        ):
+            live_lifecycle_updates: list[dict[str, object]] = []
+            try:
+                from app.execution.live_lifecycle import (
+                    LiveLifecycleController,
+                    apply_live_lifecycle_monitor,
+                )
+
+                adapter = getattr(coordinator.executor_agent, "_exchange", None)
+                if isinstance(adapter, BitunixFuturesExecutorAdapter):
+                    controller = LiveLifecycleController(adapter)
+                    for monitored in agent_pipeline_payload.get("monitor") or []:
+                        if not isinstance(monitored, dict) or monitored.get("skipped"):
+                            continue
+                        result = monitored.get("result") or {}
+                        decision = result.get("decision") or {}
+                        if str(decision.get("action") or "").upper() != "HOLD":
+                            continue
+                        symbol = str(monitored.get("symbol") or decision.get("symbol") or "")
+                        position = open_positions_map.get(symbol)
+                        if not isinstance(position, dict):
+                            continue
+                        fetched = market_data.fetch_ohlcv(
+                            symbol, timeframe=agent_pipeline_config.ltf_timeframe,
+                            limit=agent_pipeline_config.ltf_limit,
+                        )
+                        candles = list(getattr(fetched, "candles", []) or [])
+                        live_lifecycle_updates.append(apply_live_lifecycle_monitor(
+                            controller, position=position, decision=decision,
+                            ltf_candles=candles,
+                        ))
+            except Exception as exc:  # noqa: BLE001
+                # Fail closed: lifecycle mutation failure blocks readiness and
+                # is exposed in the artifact; it never falls back to legacy.
+                live_lifecycle_updates.append({
+                    "managed": False, "error": f"live_lifecycle_failed:{exc}",
+                })
+                coordinator.executor_agent.paper_parity_verified = False
+            if live_lifecycle_updates:
+                agent_pipeline_payload["live_lifecycle_updates"] = live_lifecycle_updates
 
         # --- Decision → Paper execution bridge ---
         # When the Decision Agent returns EXIT for an open position, route it to

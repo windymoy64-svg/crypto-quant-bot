@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from app.executor_agent.agent import ExecutorAgent
 from app.executor_agent.bitunix_futures_adapter import (
     BitunixCredentials,
@@ -231,7 +233,8 @@ def test_executor_agent_uses_bitunix_adapter_when_live() -> None:
         confidence="HIGH", confidence_score=90.0, reasons=["test"],
         entry_plan=EntryPlan(
             side="BUY", entry_price=100.0, stop_loss=97.0,
-            take_profit_1=106.0, risk_reward=2.0,
+            take_profit_1=106.0, take_profit_2=109.0,
+            take_profit_3=112.0, risk_reward=2.0,
         ),
         regime="TRENDING_BULLISH", confluence_score=80.0,
         timestamp="2024-01-01T00:00:00Z",
@@ -259,6 +262,7 @@ def test_live_entry_attaches_stop_and_queues_take_profit(tmp_path) -> None:
         entry_plan=EntryPlan(
             side="BUY", entry_price=100.0, stop_loss=97.0,
             take_profit_1=106.0, take_profit_2=109.0,
+            take_profit_3=112.0,
             risk_reward=2.0,
         ),
         regime="TRENDING_BULLISH", confluence_score=80.0,
@@ -274,7 +278,9 @@ def test_live_entry_attaches_stop_and_queues_take_profit(tmp_path) -> None:
     assert "tpPrice" not in body
     assert report.results[0].order_id == "protected-1"
     assert all(result.status != "REJECTED" for result in report.results)
-    assert [result.status for result in report.results[2:]] == ["PENDING"]
+    assert [result.status for result in report.results[2:]] == [
+        "PENDING", "PENDING", "PENDING",
+    ]
 
 
 def test_configured_leverage_is_applied_before_live_entry() -> None:
@@ -368,7 +374,7 @@ def test_plan_dry_run_never_calls_network() -> None:
     assert all(result.reason == "safety_gate_dry_run" for result in results)
 
 
-def test_plan_reconciles_only_tp1_through_official_tpsl_endpoint(tmp_path) -> None:
+def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) -> None:
     transport = _capturing_transport({
         "code": 0, "data": {"orderId": "entry-1"},
     })
@@ -408,13 +414,14 @@ def test_plan_reconciles_only_tp1_through_official_tpsl_endpoint(tmp_path) -> No
 
     reconciled = adapter.reconcile_take_profits([{
         "position_id": "position-1", "symbol": "BTCUSDT", "side": "BUY",
+        "entry_price": 100.0, "quantity": 1.0, "stop_loss": 97.0,
     }], timestamp="2026-01-01T00:01:00Z")
 
-    assert len(reconciled) == 1
+    assert len(reconciled) == 3
     tp_calls = transport.calls[1:]
     assert all(call["url"].endswith("/tpsl/place_order") for call in tp_calls)
-    assert [call["body"]["tpPrice"] for call in tp_calls] == ["106"]
-    assert [call["body"]["tpQty"] for call in tp_calls] == ["0.3"]
+    assert [call["body"]["tpPrice"] for call in tp_calls] == ["106", "109", "112"]
+    assert [call["body"]["tpQty"] for call in tp_calls] == ["0.3", "0.3", "0.4"]
     assert all(call["body"]["positionId"] == "position-1" for call in tp_calls)
     assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
 
@@ -531,15 +538,19 @@ def test_tp1_reconcile_does_not_duplicate_accepted_order(tmp_path) -> None:
                      meta={"role": "take_profit_3"}),
     ]
     adapter.place_orders(orders, timestamp="2026-01-01T00:00:00Z")
-    position = [{"position_id": "p-2", "symbol": "BTCUSDT", "side": "LONG"}]
+    position = [{
+        "position_id": "p-2", "symbol": "BTCUSDT", "side": "LONG",
+        "entry_price": 100.0, "quantity": 1.0, "stop_loss": 97.0,
+    }]
 
     first = adapter.reconcile_take_profits(position, timestamp="2026-01-01T00:01:00Z")
     second = adapter.reconcile_take_profits(position, timestamp="2026-01-01T00:02:00Z")
 
-    assert [result.status for result in first] == ["SUBMITTED"]
-    assert second == []
+    assert [result.status for result in first] == ["SUBMITTED", "REJECTED"]
+    assert [result.status for result in second] == ["SUBMITTED", "SUBMITTED"]
     tp_prices = [call["body"].get("tpPrice") for call in calls if "/tpsl/" in call["url"]]
-    assert tp_prices == ["106"]
+    # Accepted TP1 is not duplicated; retry starts from rejected TP2.
+    assert tp_prices == ["106", "109", "109", "112"]
 
 
 def test_reconcile_submits_only_newest_matching_tp_plan(tmp_path) -> None:
@@ -622,3 +633,72 @@ def test_reconcile_recomputes_rr_tp_from_exchange_entry_and_stop(tmp_path) -> No
 
     assert results[0].meta["tp_level_source"] == "configured_rr_exchange_fill"
     assert transport.calls[0]["body"]["tpPrice"] == "0.6689"
+
+
+def test_tighten_stop_modifies_in_place_and_verifies_exchange_state(tmp_path) -> None:
+    rows = [{
+        "id": "sl-1", "positionId": "p1", "symbol": "BTCUSDT",
+        "slPrice": "97", "slQty": "1", "tpPrice": None,
+    }]
+
+    def post(*, url, headers, body):
+        assert url.endswith("/api/v1/futures/tpsl/modify_order")
+        rows[0]["slPrice"] = body["slPrice"]
+        rows[0]["slQty"] = body["slQty"]
+        return {"code": 0, "data": {"orderId": "sl-1"}}
+
+    def query(*, url, headers, params):
+        return {"code": 0, "data": list(rows)}
+
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=post, query_transport=query,
+        pending_tp_path=tmp_path / "pending.json",
+    )
+
+    updated = adapter.tighten_stop(
+        symbol="BTC/USDT", position_id="p1", side="LONG",
+        new_stop=100, quantity=0.7,
+    )
+    assert updated["slPrice"] == "100"
+    assert updated["slQty"] == "0.7"
+
+
+def test_tighten_stop_rejects_widening_without_post(tmp_path) -> None:
+    posts = []
+
+    def query(**kwargs):
+        return {"code": 0, "data": [{
+            "id": "sl-1", "positionId": "p1", "symbol": "BTCUSDT",
+            "slPrice": "97", "slQty": "1",
+        }]}
+
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=lambda **kwargs: posts.append(kwargs), query_transport=query,
+        pending_tp_path=tmp_path / "pending.json",
+    )
+    with pytest.raises(ValueError, match="tighten"):
+        adapter.tighten_stop(
+            symbol="BTC/USDT", position_id="p1", side="LONG",
+            new_stop=96, quantity=1,
+        )
+    assert posts == []
+
+
+def test_cancel_tpsl_requires_post_state_confirmation(tmp_path) -> None:
+    rows = [{"id": "tp-1", "positionId": "p1", "symbol": "BTCUSDT", "tpPrice": "106"}]
+
+    def post(*, url, headers, body):
+        rows.clear()
+        return {"code": 0, "data": {"orderId": body["orderId"]}}
+
+    def query(**kwargs):
+        return {"code": 0, "data": list(rows)}
+
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=post, query_transport=query,
+        pending_tp_path=tmp_path / "pending.json",
+    )
+    assert adapter.cancel_tpsl_order(symbol="BTC/USDT", order_id="tp-1") is True

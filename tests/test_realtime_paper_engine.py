@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from app.paper.realtime_engine import PaperTradingConfig, RealtimePaperTradingEngine
 
 
@@ -563,6 +565,30 @@ def test_tp1_enabled_partial_closes_by_default(tmp_path: Path) -> None:
     assert partial_events[0]["close_label"] == "Partial close — take profit 1"
     position = result["open_positions"][0]
     assert position["tp_hit"][0] is True
+
+
+def test_tp_ladder_fractions_use_initial_not_remaining_size(tmp_path: Path) -> None:
+    config = PaperTradingConfig(
+        enabled=True, starting_balance=10_000, risk_percent=1,
+        max_open_positions=3, state_path=str(tmp_path / "state.json"),
+        trades_path=str(tmp_path / "trades.jsonl"),
+    )
+    engine = RealtimePaperTradingEngine(config)
+    signal = {
+        "symbol": "BTC/USDT", "action": "BUY", "entry": 100.0,
+        "stop_loss": 97.0, "take_profit": [106.0, 109.0, 112.0],
+        "confidence": 90.0,
+    }
+    opened = engine.process_signals([signal])
+    initial = float(opened["open_positions"][0]["size"])
+    after_tp1 = engine.process_signals([{**signal, "entry": 106.0}])
+    assert float(after_tp1["open_positions"][0]["remaining_size"]) == pytest.approx(
+        initial * 0.70
+    )
+    after_tp2 = engine.process_signals([{**signal, "entry": 109.0}])
+    assert float(after_tp2["open_positions"][0]["remaining_size"]) == pytest.approx(
+        initial * 0.40
+    )
 
 
 def test_empty_overrides_preserve_signal_defaults(tmp_path: Path) -> None:

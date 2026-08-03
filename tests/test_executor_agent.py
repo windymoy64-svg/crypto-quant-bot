@@ -44,7 +44,7 @@ def test_execute_entry_dry_run() -> None:
     assert all(result.status == "SUBMITTED" for result in report.results[1:])
 
 
-def test_entry_uses_only_tp1_for_forty_percent_then_leaves_runner() -> None:
+def test_entry_uses_exact_initial_size_30_30_40_tp_ladder() -> None:
     report = ExecutorAgent(balance=10_000.0, risk_percent=1.0).execute(
         _entry_decision()
     )
@@ -54,11 +54,20 @@ def test_entry_uses_only_tp1_for_forty_percent_then_leaves_runner() -> None:
         order for order in report.plan.orders
         if str(order.meta.get("role", "")).startswith("take_profit_")
     ]
-    assert len(take_profits) == 1
-    assert take_profits[0].meta["role"] == "take_profit_1"
-    assert take_profits[0].price == 106.0
-    assert take_profits[0].quantity == round(entry.quantity * 0.40, 8)
-    assert take_profits[0].meta["strategy"] == "tp1_partial_trailing_v1"
+    assert [order.meta["role"] for order in take_profits] == [
+        "take_profit_1", "take_profit_2", "take_profit_3",
+    ]
+    assert [order.price for order in take_profits] == [106.0, 109.0, 112.0]
+    assert [order.quantity for order in take_profits] == [
+        round(entry.quantity * 0.30, 8),
+        round(entry.quantity * 0.30, 8),
+        round(entry.quantity * 0.40, 8),
+    ]
+    assert sum(order.quantity for order in take_profits) == entry.quantity
+    assert all(
+        order.meta["strategy"] == "paper_live_lifecycle_v1"
+        for order in take_profits
+    )
 
 
 def test_configured_rr_overrides_decision_tp_for_live_parity() -> None:

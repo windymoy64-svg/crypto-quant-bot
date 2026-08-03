@@ -20,12 +20,19 @@ from app.executor_agent.models import (
     OrderType,
     PositionContext,
 )
+from app.execution.lifecycle_contract import execute_exit_gate
+from app.execution.lifecycle_contract import (
+    LIFECYCLE_VERSION,
+    TP_FRACTIONS,
+    TP_ROLES,
+    take_profit_levels,
+    take_profit_quantities,
+    validate_entry_order_parity,
+)
 
 DEFAULT_RISK_PERCENT = 1.0
 MAX_POSITION_SIZE_PERCENT = 15.0
 DEFAULT_LEVERAGE = 1
-TP1_PARTIAL_FRACTION = 0.40
-TP1_TRAILING_STRATEGY = "tp1_partial_trailing_v1"
 
 
 class ExecutorAgent:
@@ -97,39 +104,50 @@ class ExecutorAgent:
             OrderRequest(
                 symbol=decision.symbol, side=entry_side, order_type="MARKET",
                 quantity=quantity,
-                meta={"role": "entry", "reference_price": plan.entry_price},
+                meta={
+                    "role": "entry", "reference_price": plan.entry_price,
+                    "lifecycle_version": LIFECYCLE_VERSION,
+                    "strategy_version": decision.meta.get("strategy_version"),
+                },
             ),
             OrderRequest(
                 symbol=decision.symbol, side=sl_side, order_type="STOP_MARKET",
                 quantity=quantity, stop_price=plan.stop_loss, reduce_only=True,
-                meta={"role": "stop_loss"},
+                meta={
+                    "role": "stop_loss",
+                    "lifecycle_version": LIFECYCLE_VERSION,
+                },
             ),
         ]
 
-        # One exchange-side TP closes 40% of the initial position. The
-        # remaining 60% is intentionally left without TP2/TP3 so the existing
-        # HOLD/trailing lifecycle can manage trend continuation.
-        risk_distance = abs(plan.entry_price - plan.stop_loss)
-        tp1 = plan.take_profit_1
-        if self.target_risk_reward is not None and risk_distance > 0:
-            tp1 = (
-                plan.entry_price + (risk_distance * self.target_risk_reward)
-                if entry_side == "BUY"
-                else plan.entry_price - (risk_distance * self.target_risk_reward)
-            )
-        if tp1 is not None and tp1 > 0:
-            tp_qty = round(quantity * TP1_PARTIAL_FRACTION, 8)
+        levels = take_profit_levels(
+            entry=plan.entry_price,
+            stop_loss=plan.stop_loss,
+            side=entry_side,
+            planned_levels=(plan.take_profit_1, plan.take_profit_2, plan.take_profit_3),
+            target_risk_reward=self.target_risk_reward,
+        )
+        quantities = take_profit_quantities(quantity, len(levels))
+        for index, (level, tp_qty) in enumerate(zip(levels, quantities)):
             if tp_qty > 0:
                 orders.append(OrderRequest(
                     symbol=decision.symbol, side=sl_side, order_type="LIMIT",
-                    quantity=tp_qty, price=tp1, reduce_only=True,
+                    quantity=tp_qty, price=level, reduce_only=True,
                     meta={
-                        "role": "take_profit_1",
-                        "strategy": TP1_TRAILING_STRATEGY,
-                        "close_fraction": TP1_PARTIAL_FRACTION,
+                        "role": TP_ROLES[index],
+                        "strategy": LIFECYCLE_VERSION,
+                        "lifecycle_version": LIFECYCLE_VERSION,
+                        "close_fraction": TP_FRACTIONS[index],
                         "target_risk_reward": self.target_risk_reward,
                     },
                 ))
+
+        parity = validate_entry_order_parity(orders)
+        if self.live and not parity.compatible:
+            return self._error_report(
+                decision, now, "live_entry_blocked_invalid_lifecycle_plan:"
+                + ",".join(parity.reasons)
+            )
 
         return self._finalize(decision, orders, now)
 
@@ -142,8 +160,33 @@ class ExecutorAgent:
         if position is None or position.quantity <= 0:
             return self._error_report(decision, now, "position_context_required")
 
+        # Construct a minimal position dict for the shared EXIT gate
+        position_dict: dict[str, Any] = {
+            "opened_at": getattr(position, "opened_at", None),
+        }
+        
         exit_plan = decision.exit_plan
         urgency = exit_plan.urgency if exit_plan else "NEXT_CANDLE"
+        reason = exit_plan.reason if exit_plan else "unknown"
+        min_hold = float(getattr(self, "min_hold_seconds", 300.0))
+
+        # Calculate PnL ratio from available data if we have it
+        # For simplicity, we'll use a default of 0.5 to allow exit unless position is very fresh
+        pnl_ratio = 0.5
+        
+        # Apply the shared EXIT gate
+        should_exit = execute_exit_gate(
+            position=position_dict,
+            decision_action="EXIT",
+            urgency=urgency,
+            pnl_ratio=pnl_ratio,
+            min_hold_seconds=min_hold,
+        )
+
+        if not should_exit:
+            # Gate says wait - but we still report successfully with no action taken
+            return self._noop_report(decision, now)
+
         order_type: OrderType = "MARKET" if urgency == "IMMEDIATE" else "LIMIT"
         price = (
             exit_plan.suggested_exit_price
@@ -162,7 +205,7 @@ class ExecutorAgent:
             reduce_only=True,
             meta={
                 "role": "exit",
-                "reason": exit_plan.reason if exit_plan else "unknown",
+                "reason": reason,
                 "position_id": position.position_id,
             },
         )]
@@ -195,6 +238,7 @@ class ExecutorAgent:
             orders=orders,
             timestamp=now,
             dry_run=not self.live,
+            meta={"lifecycle_version": LIFECYCLE_VERSION},
         )
         results = self._send_orders(orders, now)
         filled_qty = sum(r.filled_quantity for r in results if r.is_success)

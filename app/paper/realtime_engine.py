@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.risk.manager import calculate_position_size
+from app.execution.lifecycle_contract import LIFECYCLE_VERSION
 
 
 def _optional_positive_float(value: object) -> float | None:
@@ -493,6 +494,12 @@ class RealtimePaperTradingEngine:
             "configured_margin_percent": target_margin_percent,
             "configured_risk_reward": target_rr,
             "sizing_source": sizing_source,
+            "lifecycle_version": LIFECYCLE_VERSION,
+            "strategy_version": (
+                signal.get("meta", {}).get("strategy_version")
+                if isinstance(signal.get("meta"), dict)
+                else None
+            ),
             # Default True = legacy partial TP1. False = trend-hold (skip fixed TPs).
             "tp1_enabled": bool(signal.get("tp1_enabled", True)),
             "hold_mode": bool(signal.get("hold_mode", False)),
@@ -943,7 +950,10 @@ class RealtimePaperTradingEngine:
         remaining = float(
             position.get("remaining_size", position["size"])
         )
-        size_to_close = remaining * fraction
+        # Shared paper/live contract: 30/30/40 always refers to the initial
+        # position size, never recursively to the remaining size.
+        initial_size = float(position.get("size", remaining))
+        size_to_close = min(remaining, initial_size * fraction)
 
         if size_to_close <= 0:
             return None
@@ -1373,6 +1383,11 @@ class RealtimePaperTradingEngine:
             "action": signal.get("action"),
             "confidence": signal.get("confidence"),
             "position": position,
+            "lifecycle_version": (
+                position.get("lifecycle_version")
+                if isinstance(position, dict)
+                else LIFECYCLE_VERSION
+            ),
         }
         if close_scope is not None:
             event["close_scope"] = close_scope
