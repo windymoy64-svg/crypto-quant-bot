@@ -883,7 +883,53 @@ def run_once(
     paper_config: PaperTradingConfig | None = None
     paper_engine: RealtimePaperTradingEngine | None = None
     open_position_symbols: list[str] = []
+
+    # Initialize telegram notifier for trade reports (works for BOTH paper & live modes)
     telegram_notifier = None
+    telegram_enabled = bool(runtime_config.get("telegram_enabled", False))
+    if telegram_enabled:
+        from app.telegram import TelegramNotifier
+        import os
+
+        logger.info(f"Telegram notifications enabled in config")
+
+        # Get credentials - try environment first, then fallback to .env file
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+
+        # Fallback: load directly from .env file if not in environment
+        if not bot_token or not chat_id:
+            try:
+                env_path = "/opt/crypto-quant-bot/.env"
+                if os.path.exists(env_path):
+                    with open(env_path, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith("TELEGRAM_BOT_TOKEN="):
+                                bot_token = line.split("=", 1)[1]
+                            elif line.startswith("TELEGRAM_CHAT_ID="):
+                                chat_id = line.split("=", 1)[1]
+            except Exception as e:
+                logger.warning(f"Failed to read .env file: {e}")
+
+        if bot_token and chat_id:
+            telegram_notifier = TelegramNotifier(
+                enabled=True,
+                # ``live`` controls real Telegram API delivery, not whether
+                # order execution is paper or live. Notifications must be
+                # delivered in both trading modes when explicitly enabled.
+                live=True,
+                token=bot_token,
+                chat_id=chat_id
+            )
+            logger.info(f"✅ Telegram notifier initialized successfully (mode={execution_preferences.mode})")
+        else:
+            logger.warning(
+                "❌ Telegram notifications enabled but credentials missing. "
+                f"Token present: {bool(bot_token)}, Chat ID present: {bool(chat_id)}. "
+                "Check /opt/crypto-quant-bot/.env file."
+            )
+
     if paper_enabled:
         paper_data = load_json(paper_config_path)
         selected_exchange = exchange.lower()
@@ -904,15 +950,6 @@ def run_once(
         paper_config = PaperTradingConfig.from_dict(
             paper_data
         )
-        open_position_symbols = load_open_position_symbols(
-            paper_config.state_path
-        )
-        
-        # Initialize telegram notifier for trade reports
-        telegram_enabled = bool(runtime_config.get("telegram_enabled", False))
-        if telegram_enabled:
-            from app.telegram import TelegramNotifier
-            telegram_notifier = TelegramNotifier(enabled=True, live=True)
         open_position_symbols = load_open_position_symbols(
             paper_config.state_path
         )

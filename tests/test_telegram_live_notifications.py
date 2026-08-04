@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import run_realtime
 from app.telegram.notifier import TelegramNotifier
 from app.telegram.trade_reporter import TradeReporter
+from app.telegram.trade_reporter import send_trade_report
 
 
 def _payload(status: str = "FILLED", reason: str = "") -> dict:
@@ -87,6 +88,31 @@ def test_legacy_plain_text_does_not_enable_html_parser() -> None:
 
     body = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
     assert "parse_mode" not in body
+
+
+def test_close_trade_report_is_delivered_to_telegram() -> None:
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = b'{"ok":true}'
+    response.__exit__.return_value = False
+    notifier = TelegramNotifier(enabled=True, live=True, token="token", chat_id="chat")
+    event = {
+        "type": "closed",
+        "position": {
+            "symbol": "ADA/USDT", "side": "BUY", "entry": 0.184,
+            "exit_price": 0.189, "original_size": 23.5,
+            "remaining_size": 0, "realized_pnl": 0.1175,
+            "stop_loss": 0.181, "take_profit": [0.189, 0.192, 0.195],
+            "tp_hit": [True, False, False], "close_reason": "take_profit_1",
+        },
+    }
+
+    with patch("urllib.request.urlopen", return_value=response) as urlopen:
+        send_trade_report(notifier, event)
+
+    assert urlopen.call_count == 1
+    body = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+    assert "CLOSE POSITION" in body["text"]
+    assert "ADA/USDT" in body["text"]
 
 
 def test_live_pipeline_notification_is_deduplicated() -> None:

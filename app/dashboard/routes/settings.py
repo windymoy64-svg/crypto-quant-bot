@@ -39,6 +39,12 @@ from app.settings.execution_preferences import (
     load_execution_preferences,
     save_execution_preferences,
 )
+from app.settings.telegram_preferences import (
+    TelegramPreferences,
+    clear_telegram_preferences,
+    load_telegram_preferences,
+    save_telegram_preferences,
+)
 from app.settings.trading_preferences import (
     leverage_options,
     load_trading_preferences,
@@ -346,6 +352,201 @@ def _optional_number(payload: dict[str, Any], key: str) -> float | None:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def _telegram_summary() -> dict[str, Any]:
+    """Return Telegram notification settings summary."""
+    prefs = load_telegram_preferences()
+    return {
+        "enabled": prefs.enabled,
+        "bot_token_masked": prefs.bot_token_masked,
+        "chat_id_masked": prefs.chat_id_masked,
+        "updated_at": prefs.updated_at,
+    }
+
+
+@router.get("/settings/telegram")
+def get_telegram_settings() -> dict[str, Any]:
+    """Return current Telegram notification configuration (masked values only)."""
+    try:
+        return _telegram_summary()
+    except Exception as exc:
+        logger.exception("Failed to load Telegram preferences")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.put("/settings/telegram")
+def update_telegram_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    """Save Telegram notification credentials and enable flag.
+    
+    Args:
+        payload: Dictionary with bot_token, chat_id, and/or enabled fields
+    
+    Returns:
+        Updated Telegram settings summary
+    """
+    import os
+    
+    # Extract values from payload
+    bot_token = str(payload.get("bot_token", "")).strip() if payload.get("bot_token") else None
+    chat_id = str(payload.get("chat_id", "")).strip() if payload.get("chat_id") else None
+    enabled = payload.get("enabled")
+    
+    # Validate: if enabled is True, both token and chat_id required
+    if enabled is True and not (bot_token and chat_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Telegram requires both bot_token and chat_id when enabled"
+        )
+    
+    # If explicit False for enabled, don't require token/chat_id
+    if enabled is False:
+        bot_token = None
+        chat_id = None
+    
+    try:
+        result = save_telegram_preferences(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            enabled=None if (enabled is True and not (bot_token and chat_id)) else enabled,
+        )
+        
+        # Also sync TELEGRAM_ENABLED environment variable via secrets store marker
+        # This helps runtime detect if Telegram should be active
+        if enabled is True and bot_token and chat_id:
+            os.environ["TELEGRAM_ENABLED"] = "true"
+        elif enabled is False:
+            os.environ["TELEGRAM_ENABLED"] = "false"
+        
+        return _telegram_summary()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to save Telegram preferences")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/settings/telegram/clear")
+def clear_telegram_settings() -> dict[str, Any]:
+    """Clear all Telegram notification settings."""
+    try:
+        clear_telegram_preferences()
+        os.environ.pop("TELEGRAM_ENABLED", None)
+        return _telegram_summary()
+    except Exception as exc:
+        logger.exception("Failed to clear Telegram preferences")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/settings/telegram/test")
+def test_telegram_connection(payload: dict[str, Any] = {}) -> dict[str, Any]:
+    """Test actual Telegram connection by sending a test message.
+    
+    This will attempt to send a test message to verify bot token and chat ID are valid.
+    Uses credentials from environment variables (set via systemd .env or docker)
+    or falls back to direct file read from .env file.
+    
+    Args:
+        payload: Dictionary with optional test message text
+    
+    Returns:
+        Connection test result with status details
+    """
+    import json
+    import urllib.request
+    import urllib.error
+    
+    # Get credentials from environment first
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    
+    # Fallback: read directly from .env file if env vars not set
+    if not token or not chat_id:
+        try:
+            env_path = "/opt/crypto-quant-bot/.env"
+            if os.path.exists(env_path):
+                with open(env_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("TELEGRAM_BOT_TOKEN=") and not token:
+                            token = line.split("=", 1)[1]
+                        elif line.startswith("TELEGRAM_CHAT_ID=") and not chat_id:
+                            chat_id = line.split("=", 1)[1]
+        except Exception as e:
+            logger.warning(f"Failed to read .env file: {e}")
+    
+    if not token or not chat_id:
+        return {
+            "ok": False,
+            "status": "not_configured",
+            "error": "Telegram credentials not found - please ensure they exist in /opt/crypto-quant-bot/.env file",
+            "details": {"token_present": bool(token), "chat_id_present": bool(chat_id)}
+        }
+    
+    # Prepare test message
+    message = "🔔 **Crypto Quant Bot - Connection Test**\n\n✅ If you receive this message, your Telegram notifications are working correctly."
+    
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload_json = json.dumps({
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown"
+    }).encode('utf-8')
+    
+    req = urllib.request.Request(
+        url,
+        data=payload_json,
+        headers={"Content-Type": "application/json"}
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            result = json.loads(response.read().decode())
+            
+            if result.get('ok'):
+                msg_data = result.get('result', {})
+                return {
+                    "ok": True,
+                    "status": "connected",
+                    "message": "Connection successful!",
+                    "details": {
+                        "message_id": msg_data.get('message_id'),
+                        "from_username": msg_data.get('from', {}).get('username', 'Unknown'),
+                        "chat_id": msg_data.get('chat', {}).get('id')
+                    }
+                }
+            else:
+                error_code = result.get('error_code')
+                description = result.get('description', '')
+                return {
+                    "ok": False,
+                    "status": "api_error",
+                    "error": f"Telegram API returned error code {error_code}",
+                    "details": {"code": error_code, "description": description}
+                }
+                
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8') if e.code >= 400 else ""
+        try:
+            error_json = json.loads(error_body)
+            api_error = error_json.get('description', str(e))
+        except json.JSONDecodeError:
+            api_error = str(e)
+        
+        return {
+            "ok": False,
+            "status": "http_error",
+            "error": f"HTTP {e.code}: {api_error}",
+            "details": {"http_code": e.code}
+        }
+        
+    except Exception as e:
+        return {
+            "ok": False,
+            "status": "network_error",
+            "error": f"Network error: {type(e).__name__}: {str(e)}",
+            "hint": "Check internet connection or firewall settings"
+        }
 
 
 def _trading_summary(exchange: str) -> dict[str, Any]:

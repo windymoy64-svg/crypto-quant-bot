@@ -3,7 +3,7 @@
 > Update file ini setiap selesai batch kerja.  
 > Tujuan: status operasional + antrian kerja tanpa menebak-nebak.
 
-**Terakhir di-update:** 2026-07-30 (handoff lengkap: eksklusivitas + warna mode TP/SL vs Target RR)
+**Terakhir di-update:** 2026-08-03 (paper→live parity lifecycle + EXIT gate bersama + aktivasi live runner)
 **Environment:** `/opt/crypto-quant-bot` (VPS Linux)
 
 ---
@@ -494,3 +494,30 @@ cd /opt/crypto-quant-bot
 - Jangan expose / commit secret.
 - Restart service hanya setelah ubah Python runtime. Tier 1 restart sudah dilakukan; live tetap OFF.
 - `PROJECT_CONTEXT.md` · `VPS_CONTEXT.md` · `.clinerules` · `SESSION_LOG.md`.
+
+## Handoff sesi 2026-08-03 — Paper↔Live parity, lifecycle controller, EXIT gate bersama, live runner ON
+
+### Sudah dikerjakan di sesi ini
+- Audit mode paper: winrate tinggi karena tidak ada fee/spread/slippage/funding; SL/TP snap per siklus ±60s; state historis 10 USDT vs config 10.000, leverage 5x vs 25x.
+- Kontrak lifecycle bersama (lifecycle_contract.py): LIFECYCLE_VERSION=paper_live_lifecycle_v1, TP_FRACTIONS=(0.30,0.30,0.40), execute_exit_gate.
+- Executor full TP ladder TP1/TP2/TP3 reduce-only, entry live diblokir bila plan tidak lolos parity validation.
+- Bitunix TP/SL primitives: GET pending TPSL, modify order, cancel order. Post-mutation verification via GET. BE/trailing = modify-in-place, tighten_stop=tighten-only.
+- HOLD state machine persisten (live_lifecycle.py): LiveLifecycleStore keyed by positionId, idempotent resume, replace remaining ladder dari exchange.
+- Shared BE/trailing (acr_engine_bridge.py) dipakai paper & live agar target identik.
+- Registrasi lifecycle hanya untuk posisi baru v1; legacy ENA/DOGE tidak terdampak.
+- Refactor EXIT gate bersama (execute_exit_gate): IMMEDIATE lolos; NEXT_CANDLE skip umur < min_hold(300s) atau -0.3R<pnl_ratio<=1.0R.
+- Aktivasi live: paper_parity_verified=True di run_realtime.py; wiring runtime memproses HOLD lifecycle v1 saat live+network+execute_decisions.
+- Restart runner bersih dari double instance, berjalan tunggal Mode live.
+
+### File dibuat/diubah pada sesi ini
+- Dibuat: app/execution/lifecycle_contract.py, app/execution/live_lifecycle.py, tests/test_lifecycle_contract.py, tests/test_live_lifecycle.py
+- Diubah: executor_agent/agent.py, models.py, bitunix_futures_adapter.py, paper/realtime_engine.py, strategies/acr_engine_bridge.py, agent_pipeline/bridge.py, run_realtime.py
+- Test: test_executor_agent.py, test_bitunix_futures_adapter.py, test_realtime_paper_engine.py, test_agent_pipeline_bridge.py
+
+### Command penting dan hasil
+.venv/bin/python -m pytest ... -q --tb=short
+........................................................................ [ 61%]
+.............................................                            [100%]
+117 passed in 2.25s
+
+# Runtime akhir: single instance Mode live, dashboard port 8899

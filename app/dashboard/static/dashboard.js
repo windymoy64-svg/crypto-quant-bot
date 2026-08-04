@@ -592,6 +592,152 @@ async function restartBot(btn){
 
 
 
+// ---------- Settings: Telegram Notifications ----------
+function setTelegramStatus(state, label) {
+  const badge = byId("telegram-settings-status");
+  if(!badge) return;
+  badge.classList.remove("ok", "warn", "err");
+  if(state) badge.classList.add(state);
+  badge.textContent = label;
+}
+
+function renderTelegramResult(message, ok) {
+  const box = byId("telegram-settings-result");
+  if(!box) return;
+  box.hidden = false;
+  box.classList.remove("ok", "err");
+  box.classList.add(ok ? "ok" : "err");
+  box.textContent = typeof message === "string" ? message : JSON.stringify(message, null, 2);
+}
+
+function renderTelegramSettings(data) {
+  const configured = data.enabled && !!data.bot_token_masked && !!data.chat_id_masked;
+  
+  setText("telegram-cur-status", configured ? "Enabled" : "Disabled");
+  setText("telegram-cur-token", data.bot_token_masked || "-");
+  setText("telegram-cur-chat", data.chat_id_masked || "-");
+  setText("telegram-cur-updated", data.updated_at || "-");
+  
+  const enabledBox = byId("telegram-enabled");
+  if(enabledBox) enabledBox.checked = !!data.enabled;
+  
+  // Don't show actual tokens in input fields for security
+  byId("telegram-bot-token").value = "";
+  byId("telegram-chat-id").value = "";
+  
+  setTelegramStatus(configured ? "ok" : "warn", configured ? "configured" : "not configured");
+}
+
+async function loadTelegramSettings() {
+  try {
+    const data = await apiFetch("/api/settings/telegram");
+    renderTelegramSettings(data);
+  } catch(err) {
+    setTelegramStatus("err", "load failed");
+    renderTelegramResult(err.message, false);
+  }
+}
+
+async function saveTelegramSettings(event) {
+  event?.preventDefault();
+  const botToken = byId("telegram-bot-token")?.value.trim();
+  const chatId = byId("telegram-chat-id")?.value.trim();
+  const enabled = byId("telegram-enabled")?.checked || false;
+  
+  // Validate: if enabled, both token and chat_id required
+  if (enabled && (!botToken || !chatId)) {
+    renderTelegramResult("Both Bot Token and Chat ID are required when enabling Telegram notifications.", false);
+    setTelegramStatus("err", "validation failed");
+    return false;
+  }
+  
+  setTelegramStatus("warn", "saving...");
+  try {
+    const payload = {
+      enabled: enabled,
+      bot_token: botToken || null,
+      chat_id: chatId || null,
+    };
+    
+    const data = await apiFetch("/api/settings/telegram", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    
+    renderTelegramSettings(data);
+    renderTelegramResult("Telegram settings saved successfully!", true);
+    showToast("Telegram notifications configured");
+    
+    // Clear input fields after save
+    byId("telegram-bot-token").value = "";
+    byId("telegram-chat-id").value = "";
+  } catch(err) {
+    setTelegramStatus("err", "save failed");
+    renderTelegramResult(err.message, false);
+  }
+  return false;
+}
+
+async function clearTelegramSettings() {
+  if(!confirm("Clear all Telegram notification settings? This will disable notifications.")) return;
+  
+  try {
+    const data = await apiFetch("/api/settings/telegram/clear", { method: "POST" });
+    renderTelegramSettings(data);
+    renderTelegramResult("Telegram settings cleared.", true);
+    showToast("Telegram settings cleared");
+  } catch(err) {
+    setTelegramStatus("err", "clear failed");
+    renderTelegramResult(err.message, false);
+  }
+}
+
+async function testTelegramConnection(){
+  const btn = byId("telegram-test-btn");
+  if(!btn) return;
+  
+  btn.disabled = true;
+  btn.textContent = "Testing...";
+  btn.classList.add("loading");
+  
+  try {
+    setTelegramStatus("warn", "testing connection...");
+    const result = await apiFetch("/api/settings/telegram/test", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    
+    if(result.ok){
+      const details = result.details || {};
+      const message = `✅ Connection successful!\\n` +
+        `Message ID: ${details.message_id || '-'}\\n` +
+        `From: ${details.from_username || 'Unknown'}\\n` +
+        `Check your Telegram app for the test message.`;
+      
+      setTelegramStatus("ok", "connected");
+      renderTelegramResult(message, true);
+      showToast("Test message sent to Telegram!");
+    } else {
+      const error = result.error || result.status || "Unknown error";
+      const hint = result.hint ? "\\n\\n" + result.hint : "";
+      const fullMsg = `${error}${hint}`;
+      
+      setTelegramStatus("err", "failed");
+      renderTelegramResult(fullMsg, false);
+      showToast("Connection test failed");
+    }
+  } catch(err){
+    setTelegramStatus("err", "test failed");
+    renderTelegramResult(`Test failed: ${err.message}`, false);
+    showToast("Connection test failed");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔗 Test Connection";
+    btn.classList.remove("loading");
+  }
+}
+
+
 // ---------- Settings: Futures (USDⓈ-M) ----------
 function setFuturesStatus(state, label){
   const badge = byId("futures-status");
@@ -1132,7 +1278,7 @@ function renderAgentObservations(payload){
   listEl.innerHTML = `<table class="agent-table agent-observations-table"><thead><tr><th>Time</th><th>Symbol</th><th>Stage</th><th>Bias</th><th>Confluence</th><th>Decision</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-initUi(); setDashboardActivity(!document.hidden); loadLLMSettings(); loadExchangeSettings(); loadPortfolioSettings(); loadExecutionSettings(); loadFuturesSettings(); loadAgentPanels().catch(console.warn);
+initUi(); setDashboardActivity(!document.hidden); loadLLMSettings(); loadExchangeSettings(); loadPortfolioSettings(); loadExecutionSettings(); loadFuturesSettings(); loadTelegramSettings(); loadAgentPanels().catch(console.warn);
 // Satu snapshot akun exchange menjadi sumber semua menu. TTL backend 5 detik
 // menjaga request tetap ringan, sedangkan guard loadAll mencegah poll tumpang tindih.
 document.addEventListener("visibilitychange",()=>setDashboardActivity(!document.hidden));

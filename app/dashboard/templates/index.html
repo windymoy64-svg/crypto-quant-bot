@@ -526,6 +526,54 @@
               </div>
               <div id="llm-settings-result" class="settings-result" hidden></div>
             </form>
+            
+            <!-- Telegram Settings Panel -->
+            <article id="settings-telegram-panel" class="panel xwide">
+              <div class="panel-head">
+                <div><p>Telegram</p><h2>Trade Notifications</h2></div>
+                <span id="telegram-settings-status" class="pill">loading</span>
+              </div>
+              <p style="color:var(--txt-mute);font-size:12px;margin:6px 0 12px">
+                Terima notifikasi otomatis setiap kali entry, partial close, atau full close posisi. 
+                Token dan Chat ID dienkripsi dan disimpan aman.
+              </p>
+              
+              <div id="telegram-current-config" class="settings-grid" style="margin-bottom:14px">
+                <div>Status</div><strong id="telegram-cur-status">-</strong>
+                <div>Bot Token</div><strong id="telegram-cur-token">-</strong>
+                <div>Chat ID</div><strong id="telegram-cur-chat">-</strong>
+                <div>Last Updated</div><strong id="telegram-cur-updated">-</strong>
+              </div>
+              
+              <form id="telegram-settings-form" class="settings-form" autocomplete="off" onsubmit="return saveTelegramSettings(event)">
+                <label>Enable Telegram notifications
+                  <input type="checkbox" id="telegram-enabled" />
+                </label>
+                
+                <label>Bot Token
+                  <input type="password" id="telegram-bot-token" placeholder="paste bot token from @BotFather" autocomplete="off" spellcheck="false" />
+                </label>
+                
+                <label>Chat ID
+                  <input type="text" id="telegram-chat-id" placeholder="your chat ID number" autocomplete="off" />
+                </label>
+                
+                <p class="settings-field-hint">
+                  Dapatkan token dari <code>@BotFather</code> di Telegram. Chat ID bisa didapat dari <code>@userinfobot</code>.
+                </p>
+                
+                <div class="settings-actions">
+                  <button type="submit" class="primary">Save Telegram Settings</button>
+                  <button type="button" class="ghost" onclick="loadTelegramSettings()">Refresh</button>
+                  <button type="button" class="ghost success" onclick="testTelegramConnection()" id="telegram-test-btn">🔗 Test Connection</button>
+                  <button type="button" class="ghost danger" onclick="clearTelegramSettings()">Clear</button>
+                </div>
+                
+                <div id="telegram-test-result" class="settings-result" hidden></div>
+                <div id="telegram-settings-result" class="settings-result" hidden></div>
+              </form>
+            </article>
+          
             <div class="restart-bot-box">
               <div class="restart-bot-actions">
                 <button type="button" id="restart-bot-btn" class="ghost danger" onclick="restartBot(this)">Restart Bot</button>

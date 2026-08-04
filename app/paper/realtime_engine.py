@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -8,6 +9,9 @@ from typing import Any
 
 from app.risk.manager import calculate_position_size
 from app.execution.lifecycle_contract import LIFECYCLE_VERSION
+
+
+logger = logging.getLogger(__name__)
 
 
 def _optional_positive_float(value: object) -> float | None:
@@ -1445,7 +1449,14 @@ class RealtimePaperTradingEngine:
             event_with_signal = {**event, "signal": signal}
             send_trade_report(self.telegram_notifier, event_with_signal)
         except Exception:
-            pass  # Silently skip if reporting fails
+            # Telegram must never stop position management, but failures need
+            # to remain diagnosable instead of silently losing close reports.
+            logger.exception(
+                "Failed to send Telegram trade report type=%s symbol=%s",
+                event.get("type"),
+                (event.get("position") or {}).get("symbol")
+                if isinstance(event.get("position"), dict) else "unknown",
+            )
 
     def _now(self) -> str:
         return datetime.now(tz=UTC).isoformat()
