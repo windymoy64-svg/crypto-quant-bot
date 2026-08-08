@@ -1,5 +1,5 @@
 {
-  "exchange": "binance",
+  "exchange": "bitunix",
   "timeframe": "15m",
   "limit": 300,
   "symbol_mode": "momentum_liquid",

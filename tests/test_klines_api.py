@@ -85,6 +85,21 @@ def test_service_klines_returns_normalized_candles() -> None:
     assert first_candle["close"] > 0
 
 
+def test_service_klines_uses_requested_exchange() -> None:
+    service = DashboardService()
+
+    with patch(
+        "app.dashboard.services.MarketDataService.fetch_ohlcv",
+        return_value=_fake_result(),
+    ) as fetch:
+        payload = service.klines(
+            symbol="BTC/USDT", timeframe="15m", limit=5, exchange="bitunix"
+        )
+
+    fetch.assert_called_once_with(symbol="BTC/USDT", timeframe="15m", limit=5)
+    assert payload["exchange"] == "bitunix"
+
+
 def test_service_klines_defaults_and_clamps() -> None:
     service = DashboardService()
 

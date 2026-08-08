@@ -22,7 +22,7 @@ def klines(
     symbol: str = Query(default="BTC/USDT", description="Trading pair, e.g. BTC/USDT"),
     timeframe: str = Query(default="1h", description="Candle interval, e.g. 1m, 5m, 1h, 1d"),
     limit: int = Query(default=200, ge=1, le=1000, description="Number of candles to return"),
-    exchange: str = Query(default="binance", description="Exchange id used to source OHLCV data"),
+    exchange: str | None = Query(default=None, description="Exchange id; defaults to active execution exchange"),
 ) -> dict[str, object]:
     return dashboard_service.klines(
         symbol=symbol,

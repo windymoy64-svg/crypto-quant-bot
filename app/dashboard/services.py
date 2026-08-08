@@ -14,6 +14,8 @@ from app.market.data_service import MarketDataService
 from app.monitoring import system_health_monitor
 from app.portfolio.sync import PortfolioSynchronizer
 from app.settings.execution_preferences import load_execution_preferences
+from app.settings.exchange_credentials import SUPPORTED_EXCHANGES
+from app.settings.portfolio_preferences import load_portfolio_preferences
 
 
 logger = logging.getLogger(__name__)
@@ -487,13 +489,14 @@ class DashboardService:
         symbol: str | None = None,
         timeframe: str | None = None,
         limit: int | None = None,
-        exchange: str = "binance",
+        exchange: str | None = None,
     ) -> dict[str, Any]:
         resolved_symbol = self._resolve_kline_symbol(symbol)
         resolved_timeframe = self._resolve_kline_timeframe(timeframe)
         resolved_limit = self._resolve_kline_limit(limit)
+        resolved_exchange = self._resolve_kline_exchange(exchange)
 
-        service = MarketDataService(exchange=exchange, fallback_to_sample_data=True)
+        service = MarketDataService(exchange=resolved_exchange, fallback_to_sample_data=True)
         try:
             result = service.fetch_ohlcv(
                 symbol=resolved_symbol,
@@ -517,6 +520,7 @@ class DashboardService:
         return {
             "symbol": resolved_symbol,
             "timeframe": resolved_timeframe,
+            "exchange": resolved_exchange,
             "limit": resolved_limit,
             "source": result.source,
             "warning": result.warning,
@@ -547,6 +551,12 @@ class DashboardService:
         if not raw:
             return DEFAULT_KLINE_SYMBOL
         return raw.upper().replace("-", "/")
+
+    def _resolve_kline_exchange(self, exchange: str | None) -> str:
+        raw = str(exchange or "").strip().lower()
+        if not raw:
+            raw = load_portfolio_preferences().active_execution_exchange
+        return raw if raw in SUPPORTED_EXCHANGES else "binance"
 
     def _load_symbols_from_configs(self) -> list[str]:
         symbols: list[str] = []
