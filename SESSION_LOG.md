@@ -6,6 +6,46 @@
 
 ---
 
+## Handoff sesi 2026-08-08 — Git setup: workspace Windows → GitHub + full CI
+
+**Environment:** `C:\Users\BIG MOUSE\Downloads\crypto-quant-bot-main` (Windows 10, Python 3.13)
+**Alur baru:** Windows lokal = tempat edit & push; VPS dijadikan pull-only (`git pull origin main`).
+
+### Yang dilakukan
+- Workspace lokal di-init sebagai git repo (`git init -b main`), remote `origin` → `https://github.com/windymoy64-svg/crypto-quant-bot.git`, `git fetch origin` (main + tag `v1.0.0-production`).
+- `git reset --mixed origin/main` sempat gagal karena remote berisi file historis ber-nama invalid di Windows (`f: c=f.read()`), jadi dipakai strategi aman: `git add -A` → `git write-tree` → `git commit-tree -p origin/main` → `git update-ref refs/heads/main`.
+- Commit pertama `6008a35` (parent `9ad7a78`) berisi seluruh working tree workspace (597 file) + aturan `.gitignore` baru.
+- Push `9ad7a78..6008a35 main -> main` sukses (fast-forward).
+- `.gitignore` ditambah: `*.jsonl`, `backups/`, `graphify-out/`.
+- `.github/workflows/ci.yml` di-upgrade: sekarang menjalankan `pip install -r requirements.txt`, `py_compile`, `python -m compileall app tests`, `python -m pytest -q`, `node --check app/dashboard/static/dashboard.js`, `bash -n` shell checks, dan guard `run_api.py` lama yang sudah ada.
+- Secret audit dijalankan terhadap semua file yang akan di-track → `NO_SECRET_HITS`; `data/`, `logs/`, `.env` tetap ter-ignore.
+- GitHub Actions run #70 dipicu oleh push `6008a35` (status masih `in_progress` saat catatan ini ditulis).
+
+### File
+- **Diubah:** `.gitignore`, `.github/workflows/ci.yml`, `SESSION_LOG.md`; `.git/` baru dibuat.
+- **Dibuat/Dihapus:** tidak ada file source yang dihapus.
+
+### Command penting
+```powershell
+git init -b main
+git remote add origin https://github.com/windymoy64-svg/crypto-quant-bot.git
+git fetch origin
+# reset gagal karena nama file invalid → pakai write-tree/commit-tree
+git add -A
+$tree = git write-tree
+$parent = git rev-parse origin/main
+$commit = git commit-tree $tree -p $parent -m "ci: full test suite + workspace sync (compileall, pytest, node check)"
+git push -u origin main
+   # 9ad7a78..6008a35 main -> main
+```
+
+### Catatan operasional untuk selanjutnya
+- Alur setelah ini di Windows: `git status` → `git add -A` → `git commit -m "..."` → `git pull --rebase origin main` → `git push origin main`.
+- Di VPS: jangan push; hanya `git pull origin main` untuk menerima update dari GitHub.
+- Jangan `git push --force` ke `main`.
+
+---
+
 ## Handoff sesi 2026-08-08 — Klarifikasi multi-exchange (Binance vs Bitunix)
 
 **Environment:** `C:\Users\BIG MOUSE\Downloads\crypto-quant-bot-main` (Windows 10, Python 3.13)
