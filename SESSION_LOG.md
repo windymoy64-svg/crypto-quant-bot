@@ -6,6 +6,35 @@
 
 ---
 
+## Handoff sesi 2026-08-08 — deploy_vps.sh one-command deploy
+
+**Environment:** `C:\Users\BIG MOUSE\Downloads\crypto-quant-bot-main` (Windows 10, Python 3.13)
+
+### Yang dilakukan
+- Membuat `deploy_vps.sh` di root repo (bash, `set -Eeuo pipefail`, LF-only, bit `100755` via `git update-index --chmod=+x`).
+- Alur skrip: validasi folder+remote → `git fetch` → cek pending → jika 0 commit: verifikasi service+health saja; jika ada: `git status` harus bersih (VPS pull-only, tidak boleh commit/push dari VPS), `git pull --ff-only origin main`, `pip install` hanya jika `requirements*.txt` berubah, **selalu restart kedua service**, `is-active` check, lalu `./check_production_health.sh`; ada mode `--dry-run`.
+- `DEPLOY_DIR` default `/opt/crypto-quant-bot`, override via env.
+- `.github/workflows/ci.yml` ditambah `bash -n deploy_vps.sh` pada step Shell syntax checks.
+- Validasi lokal: `bash -n deploy_vps.sh` → SYNTAX_OK (LF, tanpa CRLF).
+- Commit+push `d2a9363` (ad50aaf..d2a9363) sukses; CI GitHub Actions memvalidasi syntax shell.
+
+### File
+- **Diubah:** `.github/workflows/ci.yml`.
+- **Dibuat:** `deploy_vps.sh`.
+- **Dihapus:** tidak ada.
+
+### Command penting
+```powershell
+& "C:\Program Files\Git\bin\bash.exe" -n deploy_vps.sh   # SYNTAX_OK
+git update-index --chmod=+x deploy_vps.sh
+git push origin main   # ad50aaf..d2a9363
+```
+
+### Next step
+- Di VPS setelah push berikutnya: `cd /opt/crypto-quant-bot && ./deploy_vps.sh` (atau `bash deploy_vps.sh`). Tarik terlebih dahulu sekali (`git pull origin main`) agar skrip baru tersedia.
+
+---
+
 ## Handoff sesi 2026-08-08 — Git setup: workspace Windows → GitHub + full CI
 
 **Environment:** `C:\Users\BIG MOUSE\Downloads\crypto-quant-bot-main` (Windows 10, Python 3.13)
