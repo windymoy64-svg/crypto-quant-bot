@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+import json
 import logging
 import os
 from typing import Any
@@ -13,6 +14,7 @@ from app.events.subscriber import subscribe
 from app.exchange.binance.stream import BinanceStreamCallbacks
 from app.exchange.binance.websocket import BinanceWebSocket
 from app.exchange.public_http_client import PublicHttpExchangeClient
+from app.market.bitunix_websocket import BitunixTickerWebSocket
 
 
 router = APIRouter()
@@ -32,8 +34,10 @@ class DashboardEventHub:
         self._price_stream_task: asyncio.Task[None] | None = None
         self._subscribed = False
         self._binance_ws: BinanceWebSocket | None = None
+        self._bitunix_ws: BitunixTickerWebSocket | None = None
         self._tracked_symbols: list[str] = []
         self._price_exchange = ""
+        self._chart_symbols: set[str] = set()
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -66,6 +70,9 @@ class DashboardEventHub:
         if self._binance_ws is not None:
             self._binance_ws.stop()
             self._binance_ws = None
+        if self._bitunix_ws is not None:
+            self._bitunix_ws.stop()
+            self._bitunix_ws = None
         for websocket in list(self.connections):
             try:
                 await websocket.close()
@@ -221,14 +228,59 @@ class DashboardEventHub:
                     if self._binance_ws is not None:
                         self._binance_ws.stop()
                         self._binance_ws = None
+                    symbols = list(dict.fromkeys([*symbols, *self._chart_symbols]))
                     self._tracked_symbols = symbols
                     self._price_exchange = exchange
+                    self._ensure_bitunix_stream(symbols)
                     await self._poll_bitunix_prices(symbols)
                 elif symbols != self._tracked_symbols or exchange != self._price_exchange:
                     self._price_exchange = exchange
                     self._restart_price_stream(symbols)
             except Exception:
                 logger.exception("Realtime price stream sync failed")
+
+    def subscribe_chart(self, symbol: str) -> None:
+        normalized = str(symbol or "").strip().upper().replace("-", "/")
+        if not normalized:
+            return
+        self._chart_symbols.add(normalized)
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._restart_bitunix_stream)
+
+    def _restart_bitunix_stream(self) -> None:
+        if self._bitunix_ws is not None:
+            self._bitunix_ws.stop()
+            self._bitunix_ws = None
+        if self._price_exchange == "bitunix":
+            self._ensure_bitunix_stream(list(dict.fromkeys([*self._tracked_symbols, *self._chart_symbols])))
+
+    def _ensure_bitunix_stream(self, symbols: list[str]) -> None:
+        if not symbols:
+            return
+        compact = sorted(str(symbol).upper().replace("/", "") for symbol in symbols)
+        current = sorted(self._bitunix_ws.symbols) if self._bitunix_ws else []
+        if current == compact:
+            return
+        if self._bitunix_ws is not None:
+            self._bitunix_ws.stop()
+        self._bitunix_ws = BitunixTickerWebSocket(symbols, self._handle_bitunix_ticker)
+        self._bitunix_ws.start()
+
+    def _handle_bitunix_ticker(self, ticker: dict[str, Any]) -> None:
+        message = {
+            "type": "price_update",
+            "payload": {
+                "symbol": ticker["symbol"],
+                "price": ticker["price"],
+                "source": "bitunix_websocket",
+                "timestamp": utc_now_iso(),
+            },
+        }
+        if self._loop and self._queue:
+            try:
+                self._loop.call_soon_threadsafe(self._enqueue_latest, message)
+            except RuntimeError:
+                pass
 
     def _open_position_symbols(self) -> tuple[list[str], str]:
         """Symbols that need live price ticks (paper + multi-portfolio)."""
@@ -388,7 +440,13 @@ async def dashboard_ws(websocket: WebSocket) -> None:
     await event_hub.connect(websocket)
     try:
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            try:
+                message = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                message = {}
+            if isinstance(message, dict) and message.get("type") == "chart_subscribe":
+                event_hub.subscribe_chart(str(message.get("symbol") or ""))
             await websocket.send_json({"type": "heartbeat", "timestamp": utc_now_iso()})
     except WebSocketDisconnect:
         event_hub.disconnect(websocket)

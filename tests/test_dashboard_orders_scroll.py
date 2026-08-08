@@ -76,6 +76,26 @@ def test_realtime_price_source_follows_live_position_exchange() -> None:
     assert "multi = multi_portfolio()" not in websocket
 
 
+def test_chart_subscription_starts_bitunix_market_stream() -> None:
+    websocket = Path("app/dashboard/websocket.py").read_text(encoding="utf-8")
+    js = _js()
+
+    assert 'message.get("type") == "chart_subscribe"' in websocket
+    assert "event_hub.subscribe_chart" in websocket
+    assert "BitunixTickerWebSocket" in websocket
+    assert "self._chart_symbols" in websocket
+    assert "type:\"chart_subscribe\"" in js
+    assert "subscribeChartSymbol()" in js
+
+
+def test_chart_updates_active_candle_from_bitunix_price_tick() -> None:
+    js = _js()
+
+    assert "function updateRealtimeChart(payload)" in js
+    assert "state.tvSeries.update(candle)" in js
+    assert 'data.type==="price_update"' in js
+
+
 def test_snapshot_orders_tidak_memakai_debounce_agresif() -> None:
     """View orders memakai debounce sama dengan view lain (800ms)."""
     js = _js()
