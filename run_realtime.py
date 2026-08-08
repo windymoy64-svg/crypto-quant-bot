@@ -45,10 +45,12 @@ from app.risk.portfolio_heat import OpenPositionRisk, PortfolioHeatGuard
 from app.learning_agent.runtime import (
     LearningRecorderConfig,
     build_recorder_if_enabled,
+    build_live_recorder_if_enabled,
 )
 
 
 logger = logging.getLogger(__name__)
+TELEGRAM_LIVE_CLOSE_CHECKPOINT = Path("logs/telegram_live_close_checkpoint.json")
 
 
 def release_unused_memory() -> None:
@@ -95,6 +97,70 @@ def read_json_file(
         )
     except (OSError, json.JSONDecodeError):
         return default
+
+
+def notify_new_bitunix_closes(
+    notifier: Any,
+    closed_positions: list[dict[str, object]],
+    *,
+    checkpoint_path: Path = TELEGRAM_LIVE_CLOSE_CHECKPOINT,
+) -> int:
+    """Deliver each authoritative Bitunix full close exactly once."""
+
+    rows = [row for row in closed_positions if isinstance(row, dict)]
+    keys = {
+        f"{row.get('position_id') or row.get('symbol')}:{row.get('closed_at') or row.get('update_time')}"
+        for row in rows
+        if row.get("position_id") or row.get("symbol")
+    }
+    checkpoint = read_json_file(checkpoint_path, None)
+    if not isinstance(checkpoint, dict):
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_text(
+            json.dumps({"seen": sorted(keys)}, indent=2), encoding="utf-8"
+        )
+        logger.info("Telegram live-close baseline initialized rows=%s", len(keys))
+        return 0
+
+    seen = {str(value) for value in checkpoint.get("seen", [])}
+    delivered = 0
+    from app.telegram.trade_reporter import TradeReporter
+
+    reporter = TradeReporter()
+    for row in sorted(rows, key=lambda item: str(item.get("closed_at") or "")):
+        key = f"{row.get('position_id') or row.get('symbol')}:{row.get('closed_at') or row.get('update_time')}"
+        if key in seen:
+            continue
+        side = str(row.get("side") or "").upper()
+        quantity = abs(float(row.get("quantity") or 0.0))
+        position = {
+            "symbol": row.get("symbol") or "UNKNOWN",
+            "side": "SELL" if side in {"SHORT", "SELL"} else "BUY",
+            "entry": float(row.get("entry_price") or row.get("entry") or 0.0),
+            "exit": float(row.get("close_price") or row.get("exit") or 0.0),
+            "size": quantity,
+            "remaining_size": 0.0,
+            "realized_pnl": float(row.get("net_pnl", row.get("realized_pnl")) or 0.0),
+            "close_reason": row.get("reason") or "exchange_closed",
+        }
+        if notifier.send(reporter.format_close(position)) is not True:
+            logger.warning(
+                "Telegram live close delivery failed position_id=%s symbol=%s",
+                row.get("position_id"), row.get("symbol"),
+            )
+            continue
+        seen.add(key)
+        delivered += 1
+        logger.info(
+            "Telegram live close delivered position_id=%s symbol=%s",
+            row.get("position_id"), row.get("symbol"),
+        )
+
+    if delivered:
+        temporary = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
+        temporary.write_text(json.dumps({"seen": sorted(seen)}, indent=2), encoding="utf-8")
+        temporary.replace(checkpoint_path)
+    return delivered
 
 
 def load_open_position_symbols(state_path: str) -> list[str]:
@@ -1165,12 +1231,14 @@ def run_once(
     # open positions. Never mutates paper/live state unless
     # ``execute_decisions=true`` is set explicitly.
     agent_pipeline_payload: dict[str, object] | None = None
+    live_closed_positions: list[dict[str, object]] = []
     agent_pipeline_config = AgentPipelineRuntimeConfig.from_dict(
         runtime_config.get("agent_pipeline") if isinstance(
             runtime_config.get("agent_pipeline"), dict
         ) else None
     )
     if agent_pipeline_config.enabled:
+        coordinator: AgentPipelineCoordinator | None = None
         open_positions_map: dict[str, dict[str, object]] = {}
         pending_entry_symbols: set[str] = set()
         pending_orders_read_ok = execution_preferences.mode not in {"dry_run", "live"}
@@ -1180,6 +1248,15 @@ def run_once(
                 creds = load_exchange_credentials(exchange=exchange.lower())
                 if creds is not None and creds.is_configured:
                     details = _load_bitunix_details(creds.api_key, creds.api_secret)
+                    live_closed_positions = [
+                        row for row in details.get("closed_positions", [])
+                        if isinstance(row, dict)
+                    ]
+                    if telegram_notifier is not None:
+                        notify_new_bitunix_closes(
+                            telegram_notifier,
+                            live_closed_positions,
+                        )
                     warnings = [str(value) for value in details.get("warnings", [])]
                     pending_orders_read_ok = not any(
                         value.startswith("pending_orders:") for value in warnings
@@ -1285,6 +1362,7 @@ def run_once(
             and execution_preferences.network_enabled
             and exchange.lower() == "bitunix"
             and agent_pipeline_config.execute_decisions
+            and coordinator is not None
         ):
             live_lifecycle_updates: list[dict[str, object]] = []
             try:
@@ -1322,7 +1400,8 @@ def run_once(
                 live_lifecycle_updates.append({
                     "managed": False, "error": f"live_lifecycle_failed:{exc}",
                 })
-                coordinator.executor_agent.paper_parity_verified = False
+                if coordinator is not None:
+                    coordinator.executor_agent.paper_parity_verified = False
             if live_lifecycle_updates:
                 agent_pipeline_payload["live_lifecycle_updates"] = live_lifecycle_updates
 
@@ -1488,6 +1567,24 @@ def run_once(
                 "enabled": True,
                 "skipped": "no_trades_path_or_file",
             }
+        if execution_preferences.mode == "live" and live_closed_positions:
+            live_recorder = build_live_recorder_if_enabled(learning_recorder_config)
+            if live_recorder is not None:
+                try:
+                    live_ids = live_recorder.process_bitunix_closed_positions(
+                        live_closed_positions
+                    )
+                    learning_recorder_summary = {
+                        "enabled": True,
+                        "recorded_count": len(live_ids),
+                        "recorded_ids": live_ids,
+                        "source": "bitunix_closed_positions",
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    learning_recorder_summary = {
+                        "enabled": True,
+                        "error": f"live_recorder_failed: {exc}",
+                    }
 
     return {
         "latest_output": latest_output,

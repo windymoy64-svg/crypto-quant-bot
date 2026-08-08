@@ -264,6 +264,49 @@ def test_recorder_is_idempotent(tmp_path: Path) -> None:
     assert len(trade_store.load_all()) == 1
 
 
+def test_recorder_records_bitunix_closed_position_idempotently(tmp_path: Path) -> None:
+    trade_store = TradeStore(str(tmp_path / "journal.jsonl"))
+    obs_store = ChartObservationStore(str(tmp_path / "obs.jsonl"))
+    recorder = TradeFeedbackRecorder(
+        trades_path=str(tmp_path / "paper_trades.jsonl"),
+        learning_agent=LearningAgent(store=trade_store, observation_store=obs_store),
+        observation_store=obs_store,
+        checkpoint_path=str(tmp_path / "checkpoint.json"),
+    )
+    closed = {
+        "position_id": "bitunix-1",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "quantity": "2",
+        "entry_price": "100",
+        "close_price": "105",
+        "net_pnl": "10",
+        "opened_at": "2024-01-01T10:00:00+00:00",
+        "closed_at": "2024-01-01T12:00:00+00:00",
+        "stop_loss": "97",
+    }
+
+    assert recorder.process_bitunix_closed_positions([closed]) == ["bitunix:bitunix-1"]
+    assert recorder.process_bitunix_closed_positions([closed]) == []
+    stored = trade_store.load_all()
+    assert len(stored) == 1
+    assert stored[0].symbol == "BTC/USDT"
+    assert stored[0].side == "BUY"
+    assert stored[0].outcome == "MANUAL"
+    assert stored[0].pnl_absolute == 10.0
+
+    # A fresh recorder with an empty replacement checkpoint must still dedupe
+    # against the append-only journal during checkpoint migration.
+    second = TradeFeedbackRecorder(
+        trades_path=str(tmp_path / "paper_trades.jsonl"),
+        learning_agent=LearningAgent(store=trade_store, observation_store=obs_store),
+        observation_store=obs_store,
+        checkpoint_path=str(tmp_path / "replacement-checkpoint.json"),
+    )
+    assert second.process_bitunix_closed_positions([closed]) == []
+    assert len(trade_store.load_all()) == 1
+
+
 def test_recorder_never_materializes_all_chart_observations(tmp_path: Path) -> None:
     """Large observation history must be queried with bounded load_latest()."""
     trades = tmp_path / "paper_trades.jsonl"

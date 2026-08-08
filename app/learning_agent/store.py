@@ -83,6 +83,21 @@ class TradeStore:
                     count += 1
         return count
 
+    def load_trade_ids(self) -> set[str]:
+        """Return persisted trade IDs without materializing TradeRecord objects."""
+        if not self._path.exists():
+            return set()
+        trade_ids: set[str] = set()
+        with self._path.open("r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(data, dict) and data.get("trade_id"):
+                    trade_ids.add(str(data["trade_id"]))
+        return trade_ids
+
 
 class ChartObservationStore:
     """Append-only raw Chart Agent observation store."""

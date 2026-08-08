@@ -61,6 +61,10 @@ class LearningAgent:
         """Store a new completed trade for future learning."""
         self._store.save(record)
 
+    def recorded_trade_ids(self) -> set[str]:
+        """Return journal IDs for idempotent recorder migration checks."""
+        return self._store.load_trade_ids()
+
     def record_chart_reading(
         self,
         reading: ChartReading,

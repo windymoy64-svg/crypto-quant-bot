@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import run_realtime
@@ -113,6 +114,45 @@ def test_close_trade_report_is_delivered_to_telegram() -> None:
     body = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
     assert "CLOSE POSITION" in body["text"]
     assert "ADA/USDT" in body["text"]
+
+
+def test_live_bitunix_close_baseline_delivery_retry_and_dedup(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "telegram-close.json"
+    old = {
+        "position_id": "old", "symbol": "BTCUSDT", "side": "LONG",
+        "quantity": 1, "entry_price": 100, "close_price": 101,
+        "net_pnl": 1, "closed_at": "2026-08-04T01:00:00+00:00",
+    }
+    notifier = MagicMock()
+
+    assert run_realtime.notify_new_bitunix_closes(
+        notifier, [old], checkpoint_path=checkpoint,
+    ) == 0
+    notifier.send.assert_not_called()
+
+    new = {
+        "position_id": "new", "symbol": "ADAUSDT", "side": "SHORT",
+        "quantity": 23.5, "entry_price": 0.184, "close_price": 0.181,
+        "net_pnl": 0.07, "reason": "take_profit_1",
+        "closed_at": "2026-08-04T02:00:00+00:00",
+    }
+    notifier.send.return_value = False
+    assert run_realtime.notify_new_bitunix_closes(
+        notifier, [old, new], checkpoint_path=checkpoint,
+    ) == 0
+
+    notifier.send.return_value = True
+    assert run_realtime.notify_new_bitunix_closes(
+        notifier, [old, new], checkpoint_path=checkpoint,
+    ) == 1
+    assert "CLOSE POSITION" in notifier.send.call_args.args[0]
+    assert "ADAUSDT" in notifier.send.call_args.args[0]
+
+    notifier.reset_mock()
+    assert run_realtime.notify_new_bitunix_closes(
+        notifier, [old, new], checkpoint_path=checkpoint,
+    ) == 0
+    notifier.send.assert_not_called()
 
 
 def test_live_pipeline_notification_is_deduplicated() -> None:

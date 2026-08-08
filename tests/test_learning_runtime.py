@@ -8,6 +8,7 @@ from app.learning_agent.recorder import TradeFeedbackRecorder
 from app.learning_agent.runtime import (
     LearningRecorderConfig,
     build_recorder_if_enabled,
+    build_live_recorder_if_enabled,
 )
 
 
@@ -81,3 +82,13 @@ def test_build_recorder_processes_no_op_when_no_closures(tmp_path: Path) -> None
     )
     assert recorder is not None
     assert recorder.process_new_closures() == []
+
+
+def test_build_live_recorder_does_not_require_paper_trade_file(tmp_path: Path) -> None:
+    cfg = LearningRecorderConfig.from_dict({
+        "enabled": True,
+        "trade_store_path": str(tmp_path / "journal.jsonl"),
+        "observation_store_path": str(tmp_path / "obs.jsonl"),
+        "checkpoint_path": str(tmp_path / "checkpoint.json"),
+    })
+    assert isinstance(build_live_recorder_if_enabled(cfg), TradeFeedbackRecorder)

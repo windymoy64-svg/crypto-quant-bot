@@ -95,6 +95,87 @@ class TradeFeedbackRecorder:
         self._save_checkpoint({"recorded_trade_ids": sorted(recorded_ids)})
         return new_recorded
 
+    def process_bitunix_closed_positions(
+        self, closed_positions: list[dict[str, Any]],
+    ) -> list[str]:
+        """Record authoritative Bitunix full closes into the learning journal.
+
+        Bitunix exposes completed positions through its private position-history
+        response rather than the paper JSONL event stream.  Normalize the rows
+        to the existing feedback schema and use the same idempotent checkpoint
+        contract as paper closures.
+        """
+        checkpoint = self._load_checkpoint()
+        recorded_ids: set[str] = set(checkpoint.get("recorded_trade_ids", []))
+        # The dedicated live checkpoint may be introduced after a shared paper
+        # checkpoint already recorded a close. Protect the append-only journal
+        # itself against duplicates during that one-time migration.
+        recorded_ids.update(self._learning.recorded_trade_ids())
+        new_recorded: list[str] = []
+        for raw in closed_positions:
+            if not isinstance(raw, dict):
+                continue
+            position = self._normalize_bitunix_position(raw)
+            symbol = str(position.get("symbol") or "")
+            closed_at = str(raw.get("closed_at") or raw.get("update_time") or "")
+            if not symbol or not closed_at:
+                continue
+            trade_id = "bitunix:" + str(
+                raw.get("position_id") or f"{symbol}:{closed_at}"
+            )
+            if trade_id in recorded_ids:
+                continue
+            close_event = {
+                "type": "closed",
+                "symbol": symbol,
+                "timestamp": closed_at,
+                "closed_at": closed_at,
+                "exit": raw.get("close_price") or raw.get("exit") or raw.get("price"),
+                "realized_pnl": raw.get("net_pnl", raw.get("realized_pnl", 0.0)),
+                "close_reason": raw.get("reason") or "exchange_closed",
+                "position": position,
+            }
+            entry_obs = self._find_entry_observation(symbol, position)
+            exit_obs = self._find_exit_observation(symbol, close_event)
+            record = build_trade_record_from_dicts(
+                trade_id=trade_id,
+                position=position,
+                close_event=close_event,
+                entry_observation=entry_obs.to_dict() if entry_obs else None,
+                exit_observation=exit_obs.to_dict() if exit_obs else None,
+            )
+            self._learning.record_trade(record)
+            recorded_ids.add(trade_id)
+            new_recorded.append(trade_id)
+        self._save_checkpoint({"recorded_trade_ids": sorted(recorded_ids)})
+        return new_recorded
+
+    @staticmethod
+    def _normalize_bitunix_position(raw: dict[str, Any]) -> dict[str, Any]:
+        compact = str(raw.get("symbol") or "").upper().replace("-", "")
+        symbol = (
+            f"{compact[:-4]}/USDT"
+            if compact.endswith("USDT") and "/" not in compact
+            else str(raw.get("symbol") or "")
+        )
+        side = "SELL" if str(raw.get("side") or "").upper() in {"SHORT", "SELL"} else "BUY"
+        return {
+            "symbol": symbol,
+            "side": side,
+            "entry": raw.get("entry_price") or raw.get("entry") or 0.0,
+            "exit": raw.get("close_price") or raw.get("exit") or raw.get("price") or 0.0,
+            "size": raw.get("quantity") or 0.0,
+            "opened_at": raw.get("opened_at") or "",
+            "closed_at": raw.get("closed_at") or raw.get("update_time") or "",
+            "realized_pnl": raw.get("net_pnl", raw.get("realized_pnl", 0.0)),
+            "stop_loss": raw.get("stop_loss") or 0.0,
+            # TradeStore deserializes TP1 as float; use a neutral numeric
+            # value when the exchange history does not return the TP ladder.
+            "take_profit": [0.0, 0.0, 0.0],
+            "confidence": 0.0,
+            "strategy": "bitunix_live",
+        }
+
     def _build_trade_id(
         self, symbol: str, position: dict[str, Any], event: dict[str, Any]
     ) -> str:
