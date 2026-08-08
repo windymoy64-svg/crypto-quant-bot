@@ -66,5 +66,7 @@ def test_paper_order_history_only_contains_fully_closed_position(monkeypatch) ->
     assert history[0]["status"] == "CLOSED"
     assert history[0]["close_scope"] == "full"
     assert history[0]["reason"] == "trailing_stop"
+    assert history[0]["close_reason"] == "trailing_stop"
+    assert history[0]["close_label"] == "Full close — trailing stop"
     assert history[0]["price"] == 100.0
     assert history[0]["quantity"] == 1.0

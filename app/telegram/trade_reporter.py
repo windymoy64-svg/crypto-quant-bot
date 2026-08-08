@@ -2,10 +2,40 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from html import escape
 
 
 class TradeReporter:
     """Format trade reports for Telegram notification"""
+
+    def format_live_execution(self, decision: dict[str, Any], execution: dict[str, Any]) -> str:
+        """Format the live execution result using Telegram HTML safely."""
+        action = str(decision.get("action") or "ENTRY").upper()
+        symbol = escape(str(decision.get("symbol") or execution.get("symbol") or "UNKNOWN"))
+        side = "SHORT" if action.endswith("SELL") else "LONG"
+        plan = decision.get("entry_plan") if isinstance(decision.get("entry_plan"), dict) else {}
+        entry = float(plan.get("entry_price") or 0)
+        stop = float(plan.get("stop_loss") or 0)
+        tp1 = float(plan.get("take_profit_1") or 0)
+        results = execution.get("results") if isinstance(execution.get("results"), list) else []
+        success = bool(execution.get("success"))
+        title = "LIVE ENTRY EXECUTED" if success else "LIVE ORDER REJECTED"
+        icon = "✅" if success else "❌"
+        reason = ""
+        for item in results:
+            if isinstance(item, dict) and item.get("reason"):
+                reason = escape(str(item["reason"]))
+                break
+        suffix = f"\nReason: {reason}" if reason else ""
+        return (
+            f"{icon} <b>{title}</b>\n\n"
+            f"Symbol: <b>{symbol}</b>\n"
+            f"Direction: <b>{side}</b>\n"
+            f"Entry: ${entry:,.4f}\n"
+            f"Stop Loss: ${stop:,.4f}\n"
+            f"TP1: ${tp1:,.4f}\n"
+            f"Venue: Bitunix Futures{suffix}"
+        )
 
     def format_entry(self, position: dict[str, Any], signal: dict[str, Any] | None = None) -> str:
         """Format position entry notification dengan signal reasoning"""

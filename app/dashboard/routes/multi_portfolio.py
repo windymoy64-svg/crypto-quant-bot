@@ -142,6 +142,12 @@ def _build_multi_portfolio_payload() -> dict[str, Any]:
         "accounts": accounts,
         "accounts_configured": sum(account["configured"] for account in accounts),
         "accounts_connected": len(connected),
+        "exchange_data_available": bool(connected),
+        "exchange_data_status": (
+            "connected" if connected else
+            "unavailable" if any(account.get("status") == "connection_error" for account in accounts)
+            else "not_configured"
+        ),
         "displayed_exchanges": [account["exchange"] for account in visible],
         "account_environment": (
             next(iter(environments), "paper") if len(environments) == 1 else "mixed"

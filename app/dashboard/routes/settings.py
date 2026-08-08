@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import time
 import urllib.error
@@ -42,6 +43,7 @@ from app.settings.execution_preferences import (
 from app.settings.telegram_preferences import (
     TelegramPreferences,
     clear_telegram_preferences,
+    load_telegram_credentials,
     load_telegram_preferences,
     save_telegram_preferences,
 )
@@ -60,6 +62,9 @@ from app.settings.llm_preferences import (
     save_llm_provider,
 )
 from app.llm.client import LLMClientConfig, OpenAICompatibleClient
+from app.settings.store import get_secrets_store
+from app.exchange.binance_futures.account import FuturesAccountReader
+from app.exchange.binance_futures.client import FuturesEndpoint, FuturesHttpClient, FuturesHttpError
 
 
 logger = logging.getLogger(__name__)
@@ -280,6 +285,11 @@ def test_llm_settings(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     base_url = str(payload.get("base_url") or prefs.base_url).strip()
     api_key = str(payload.get("api_key") or load_llm_api_key() or "").strip()
     model = str(payload.get("model") or next(iter(prefs.models), "")).strip()
+    timeout_value = payload.get("timeout_seconds", prefs.timeout_seconds)
+    try:
+        timeout_seconds = max(1, min(int(timeout_value), 120))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid timeout_seconds") from exc
     if not base_url or not api_key:
         raise HTTPException(status_code=400, detail="base_url_and_api_key_required")
     try:
@@ -287,7 +297,7 @@ def test_llm_settings(payload: dict[str, Any] | None = None) -> dict[str, Any]:
             base_url=base_url,
             api_key=api_key,
             model=model or "__test__",
-            timeout_seconds=prefs.timeout_seconds,
+            timeout_seconds=timeout_seconds,
         ))
         models = client.list_models()
     except Exception as exc:  # noqa: BLE001
@@ -316,21 +326,17 @@ def update_execution_settings(payload: dict[str, Any]) -> dict[str, Any]:
             status_code=400,
             detail=f"{portfolio.active_execution_exchange}_credentials_missing",
         )
-    if mode == "live" and portfolio.active_execution_exchange != "bitunix":
-        raise HTTPException(
-            status_code=400,
-            detail="live_execution_not_wired_for_selected_exchange",
-        )
     if mode == "live" and credentials is not None:
-        preflight = _perform_bitunix_test(
-            credentials.api_key,
-            credentials.api_secret,
-            testnet=False,
-        )
+        if portfolio.active_execution_exchange == "bitunix":
+            preflight = _perform_bitunix_test(credentials.api_key, credentials.api_secret, testnet=False)
+        elif portfolio.active_execution_exchange == "binance":
+            preflight = _perform_binance_futures_test(credentials)
+        else:
+            preflight = {"ok": False, "error": "unsupported_live_exchange"}
         if not preflight.get("ok"):
             raise HTTPException(
                 status_code=400,
-                detail=f"bitunix_preflight_failed: {preflight.get('error', 'unknown')}",
+                detail=f"{portfolio.active_execution_exchange}_preflight_failed: {preflight.get('error', 'unknown')}",
             )
     try:
         save_execution_preferences(mode=mode, confirmation=confirmation)
@@ -363,6 +369,11 @@ def _telegram_summary() -> dict[str, Any]:
         "chat_id_masked": prefs.chat_id_masked,
         "updated_at": prefs.updated_at,
     }
+
+
+def _telegram_credentials() -> tuple[str, str]:
+    token, chat_id, _ = load_telegram_credentials()
+    return token, chat_id
 
 
 @router.get("/settings/telegram")
@@ -399,16 +410,11 @@ def update_telegram_settings(payload: dict[str, Any]) -> dict[str, Any]:
             detail="Telegram requires both bot_token and chat_id when enabled"
         )
     
-    # If explicit False for enabled, don't require token/chat_id
-    if enabled is False:
-        bot_token = None
-        chat_id = None
-    
     try:
         result = save_telegram_preferences(
             bot_token=bot_token,
             chat_id=chat_id,
-            enabled=None if (enabled is True and not (bot_token and chat_id)) else enabled,
+            enabled=enabled,
         )
         
         # Also sync TELEGRAM_ENABLED environment variable via secrets store marker
@@ -452,34 +458,15 @@ def test_telegram_connection(payload: dict[str, Any] = {}) -> dict[str, Any]:
     Returns:
         Connection test result with status details
     """
-    import json
     import urllib.request
     import urllib.error
-    
-    # Get credentials from environment first
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    
-    # Fallback: read directly from .env file if env vars not set
-    if not token or not chat_id:
-        try:
-            env_path = "/opt/crypto-quant-bot/.env"
-            if os.path.exists(env_path):
-                with open(env_path, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("TELEGRAM_BOT_TOKEN=") and not token:
-                            token = line.split("=", 1)[1]
-                        elif line.startswith("TELEGRAM_CHAT_ID=") and not chat_id:
-                            chat_id = line.split("=", 1)[1]
-        except Exception as e:
-            logger.warning(f"Failed to read .env file: {e}")
+    token, chat_id = _telegram_credentials()
     
     if not token or not chat_id:
         return {
             "ok": False,
             "status": "not_configured",
-            "error": "Telegram credentials not found - please ensure they exist in /opt/crypto-quant-bot/.env file",
+            "error": "Telegram credentials are not configured",
             "details": {"token_present": bool(token), "chat_id_present": bool(chat_id)}
         }
     
@@ -771,6 +758,38 @@ def _perform_binance_test(
     }
 
 
+def _perform_binance_futures_test(credentials: Any) -> dict[str, Any]:
+    """Verify Binance USD-M Futures credentials and trading permission."""
+    endpoint = FuturesEndpoint.TESTNET if credentials.testnet else FuturesEndpoint.MAINNET
+    try:
+        client = FuturesHttpClient(
+            credentials.api_key,
+            credentials.api_secret,
+            endpoint=endpoint,
+        )
+        account = FuturesAccountReader(client).snapshot()
+    except FuturesHttpError as exc:
+        return {"ok": False, "exchange": "binance", "error": exc.message, "code": exc.code}
+    except Exception as exc:  # pragma: no cover - defensive network boundary
+        logger.exception("Unexpected Binance Futures preflight error")
+        return {"ok": False, "exchange": "binance", "error": str(exc)}
+    if not account.can_trade:
+        return {"ok": False, "exchange": "binance", "error": "futures_trading_permission_denied"}
+    available = next(
+        (balance.available_balance for balance in account.balances if balance.asset.upper() == "USDT"),
+        account.available_balance,
+    )
+    if available <= 0:
+        return {"ok": False, "exchange": "binance", "error": "available_usdt_balance_empty"}
+    return {
+        "ok": True,
+        "exchange": "binance",
+        "testnet": credentials.testnet,
+        "can_trade": account.can_trade,
+        "available_usdt": available,
+    }
+
+
 def _bitunix_sign(
     *,
     api_key: str,
@@ -981,4 +1000,3 @@ def restart_bot_services() -> dict[str, Any]:
             os.unlink(_RESTART_LOCK)
         except OSError:
             pass
-

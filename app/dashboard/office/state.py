@@ -15,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
+from app.settings.execution_preferences import load_execution_preferences
+
 
 AgentStatus = Literal["working", "idle", "break", "offline", "alert"]
 
@@ -329,10 +331,18 @@ def _summarize_paper(payload: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _live_trading_flags() -> dict[str, bool]:
-    enabled = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
-    dry_run = os.getenv("LIVE_TRADING_DRY_RUN", "true").lower() == "true"
-    return {"enabled": enabled, "dry_run": dry_run}
+def _live_trading_flags() -> dict[str, bool | str]:
+    try:
+        execution = load_execution_preferences()
+    except Exception:
+        # Office must remain readable during first-run or an unwritable cwd.
+        return {"enabled": False, "dry_run": True, "mode": "paper", "confirmed": False}
+    return {
+        "enabled": execution.mode in {"live", "dry_run"},
+        "dry_run": execution.mode != "live",
+        "mode": execution.mode,
+        "confirmed": execution.live_confirmed,
+    }
 
 
 def _def(agent_id: str) -> dict[str, Any]:
@@ -520,25 +530,42 @@ def _agent_miro(pipeline: dict[str, Any]) -> AgentState:
     )
 
 
-def _agent_dami(live_flags: dict[str, bool], pipeline: dict[str, Any]) -> AgentState:
-    """Live Executor. Aktif hanya bila LIVE_TRADING_ENABLED=true."""
+def _agent_dami(live_flags: dict[str, bool | str], pipeline: dict[str, Any]) -> AgentState:
+    """Executor status follows persisted execution mode, not environment flags."""
 
     definition = _def("dami")
-    if not live_flags["enabled"]:
+    mode = str(live_flags.get("mode", "paper"))
+    if mode == "paper":
+        if not pipeline.get("available"):
+            return _make(
+                definition,
+                status="offline",
+                task="Live trading terkunci",
+                detail="Paper executor belum menghasilkan pipeline",
+                updated_at=None,
+            )
         return _make(
             definition,
             status="offline",
-            task="Live trading terkunci",
-            detail="LIVE_TRADING_ENABLED=false",
+            task="Paper executor aktif",
+            detail="Order disimulasikan; live trading terkunci",
             updated_at=None,
         )
-    if live_flags["dry_run"]:
+    if mode == "dry_run":
         return _make(
             definition,
             status="idle",
             task="Live dry-run",
-            detail="LIVE_TRADING_DRY_RUN=true",
+            detail="Execution mode=dry_run; tidak mengirim order real",
             updated_at=pipeline.get("timestamp"),
+        )
+    if mode == "live" and not live_flags.get("confirmed"):
+        return _make(
+            definition,
+            status="offline",
+            task="Live trading terkunci",
+            detail="Konfirmasi live belum aktif",
+            updated_at=None,
         )
     if pipeline.get("execute_decisions"):
         return _make(
@@ -613,4 +640,3 @@ __all__ = [
     "OfficeSnapshot",
     "build_office_snapshot",
 ]
-

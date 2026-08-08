@@ -1413,8 +1413,8 @@
           // Live Signal ikut sumber yang sama dengan KPI Overview.
           window.__livePanelSource = function(p){
             const multi = p?.multiPortfolio || liveCache.multi || {};
-            if (realConnected(multi)) return realSourceFromMulti(multi);
-            return p?.paper || liveCache.paper || {};
+            const mode = String(window.__executionMode || "paper").toLowerCase();
+            return mode !== "paper" ? realSourceFromMulti(multi) : (p?.paper || liveCache.paper || {});
           };
 
           window.syncLivePanels = function(payload){
@@ -1427,9 +1427,9 @@
               liveCache.paper = paper || {};
               liveCache.analytics = analytics || {};
               liveCache.multi = multi || {};
-              const source = realConnected(multi)
-                ? realSourceFromMulti(multi)
-                : (paper || {});
+              const mode = String(window.__executionMode || "paper").toLowerCase();
+              const source = mode && mode !== "paper" ? realSourceFromMulti(multi) : (paper || {});
+              const paperSource = mode === "paper" ? (paper || {}) : realSourceFromMulti(multi);
               renderStats(market, source, analytics);
               renderPnl(source);
               renderKpiExtra(source);
@@ -1456,57 +1456,6 @@
           };
         })();
         </script>
-
-    <script src="https://s3.tradingview.com/tv.js"></script>
-    <script>
-      // --- TradingView widget (Opsi A) ---
-      var tvWidget = null;
-      var tvSymbol = "BTC/USDT";
-      var tvInterval = "60"; // default 1h
-
-      function tvMapSymbol(sym) {
-        // "BTC/USDT" -> "BINANCE:BTCUSDT"
-        return "BINANCE:" + sym.replace("/", "").toUpperCase();
-      }
-
-      function tvMapInterval(tf) {
-        var map = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D" };
-        return map[tf] || "60";
-      }
-
-      function renderTradingView() {
-        var el = document.getElementById("tv_advanced_chart");
-        if (!el || typeof TradingView === "undefined") return;
-        el.innerHTML = "";
-        tvWidget = new TradingView.widget({
-          container_id: "tv_advanced_chart",
-          symbol: tvMapSymbol(tvSymbol),
-          interval: tvInterval,
-          theme: (document.documentElement.getAttribute("data-theme") === "light") ? "light" : "dark",
-          style: "1",
-          locale: "id",
-          timezone: "Asia/Jakarta",
-          autosize: true,
-          hide_side_toolbar: false,
-          allow_symbol_change: true
-        });
-      }
-
-      // Override fungsi lama dari dashboard.js supaya dropdown menggerakkan widget TradingView,
-      // bukan lightweight-charts yang sudah tidak dipakai.
-      window.setChartSymbol = function (value) {
-        tvSymbol = value;
-        renderTradingView();
-      };
-      window.setChartTimeframe = function (value) {
-        tvInterval = tvMapInterval(value);
-        renderTradingView();
-      };
-      window.loadKlines = function () { renderTradingView(); return Promise.resolve(); };
-      window.ensureTradingViewChart = function () {};
-      window.renderFallbackChart = function () {};
-      document.addEventListener("DOMContentLoaded", renderTradingView);
-    </script>
 
   </body>
 </html>

@@ -68,21 +68,30 @@ class MultiTimeframeAnalyzer:
             trend = "NEUTRAL"
             reasons.append("Mixed EMA alignment")
 
-        score = 50.0
-        if close > ema_20:
-            score += 15.0
-            reasons.append("Price above EMA20")
-        if ema_20 > ema_50:
-            score += 15.0
-            reasons.append("EMA20 above EMA50")
-        if ema_50 > ema_200:
-            score += 20.0
-            reasons.append("EMA50 above EMA200")
-
-        rsi = data.get("rsi_14", 50)
-        if 50 <= rsi <= 70:
-            score += 10.0
-            reasons.append("RSI in healthy range")
+        if trend == "BULLISH":
+            score = 50.0
+            if close > ema_20:
+                score += 15.0
+                reasons.append("Price above EMA20")
+            if ema_20 > ema_50:
+                score += 15.0
+                reasons.append("EMA20 above EMA50")
+            if ema_50 > ema_200:
+                score += 20.0
+                reasons.append("EMA50 above EMA200")
+            rsi = data.get("rsi_14", 50)
+            if 50 <= rsi <= 70:
+                score += 10.0
+                reasons.append("RSI in healthy range")
+        elif trend == "BEARISH":
+            score = 40.0
+            reasons.append("EMA stack bearish")
+        else:
+            # Mixed alignment: baseline 50, plus long-term trend context only.
+            score = 50.0
+            if ema_50 > ema_200:
+                score += 20.0
+                reasons.append("EMA50 above EMA200")
 
         return TimeframeAnalysis(
             timeframe=timeframe,
@@ -107,12 +116,18 @@ class MultiTimeframeAnalyzer:
             tf_results[tf] = result
 
             gate = self.hard_gates.get(tf, {})
+            # Hanya timeframe regime (1d) yang memblokir sinyal; timeframe lebih
+            # rendah dicatat sebagai warning supaya satu timeframe lemah tidak
+            # membatalkan bias keseluruhan.
+            hard = tf == "1d"
             if result.score < gate.get("min_score", 0):
-                hard_fails.append(f"{tf}_score_below_min")
+                if hard:
+                    hard_fails.append(f"{tf}_score_below_min")
                 warnings.append(f"{tf} score {result.score:.1f} < min {gate['min_score']}")
             req_trend = gate.get("required_trend", [])
             if req_trend and result.trend not in req_trend:
-                hard_fails.append(f"{tf}_trend_not_allowed")
+                if hard:
+                    hard_fails.append(f"{tf}_trend_not_allowed")
                 warnings.append(f"{tf} trend {result.trend} not allowed")
 
         conflu = sum(

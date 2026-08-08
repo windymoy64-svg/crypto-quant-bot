@@ -4,7 +4,7 @@
   "live_config": "configs/live_trading.json",
   "paper_trading_enabled": true,
   "telegram_enabled": true,
-  "live_execution_enabled": false,
+  "live_execution_enabled": true,
   "use_primary_exchange": true,
   "interval_seconds": 60,
   "latest_output": "logs/latest_signals.json",

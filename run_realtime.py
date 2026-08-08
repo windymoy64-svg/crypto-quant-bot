@@ -6,6 +6,31 @@ import json
 import logging
 import signal
 import time
+_telegram_event_sent_at: dict[str, str] = {}
+
+
+def notify_live_pipeline_executions(notifier: Any, payload: dict[str, Any]) -> int:
+    """Send each newly observed live execution once per pipeline timestamp."""
+    delivered = 0
+    for collection in (payload.get("entries", []), payload.get("monitor", [])):
+        if not isinstance(collection, list):
+            continue
+        for item in collection:
+            if not isinstance(item, dict):
+                continue
+            result = item.get("result") if isinstance(item.get("result"), dict) else {}
+            execution = result.get("execution") if isinstance(result.get("execution"), dict) else {}
+            if not execution or not execution.get("results"):
+                continue
+            key = f"{item.get('symbol', '')}:{payload.get('generated_at', '')}:{execution.get('status', '')}"
+            if key in _telegram_event_sent_at:
+                continue
+            from app.telegram.trade_reporter import TradeReporter
+            message = TradeReporter().format_live_execution(result.get("decision", {}), execution)
+            if notifier.send(message) is True:
+                _telegram_event_sent_at[key] = key
+                delivered += 1
+    return delivered
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +54,12 @@ from app.executor_agent.bitunix_futures_adapter import (
     BitunixCredentials,
     BitunixFuturesExecutorAdapter,
     BitunixLiveSafetyGate,
+)
+from app.executor_agent.binance_futures_adapter import BinanceFuturesExecutorAdapter
+from app.exchange.binance_futures.client import FuturesEndpoint, FuturesHttpClient
+from app.exchange.binance_futures.orders import (
+    FuturesLiveSafetyGate,
+    FuturesOrderSubmissionEngine,
 )
 from app.agent_pipeline.bridge import (
     AgentPipelineRuntimeConfig,
@@ -72,7 +103,7 @@ def release_unused_memory() -> None:
             malloc_trim.argtypes = [ctypes.c_size_t]
             malloc_trim.restype = ctypes.c_int
             malloc_trim(0)
-    except (AttributeError, OSError):
+    except (AttributeError, OSError, TypeError):
         pass
 
 def load_json(path: str) -> dict[str, object]:
@@ -422,13 +453,10 @@ def build_runtime_agent_coordinator(
 
     credentials = load_exchange_credentials(exchange=exchange)
     if credentials is None or not credentials.is_configured:
-        return AgentPipelineCoordinator(
-            executor_agent=ExecutorAgent(live=True), **llm_kwargs,
-        )
-
-    if exchange != "bitunix":
-        # Binance live wiring remains fail-closed until the selected futures
-        # account config and endpoint are built through the same runtime path.
+        if execution.mode == "dry_run":
+            return AgentPipelineCoordinator(
+                executor_agent=ExecutorAgent(), **llm_kwargs,
+            )
         return AgentPipelineCoordinator(
             executor_agent=ExecutorAgent(live=True), **llm_kwargs,
         )
@@ -439,20 +467,46 @@ def build_runtime_agent_coordinator(
         leverage = trading.leverage or 1
         target_margin_percent = trading.target_margin_percent
         target_risk_reward = trading.target_risk_reward
+        take_profit_percent = trading.take_profit_percent
+        stop_loss_percent = trading.stop_loss_percent
+        trailing_stop_percent = trading.trailing_stop_percent
     except Exception:
         leverage = 1
         target_margin_percent = None
         target_risk_reward = None
-    adapter = BitunixFuturesExecutorAdapter(
-        BitunixCredentials(credentials.api_key, credentials.api_secret),
-        safety_gate=BitunixLiveSafetyGate(
+        take_profit_percent = None
+        stop_loss_percent = None
+        trailing_stop_percent = None
+    if exchange == "bitunix":
+        adapter = BitunixFuturesExecutorAdapter(
+            BitunixCredentials(credentials.api_key, credentials.api_secret),
+            safety_gate=BitunixLiveSafetyGate(
+                enabled=True,
+                dry_run=not network_enabled,
+                confirm_live=execution.live_confirmed,
+            ),
+            leverage=leverage,
+            blocked_entry_symbols=pending_entry_symbols,
+        )
+    elif exchange == "binance":
+        endpoint = FuturesEndpoint.TESTNET if credentials.testnet else FuturesEndpoint.MAINNET
+        client = FuturesHttpClient(
+            credentials.api_key,
+            credentials.api_secret,
+            endpoint=endpoint,
+        )
+        gate = FuturesLiveSafetyGate(
             enabled=True,
             dry_run=not network_enabled,
             confirm_live=execution.live_confirmed,
-        ),
-        leverage=leverage,
-        blocked_entry_symbols=pending_entry_symbols,
-    )
+        )
+        adapter = BinanceFuturesExecutorAdapter(
+            FuturesOrderSubmissionEngine(client, gate),
+        )
+    else:
+        return AgentPipelineCoordinator(
+            executor_agent=ExecutorAgent(live=True), **llm_kwargs,
+        )
     if network_enabled and config.allow_live_orders and exchange_positions:
         reconciliation = adapter.reconcile_take_profits(
             exchange_positions, timestamp=datetime.now(tz=UTC).isoformat(),
@@ -472,12 +526,19 @@ def build_runtime_agent_coordinator(
     balance = 10_000.0
     if network_enabled:
         balance = adapter.available_balance("USDT")
+        if balance <= 0:
+            logger.error(
+                "Live preflight failed: exchange returned no available USDT balance"
+            )
     return AgentPipelineCoordinator(
         executor_agent=ExecutorAgent(
             balance=balance,
             leverage=leverage,
             target_margin_percent=target_margin_percent,
             target_risk_reward=target_risk_reward,
+            take_profit_percent=take_profit_percent,
+            stop_loss_percent=stop_loss_percent,
+            trailing_stop_percent=trailing_stop_percent,
             live=True,
             exchange_adapter=adapter,
             # Full paper parity achieved: three-stage TP, BE/trailing via HOLD state machine,
@@ -952,32 +1013,13 @@ def run_once(
 
     # Initialize telegram notifier for trade reports (works for BOTH paper & live modes)
     telegram_notifier = None
-    telegram_enabled = bool(runtime_config.get("telegram_enabled", False))
+    from app.settings.telegram_preferences import load_telegram_credentials
+    bot_token, chat_id, telegram_enabled = load_telegram_credentials()
     if telegram_enabled:
         from app.telegram import TelegramNotifier
-        import os
-
         logger.info(f"Telegram notifications enabled in config")
 
         # Get credentials - try environment first, then fallback to .env file
-        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-
-        # Fallback: load directly from .env file if not in environment
-        if not bot_token or not chat_id:
-            try:
-                env_path = "/opt/crypto-quant-bot/.env"
-                if os.path.exists(env_path):
-                    with open(env_path, 'r') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line.startswith("TELEGRAM_BOT_TOKEN="):
-                                bot_token = line.split("=", 1)[1]
-                            elif line.startswith("TELEGRAM_CHAT_ID="):
-                                chat_id = line.split("=", 1)[1]
-            except Exception as e:
-                logger.warning(f"Failed to read .env file: {e}")
-
         if bot_token and chat_id:
             telegram_notifier = TelegramNotifier(
                 enabled=True,

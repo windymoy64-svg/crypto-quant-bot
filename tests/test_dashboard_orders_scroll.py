@@ -3,6 +3,10 @@
 Bug: scroll tersendat dan selalu kembali ke atas karena container pemilik
 scroll (`.ao-scroll` / `.order-history-scroll`) ikut dibuat ulang setiap render,
 dan tabel di-rebuild penuh pada setiap `price_update` (~3x/detik).
+
+Catatan: sumber data (paper vs real exchange) kini ditentukan oleh
+execution mode dari `/api/settings/execution` (bukan heuristik
+`accounts_connected`), lihat `tests/test_dashboard_mode_source.py`.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ def test_price_update_tidak_merebuild_tabel_active_orders() -> None:
 def test_real_exchange_pending_orders_feed_active_orders() -> None:
     js = _js()
 
-    assert "const realSourceSelected=realConnected||Number(p.multiPortfolio?.accounts_configured??0)>0" in js
+    assert "const realSourceSelected=!paperMode" in js
     assert "const pendingOrders=realSourceSelected?list(p.multiPortfolio.open_orders)" in js
     assert "renderActiveOrders(positions,pendingOrders)" in js
     assert "renderActiveOrders(positions,p.paper?.pending_orders??[])" not in js
@@ -47,7 +51,7 @@ def test_configured_real_exchange_never_falls_back_to_paper_history() -> None:
 def test_closed_position_summary_is_the_only_live_order_history_source() -> None:
     js = _js()
 
-    assert "function orderHistory(orders){ return list(orders?.closed_positions).length?" in js
+    assert "function orderHistory(orders){ const rows=" in js
     assert 'list(orders?.order_history).filter(o=>String(o?.status||"").toUpperCase()==="CLOSED")' in js
 
 
@@ -123,7 +127,23 @@ def test_order_history_shows_one_completed_trade_using_entry_values() -> None:
     assert "Exit filled on Bitunix" not in js
     assert 'reason||"Reason bot tidak tersedia"' in js
     assert "const rows=h.slice(0,100).map" in js
-    assert 'String(o.reason??o.close_reason??"").replace(/[_-]+/g," ")' in js
+    assert 'reason:o.reason??o.close_label??o.close_reason' in js
+
+
+def test_order_history_preserves_close_label_and_reason_fallback() -> None:
+    js = _js()
+
+    assert 'function orderHistory(orders){ const rows=' in js
+    assert 'reason:o.reason??o.close_label??o.close_reason' in js
+
+
+def test_active_orders_have_realtime_stop_and_trailing_targets() -> None:
+    js = _js()
+
+    assert 'id="ao-sl-${esc(sym)}"' in js
+    assert 'id="ao-trailing-${esc(sym)}"' in js
+    assert "function patchActiveOrderStops(position)" in js
+    assert "patchActiveOrderStops(pos)" in js or "patchActiveOrderStops(position)" in js
 
 
 def test_badge_leverage_mobile_bersebelahan_dengan_badge_arah() -> None:
@@ -167,4 +187,3 @@ def test_css_mc_tags_dan_mc_lev_tersedia() -> None:
     assert ".mc-lev{" in css
     # Memakai token tema yang sudah ada supaya ikut dark/light mode.
     assert "var(--border-2)" in css.split(".mc-lev{")[1].split("}")[0]
-

@@ -49,7 +49,9 @@ class ScoringEngine:
         """Calculate normalized RSI score"""
         if 50 <= rsi <= 65:
             return 100.0
-        elif 45 <= rsi < 50 or 65 < rsi <= 72:
+        elif 45 <= rsi < 50:
+            return 40.0
+        elif 65 < rsi <= 78:
             return 70.0
         elif 35 <= rsi < 45:
             return 40.0
@@ -60,15 +62,14 @@ class ScoringEngine:
         score = 0.0
         reasons = []
         
-        if close > ema_20 > ema_50:
+        if close > ema_20:
             score += 30.0
-            reasons.append("Price above EMA20 and EMA50")
-            
-        if ema_50 > ema_200:
+            reasons.append("Price above EMA20")
+        if ema_20 > ema_50:
             score += 20.0
-            reasons.append("Medium-term trend bullish")
-            
-        if close > ema_20 > ema_50 > ema_200:
+            reasons.append("EMA20 above EMA50")
+
+        if close > ema_20 and ema_20 > ema_50 and ema_50 > ema_200:
             score += 25.0
             reasons.append("All EMAs aligned bullish")
             
@@ -143,6 +144,13 @@ class ScoringEngine:
         elif volume_ratio < 1.0:
             warnings.append("Below average volume")
         
+        # Volatility, liquidity, and relative strength: when signal data does
+        # not provide these, keep a neutral baseline so they do not zero out
+        # the total score and trip quality gates by default.
+        category_scores["volatility"] = data.get("volatility_score", 50.0)
+        category_scores["liquidity"] = data.get("liquidity_score", 50.0)
+        category_scores["relative_strength"] = data.get("relative_strength", 50.0)
+        
         # Normalize all category scores
         normalized_scores = {}
         for category, score in category_scores.items():
@@ -161,8 +169,9 @@ class ScoringEngine:
         for category, score in normalized_scores.items():
             total_score += score * self.category_weights[category]
         
-        # Determine action based on quality gates and total score
-        if len(failed_gates) > 2:
+        # Determine action based on quality gates and total score.
+        # Gates only block BUY; a very strong score still allows the signal.
+        if len(failed_gates) > 2 and total_score < 75:
             action = "SKIP"
         elif total_score >= 75:
             action = "BUY"

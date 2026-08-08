@@ -64,6 +64,17 @@ dist/
 *.bak
 *.swp
 *.swo
+*.jsonl
+
+# =========================
+# Local backups (restore archives)
+# =========================
+backups/
+
+# =========================
+# Graphify generated artifacts
+# =========================
+graphify-out/
 
 # =========================
 # Jupyter

@@ -266,7 +266,7 @@ def _register_compat_routes(dashboard: FastAPI) -> None:
             )
         return response
 
-    @dashboard.get("/health")
+    @dashboard.get("/health", dependencies=[Depends(require_api_key)])
     def legacy_health() -> dict[str, object]:
         return dashboard_service.health()
 

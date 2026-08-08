@@ -309,6 +309,14 @@ def run_pipeline_bridge(
     live_blocker = (
         "paper_parity_incomplete" if executor_live and not parity_verified else None
     )
+    readiness_reason = getattr(
+        coordinator.executor_agent, "live_readiness_reason", "ready"
+    )
+    if executor_live and not parity_verified:
+        live_blocker = "paper_parity_incomplete"
+    elif executor_live and readiness_reason != "ready":
+        live_ready = False
+        live_blocker = readiness_reason
 
     fetch_htf = _candle_fetcher(market_data, config.htf_timeframe, config.htf_limit)
     fetch_mtf = _candle_fetcher(market_data, config.mtf_timeframe, config.mtf_limit)

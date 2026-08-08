@@ -7,7 +7,9 @@ remain disabled until explicitly configured through the dashboard.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.settings.store import SecretsStore, get_secrets_store
 
@@ -44,38 +46,28 @@ def load_telegram_preferences(
         TelegramPreferences with masked values for display
     """
     store = store or get_secrets_store()
-    import os
-    
-    # Primary source: .env file (for sync)
-    env_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    env_chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    env_enabled = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
-    
-    # Secondary source: encrypted store (for persistence across deployments)
     store_token = store.get("telegram.bot_token") or ""
     store_chat_id = store.get("telegram.chat_id") or ""
-    store_enabled = (store.get("telegram.enabled") or "").lower() == "true"
-    
-    # Use env values if available (primary sync source)
-    # Otherwise fall back to store values
-    bot_token = env_token if env_token else store_token
-    chat_id = env_chat_id if env_chat_id else store_chat_id
-    enabled = env_enabled if env_enabled else store_enabled
+    stored_enabled = store.get("telegram.enabled")
+    store_enabled = stored_enabled is not None and stored_enabled.lower() == "true"
+
+    # The encrypted store is authoritative after dashboard configuration. Env
+    # values remain a bootstrap fallback for existing deployments only.
+    if stored_enabled is not None or store_token or store_chat_id or not from_env:
+        bot_token = store_token
+        chat_id = store_chat_id
+        enabled = store_enabled
+    else:
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        enabled = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
     
     # Mask values for display (show last 4 chars only)
     bot_token_masked = _mask_value(bot_token) if bot_token else ""
     chat_id_masked = _mask_value(chat_id) if chat_id else ""
     
-    # Auto-enable if both token and chat_id exist
-    if enabled is False and bot_token and chat_id:
-        enabled = True
-    
-    # Get update timestamp from .env file mtime
-    try:
-        env_mtime = os.path.getmtime("/opt/crypto-quant-bot/.env")
-        updated_at = "Telegram"  # Will be shown as "Auto-loaded from .env"
-    except OSError:
-        updated_at = None
+    record = store.get_record("telegram.enabled")
+    updated_at = record.updated_at if record else None
     
     return TelegramPreferences(
         enabled=enabled,
@@ -107,8 +99,6 @@ def save_telegram_preferences(
     Returns:
         Updated TelegramPreferences with masked values
     """
-    import os
-    
     store = store or get_secrets_store()
     
     # Update encrypted store
@@ -127,52 +117,6 @@ def save_telegram_preferences(
         else:
             store.delete("telegram.chat_id")
     
-    # Also update .env file for runtime access
-    if update_env_file:
-        env_path = "/opt/crypto-quant-bot/.env"
-        if os.path.exists(env_path):
-            try:
-                with open(env_path, 'r') as f:
-                    lines = f.readlines()
-                
-                updated = False
-                new_lines = []
-                for line in lines:
-                    stripped = line.strip()
-                    
-                    if stripped.startswith("TELEGRAM_BOT_TOKEN="):
-                        new_line = f"TELEGRAM_BOT_TOKEN={bot_token.strip()}\n" if bot_token else "# TELEGRAM_BOT_TOKEN=\n"
-                        new_lines.append(new_line)
-                        updated = True
-                    elif stripped.startswith("TELEGRAM_CHAT_ID="):
-                        new_line = f"TELEGRAM_CHAT_ID={chat_id.strip()}\n" if chat_id else "# TELEGRAM_CHAT_ID=\n"
-                        new_lines.append(new_line)
-                        updated = True
-                    elif stripped.startswith("TELEGRAM_ENABLED="):
-                        enabled_val = "true" if enabled else "false"
-                        new_line = f"TELEGRAM_ENABLED={enabled_val}\n"
-                        new_lines.append(new_line)
-                        updated = True
-                    else:
-                        new_lines.append(line)
-                
-                if not updated:
-                    # Append if no telegram lines found
-                    new_lines.extend([
-                        "\n",
-                        "# Telegram settings\n",
-                        f"TELEGRAM_BOT_TOKEN={bot_token.strip()}\n" if bot_token else "# TELEGRAM_BOT_TOKEN=\n",
-                        f"TELEGRAM_CHAT_ID={chat_id.strip()}\n" if chat_id else "# TELEGRAM_CHAT_ID=\n",
-                        f"TELEGRAM_ENABLED={'true' if enabled else 'false'}\n",
-                    ])
-                
-                if updated:
-                    with open(env_path, 'w') as f:
-                        f.writelines(new_lines)
-            except Exception as e:
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to update .env file: {e}")
-    
     return load_telegram_preferences(store=store)
 
 
@@ -183,6 +127,18 @@ def clear_telegram_preferences(store: SecretsStore | None = None) -> TelegramPre
     store.delete("telegram.bot_token")
     store.delete("telegram.chat_id")
     return load_telegram_preferences(store=store)
+
+
+def load_telegram_credentials(
+    store: SecretsStore | None = None,
+) -> tuple[str, str, bool]:
+    """Return runtime credentials and enabled state from the authoritative store."""
+    store = store or get_secrets_store()
+    return (
+        str(store.get("telegram.bot_token") or "").strip(),
+        str(store.get("telegram.chat_id") or "").strip(),
+        (store.get("telegram.enabled") or "false").lower() == "true",
+    )
 
 
 def _mask_value(value: str) -> str:

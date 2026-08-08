@@ -20,6 +20,7 @@ from app.exchange.binance_futures.orders import (
     TimeInForce,
     WorkingType,
 )
+from app.exchange.binance_futures.account import FuturesAccountReader
 from app.executor_agent.models import (
     ExecutionResult,
     OrderRequest,
@@ -73,6 +74,14 @@ class BinanceFuturesExecutorAdapter:
 
         result = self._engine.submit_order(futures_request)
         return self._to_execution_result(result, order, timestamp)
+
+    def available_balance(self, asset: str = "USDT") -> float:
+        """Return the signed futures available balance for runtime sizing."""
+        reader = FuturesAccountReader(self._engine._client)
+        for balance in reader.balances():
+            if str(balance.asset).upper() == asset.upper():
+                return float(balance.available_balance)
+        return 0.0
 
     def _to_futures_request(self, order: OrderRequest) -> FuturesOrderRequest:
         side = FuturesOrderSide.BUY if order.side == "BUY" else FuturesOrderSide.SELL

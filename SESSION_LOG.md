@@ -6,6 +6,359 @@
 
 ---
 
+## Handoff sesi 2026-08-08 — Klarifikasi multi-exchange (Binance vs Bitunix)
+
+**Environment:** `C:\Users\BIG MOUSE\Downloads\crypto-quant-bot-main` (Windows 10, Python 3.13)
+**Jenis sesi:** tanya-jawab/klarifikasi arsitektur. **Tidak ada perubahan kode, tidak ada command dijalankan.**
+
+### Ringkasan
+- User bertanya: "kenapa harus Binance? bukankah bisa Binance dan Bitunix?"
+- Jawaban/klarifikasi arsitektur:
+  - **Monitoring** multi-exchange SUDAH didukung: credential disimpan per exchange (`app/settings/exchange_credentials.py`, `SUPPORTED_EXCHANGES=("binance","bitunix")`), portfolio view mode `multi` bisa menampilkan keduanya, data posisi/balance/order dapat diagregasi.
+  - **Eksekusi live** tetap **single active exchange**: sumbernya `portfolio.active_execution_exchange` (`app/settings/portfolio_preferences.py`), saat ini bernilai default `binance`. Preflight Settings mengarah ke exchange yang aktif (`bitunix` → endpoint Bitunix, `binance` → Futures `/fapi/v3/account`).
+  - Live di Binance DAN Bitunix bersamaan **belum didukung sebagai mode aman**: tanpa risk router (routing keputusan, sizing per venue, margin/leverage rules, symbol mapping, dedup order, aggregate exposure, protective order per venue, rekonsiliasi, kill switch bersama), mengirim keputusan yang sama ke dua venue berisiko menggandakan exposure.
+- Keputusan yang dikomunikasikan: pilih satu exchange untuk live; multi-exchange live simultan harus dibuat sebagai fitur baru (`LiveExecutionRouter`), bukan sekadar broadcast order ke dua exchange.
+
+### File
+- **Diubah/Dibuat/Dihapus:** tidak ada.
+- Hanya file dokumentasi yang dibaca untuk konteks: `app/settings/exchange_credentials.py`, `app/settings/portfolio_preferences.py`, `app/dashboard/routes/settings.py`.
+
+### Command dan validasi
+- Tidak ada command yang dijalankan pada sesi ini.
+- Status test terakhir yang valid (dari sesi sebelumnya, masih berlaku karena tidak ada perubahan kode): **710 passed / 0 failed**, `compileall` OK, `node --check dashboard.js` OK.
+
+### Error/kendala
+- Tidak ada error baru.
+- Kendala operasional yang masih berlaku: `live_confirmed=false`, persisted `mode=paper`, exchange aktif `binance` tanpa credential tersimpan, tidak ada preflight network nyata.
+
+### Keputusan teknis
+- Monitoring boleh multi-exchange; eksekusi live tetap single venue sampai ada `LiveExecutionRouter` yang aman.
+- Tidak mengubah kode apa pun pada sesi ini; keputusan fitur (router multi-exchange atau tetap single venue) diserahkan ke user.
+
+### Status Graphify
+- `graphify update` **tidak dijalankan** pada sesi ini (tidak ada perubahan kode).
+- Artefak `graphify-out/graph.html`, `graphify-out/graph.json`, `graphify-out/GRAPH_REPORT.md` masih dari snapshot terakhir `2026-08-08` (sebelum perubahan live/preflight/shared brain final).
+- Graphify masih **belum di-update ulang** setelah batch final live/preflight.
+
+### Next Step
+1. User memutuskan arah: (a) tetap single venue — lanjut aktivasi live Binance/Bitunix (simpan credential → Test Connection/preflight → mode live + `ENABLE LIVE TRADING` → restart), atau (b) bangun `LiveExecutionRouter` untuk live multi-exchange (fitur baru, perlu desain exposure aggregation + dedup + kill switch + tes).
+2. Jika (a): simpan credential exchange via Settings tanpa mencetak secret, jalankan preflight, verifikasi `can_trade` + saldo USDT, lalu set mode live.
+3. Jalankan `graphify update .` untuk mencerminkan perubahan final sesi-sesi sebelumnya.
+4. Restart runner production hanya setelah preflight bersih dan konfirmasi operasional.
+
+---
+
+## Handoff sesi 2026-08-08 — Final live readiness, shared brain, dan preflight
+
+**Environment:** `C:\Users\BIG MOUSE\Downloads\crypto-quant-bot-main` (Windows 10, Python 3.13)
+**Execution config file:** `configs/realtime.json` memiliki `live_execution_enabled=true`.
+**Runtime persisted saat verifikasi:** `mode=paper`, `live_confirmed=false`, active exchange `binance`, credentials belum terkonfigurasi.
+**Safety:** Live tetap OFF secara operasional; tidak ada order nyata dikirim.
+
+### Pekerjaan selesai
+- Menyatukan jalur brain: scanner -> enrichment/guards -> Chart/Learning/Decision -> `ExecutorAgent` untuk paper, dry-run, dan live.
+- Menambahkan adapter Binance USD-M Futures ke coordinator live yang sama dengan Bitunix.
+- Mempertahankan safety gate live dan fail-closed ketika adapter/credential/readiness tidak tersedia.
+- Memperbaiki preflight Settings live Binance dari endpoint Spot ke endpoint Futures.
+- Preflight memeriksa permission `can_trade` dan available USDT balance.
+- Mengubah `configs/realtime.json` agar `live_execution_enabled=true`.
+- Melanjutkan sinkronisasi dashboard: multi-portfolio snapshot, execution mode source, chart source, exchange unavailable state, `/health` auth, serta Stop Loss/Trailing refresh.
+
+### Pekerjaan belum selesai
+- Aktivasi live nyata belum dilakukan karena credential exchange belum ada dan persisted execution mode masih paper.
+- Belum ada koneksi network/preflight nyata pada Binance/Bitunix dari sesi ini.
+- Belum restart service production dan belum mengirim order.
+- Multi-exchange live simultan belum tersedia; eksekusi tetap single active exchange untuk mencegah duplicate exposure.
+- Graphify belum di-update ulang setelah perubahan live/preflight final.
+
+### File
+- **Diubah:** `configs/realtime.json`, `run_realtime.py`, `app/executor_agent/binance_futures_adapter.py`, `app/executor_agent/agent.py`, `app/agent_pipeline/bridge.py`, `app/dashboard/services.py`, `app/dashboard/app.py`, `app/dashboard/routes/multi_portfolio.py`, `app/dashboard/routes/settings.py`, `app/dashboard/static/dashboard.js`, `tests/test_realtime_runner.py`, `tests/test_dashboard_mode_source.py`, `tests/test_dashboard_orders_scroll.py`, `tests/test_dashboard_services.py`, `TASKS.md`, `SESSION_LOG.md`.
+- **Dibuat:** tidak ada.
+- **Dihapus:** tidak ada.
+
+### Command dan hasil validasi
+```powershell
+python -m pytest tests/test_realtime_runner.py tests/test_executor_agent.py tests/test_agent_pipeline_bridge.py tests/test_binance_futures_adapter.py -q
+# 48 passed
+
+python -m pytest tests/test_settings_api.py tests/test_dashboard_futures_route.py tests/test_realtime_runner.py tests/test_binance_futures_account.py tests/test_binance_futures_adapter.py -q
+# 44 passed
+
+python -m compileall app tests
+# OK
+
+python -m pytest
+# 710 passed, 0 failed
+
+node --check app/dashboard/static/dashboard.js
+# OK
+```
+
+Runtime status check tidak mencetak secret dan menghasilkan:
+
+```text
+mode=paper
+live_confirmed=false
+exchange=binance
+credentials_configured=false
+```
+
+### Error/kendala
+- Live readiness terhenti pada credential/preflight environment, bukan failure test kode.
+- `live_execution_enabled=true` belum mengubah persisted execution preference.
+- Permission futures, balance, endpoint target, dan service production belum dapat diverifikasi tanpa credential/target environment.
+- Belum menjalankan restart production atau order live.
+
+### Keputusan teknis
+- Shared brain wajib sama pada semua mode.
+- Adapter adalah satu-satunya perbedaan eksekusi.
+- Single active exchange untuk live; multi-exchange hanya monitoring sampai router exposure/risk khusus dibuat.
+- Fail-closed lebih diprioritaskan daripada memaksa status LIVE.
+- Tidak pernah menaruh secret di log/markdown/chat.
+
+### Status Graphify
+- `graphify update .` sudah dijalankan sebelumnya setelah perubahan dashboard.
+- Graphify belum di-update ulang setelah perubahan final live/preflight/shared brain.
+- Artefak `graph.html`, `graph.json`, dan `GRAPH_REPORT.md` berhasil pada update sebelumnya, tetapi belum memuat seluruh perubahan terakhir.
+- Snapshot terakhir: 5.668 nodes, 13.837 edges, 303 communities.
+
+### Next Step
+1. Konfigurasi credential exchange secara aman.
+2. Pilih Binance atau Bitunix sebagai active execution exchange.
+3. Jalankan preflight/Test Connection; validasi permission futures dan saldo.
+4. Set execution mode live dengan confirmation `ENABLE LIVE TRADING`.
+5. Update Graphify.
+6. Restart runner production hanya setelah preflight dan persetujuan operasional.
+
+---
+
+## Handoff sesi 2026-08-08 — Live config ON dan Futures preflight
+
+### Perubahan
+- `configs/realtime.json`: `live_execution_enabled` diubah `false -> true`.
+- Route `PUT /api/settings/execution` mendukung preflight live Binance dan Bitunix.
+- Binance preflight membaca account USD-M Futures, mengecek `can_trade`, dan available USDT.
+- Tidak mengubah `.env`, secrets store, execution preference persisted, paper state, atau service.
+
+### Validasi
+- Test preflight/wiring terarah: **44 passed**.
+- Full suite: **710 passed / 0 failed**.
+- Compileall dan JS syntax check: OK.
+
+### Blocker live aktual
+- Runtime persisted masih `paper`.
+- `live_confirmed=false`.
+- Active exchange `binance` belum memiliki credential tersimpan.
+- Karena itu live belum dinyalakan dan tidak boleh dipaksa aktif; guard tetap fail-closed.
+
+---
+
+## Handoff sesi 2026-08-08 — Shared trading brain dan live exchange wiring
+
+### Perubahan
+- `run_realtime.py` sekarang membangun adapter Bitunix atau Binance Futures untuk coordinator yang sama.
+- Binance memakai `FuturesHttpClient`, `FuturesOrderSubmissionEngine`, dan `BinanceFuturesExecutorAdapter`.
+- `ExecutorAgent` mempertahankan fail-closed saat adapter live tidak tersedia.
+- `run_pipeline_bridge()` melaporkan blocker readiness selain blocker parity.
+- Adapter Binance menyediakan available USDT balance untuk sizing live.
+- Test coordinator live Binance memakai mock client agar tidak membuat network call.
+
+### File dibuat/diubah
+- `run_realtime.py`
+- `app/executor_agent/binance_futures_adapter.py`
+- `app/executor_agent/agent.py`
+- `app/agent_pipeline/bridge.py`
+- `app/dashboard/services.py`
+- `app/dashboard/app.py`
+- `app/dashboard/routes/multi_portfolio.py`
+- `app/dashboard/static/dashboard.js`
+- `tests/test_realtime_runner.py`
+- `tests/test_dashboard_mode_source.py`
+- `tests/test_dashboard_orders_scroll.py`
+- `TASKS.md`
+- `SESSION_LOG.md`
+
+### Validasi
+- Full suite: **710 passed / 0 failed**.
+- `python -m compileall app tests`: OK.
+- `node --check app/dashboard/static/dashboard.js`: OK.
+
+### Catatan operasional
+- Shared brain sudah satu jalur secara kode.
+- Live belum dinyalakan dan belum ada koneksi exchange nyata dari sesi ini.
+- Tidak restart service, tidak mengubah secret, tidak mengirim order.
+- Live activation tetap membutuhkan preflight environment target dan konfirmasi operasional.
+
+---
+
+## Handoff sesi 2026-08-08 — Audit keseluruhan dan sinkronisasi dashboard
+
+### Perubahan
+- Audit read-only seluruh menu dashboard dan route menemukan ketidaksinkronan mode, snapshot WebSocket, chart Analytics, trailing UI, status exchange gagal, dan `/health` legacy.
+- `DashboardService.snapshot()` sekarang menyertakan `multi_portfolio` dan mode execution persisted.
+- Apex chart memilih data paper atau multi-portfolio berdasarkan mode.
+- Multi-portfolio mengembalikan `exchange_data_available` dan `exchange_data_status` agar koneksi gagal tidak terlihat seperti akun kosong.
+- `/health` legacy diproteksi dengan `require_api_key`.
+- Refresh metadata Active Orders menjalankan `patchActiveOrderStops()` berkala berdasarkan sumber posisi sesuai mode.
+- Test sinkronisasi diperluas.
+
+### File dibuat/diubah
+- `app/dashboard/services.py`
+- `app/dashboard/app.py`
+- `app/dashboard/routes/multi_portfolio.py`
+- `app/dashboard/static/dashboard.js`
+- `tests/test_dashboard_mode_source.py`
+- `tests/test_dashboard_orders_scroll.py`
+- `TASKS.md`
+- `SESSION_LOG.md`
+
+### Validasi
+- Test terarah: **53 passed**.
+- Full suite: **708 passed / 0 failed**.
+- `python -m compileall app tests`: OK.
+- `node --check app/dashboard/static/dashboard.js`: OK.
+
+### Operasional
+- Tidak restart realtime/API.
+- Tidak mengubah live flag, paper state, posisi, history, atau secret.
+- Live tetap OFF.
+
+### Residual risk
+- Belum menangani token WebSocket di query, CDN pinning/SRI, struktur nested Settings, dan label operasi mutatif yang masih berdampingan dengan konteks read-only.
+- Hard refresh browser diperlukan.
+
+---
+
+## Handoff sesi 2026-08-08 — Orders trailing/reason history
+
+### Temuan dan perubahan
+- Trailing engine paper sudah menghitung dan menyimpan level trailing; masalah tampilan Orders adalah metadata reason/label dan target DOM panel yang tidak cukup eksplisit.
+- `_paper_order_history()` kini mengembalikan `reason`, `close_reason`, dan `close_label` dari event/position.
+- Frontend `orderHistory()` mempertahankan fallback lintas format payload, dengan prioritas `reason`, `close_label`, dan `close_reason` untuk kompatibilitas.
+- Elemen Stop Loss dan Trailing Active Orders diberi ID simbol-specific.
+- Ditambahkan helper `patchActiveOrderStops()` untuk menampilkan level trailing dan status active saat posisi dirender.
+
+### File dibuat/diubah
+- `app/dashboard/services.py`
+- `app/dashboard/static/dashboard.js`
+- `tests/test_dashboard_services.py`
+- `tests/test_dashboard_orders_scroll.py`
+- `TASKS.md`
+- `SESSION_LOG.md`
+
+### Validasi
+- Test terarah: **18 passed**.
+- Full suite: **706 passed / 0 failed**.
+- `python -m compileall app tests`: OK.
+- `node --check app/dashboard/static/dashboard.js`: OK.
+
+### Operasional
+- Tidak restart service.
+- Tidak mengubah paper state, trade history, active positions, live flag, atau secret.
+- Hard refresh diperlukan agar dashboard memuat JS terbaru.
+
+### Next step
+- Cek visual menu Orders dengan posisi paper yang `trailing_active=true`; pastikan kolom Trailing menampilkan level dan indikator aktif, serta Order History menampilkan `Full close — trailing stop`.
+
+---
+
+## Handoff sesi 2026-08-08 — Perbaikan test mode source + final verification
+
+**Environment:** `C:\Users\BIG MOUSE\Downloads\crypto-quant-bot-main` (Windows 10, Python 3.13)
+**Mode:** execution mode persisted; live tetap OFF.
+
+### Hasil
+- Audit menemukan beberapa helper dashboard masih memakai `accounts_connected` sebagai fallback sumber data.
+- Panel tambahan kini memilih sumber berdasarkan `window.__executionMode`.
+- `liveExchangePositions()` kini mengikuti `state.executionMode`, bukan status koneksi akun.
+- `syncDashboardPanels()` tidak lagi mengubah mode non-paper menjadi sumber paper hanya karena akun belum terkoneksi.
+- Test mode source diperketat untuk menjaga kontrak tersebut.
+- Graphify incremental update sudah dijalankan sebelum batch ini.
+
+### File dibuat/diubah
+- `app/dashboard/static/dashboard.js`
+- `app/dashboard/templates/index.html`
+- `tests/test_dashboard_mode_source.py`
+- `TASKS.md`
+- `SESSION_LOG.md`
+
+### Validasi
+```powershell
+python -m pytest tests/test_dashboard_mode_source.py tests/test_dashboard_orders_scroll.py -q
+# 18 passed
+
+python -m compileall app tests
+# OK
+
+node --check app/dashboard/static/dashboard.js
+# OK
+
+python -m pytest
+# 704 passed, 0 failed
+```
+
+### Catatan operasional
+- Tidak menjalankan restart service.
+- Tidak mengubah paper state, posisi, history, konfigurasi live, atau secret.
+- Hard refresh dashboard tetap diperlukan untuk memuat asset static terbaru.
+- Warning TestClient/HTTPX dan Binance bootstrap `-2015` tetap nonfatal.
+
+### Next step
+- Batch selesai. Tunggu instruksi berikutnya.
+
+---
+
+## Handoff sesi 2026-08-08 — Audit & sinkronisasi semua fitur + 704/704 test hijau
+
+**Environment:** `C:\Users\BIG MOUSE\Downloads\crypto-quant-bot-main` (Windows 10, Python 3.13)
+**Mode:** paper/live mengikuti `execution_preferences`; live tetap OFF selama sesi.
+**Hasil validasi:** `python -m pytest -q` → **704 passed, 0 failed**; `compileall` OK; `node --check dashboard.js` OK.
+
+### 1. Apa yang sudah dikerjakan
+- Audit read-only menyeluruh: semua fitur/menu dicek — live mode, Settings (LLM / Telegram / Trading Defaults), AI agents, menu Agents, dashboard — lalu diperbaiki agar sinkron.
+- Dashboard memakai **execution mode sebagai sumber kebenaran**: `loadAll()` memuat `/api/settings/execution`, semua panel di-render lewat `syncDashboardPanels`, websocket snapshot terkontrol (800ms), fallback hanya saat data real kosong, `handleError` tidak mereset ke payload sintetis (`clone(DEFAULT_PAYLOAD)` dihapus).
+- Settings: kredensial Telegram dibaca dari store (`_telegram_credentials`, `load_telegram_credentials`), disable Telegram tidak menghapus token; test LLM & Telegram pakai field timeout + hasil di UI.
+- Trading Defaults (TP%, SL%, trailing, leverage, modal, RR) diteruskan ke `ExecutorAgent` (`take_profit_percent`, `stop_loss_percent`, `trailing_stop_percent`) dan dipakai menghitung stop/TP1 posisi baru.
+- Office/Agents: `_live_trading_flags()` dibaca dari `load_execution_preferences()` (persisted), Dami mengikuti mode persisted; `TradeReporter.format_live_execution()` + `notify_live_pipeline_executions()` untuk notifikasi eksekusi live.
+- Scheduler: `misfire_grace_time=300`, `coalesce=True`, `max_instances=1`.
+- Data integrity baru: `app/data/data_integrity.py` (ambang `+5s`), `app/data/__init__.py`, `tests/__init__.py`.
+- Scoring final: RSI range 65–78→70; EMA perfect 75 (30+20+25); baseline netral 50 untuk volatility/liquidity/RS; SKIP hanya bila >2 gate gagal **dan** skor<75.
+- Multi-timeframe: skor terpisah per trend; gate keras hanya `1d`, TF rendah = warning.
+- Conflict assertion lama vs kontrak baru resolved di `tests/test_dashboard_orders_scroll.py`.
+
+### 2. File dibuat/diubah
+- **Dibuat:** `app/data/__init__.py`, `app/data/data_integrity.py`, `tests/__init__.py`.
+- **Diubah:** `app/scoring/scorer.py`, `app/strategies/multi_timeframe.py`, `app/dashboard/static/dashboard.js`, `app/dashboard/templates/index.html`, `app/dashboard/routes/settings.py`, `app/settings/telegram_preferences.py`, `app/executor_agent/agent.py`, `app/dashboard/office/state.py`, `app/dashboard/scheduler.py`, `run_realtime.py`, `app/telegram/trade_reporter.py`, `tests/test_dashboard_orders_scroll.py`, `TASKS.md`, `SESSION_LOG.md`.
+
+### 3. Command penting dan hasil
+```powershell
+python -m compileall app tests                # OK
+python -m pytest tests/test_scorer.py tests/test_multi_timeframe.py -q   # 13 passed
+python -m pytest tests/test_dashboard_mode_source.py -q                   # 4 passed
+python -m pytest -q                            # 704 passed, 0 failed
+node --check app/dashboard/static/dashboard.js # OK
+```
+
+### 4. Error/masalah terakhir
+- Tidak ada failure tersisa.
+- Konflik assertion antar-test diselesaikan dengan mengikuti kontrak baru (execution-mode), bukan merubah lintas logika.
+- Warning nonfatal TestClient/HTTPX & bootstrap Binance `-2015` masih ada dari runtime lama; live tidak diaktifkan.
+
+### 5. Keputusan teknis
+- Execution mode adalah satu-satunya penentu sumber data panel (paper vs live) — bukan koneksi/accounts.
+- Gate strategi yang keras hanya untuk timeframe `1d`.
+- Baseline scoring netral (50) agar kategori tanpa data tidak menghancurkan skor total.
+- Live tetap OFF; tidak menyentuh config, paper state, posisi, history lama.
+
+### 6. Next step chat baru
+1. Jalankan `graphify` update (grafik belum di-refresh setelah perubahan sesi ini; `graphify-out/graph.html|graph.json|GRAPH_REPORT.md` terakhir dibuat 2026-08-08 pukul 07:55–07:56, sebelum batch ini). Status Graphify: **BELUM diupdate**.
+2. Hard refresh dashboard; cek visual mode paper/live dan Settings (LLM test, Telegram test, Trading Defaults).
+3. Jalankan `python run_realtime.py` (lokal) dan verifikasi log: telegram notify, executor stop/TP, agent dami status.
+4. Cek UI menu Agents & dashboard live assignment setelah runtime jalan.
+5. Tidak ada sprint baru otomatis; berhenti sampai ada instruksi.
+
+---
+
 ## Handoff sesi 2026-07-30 — Handoff sebelum pindah chat
 
 **Environment:** `/opt/crypto-quant-bot`

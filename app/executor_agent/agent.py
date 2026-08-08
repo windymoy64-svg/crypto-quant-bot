@@ -49,6 +49,9 @@ class ExecutorAgent:
         leverage: int = DEFAULT_LEVERAGE,
         target_margin_percent: float | None = None,
         target_risk_reward: float | None = None,
+        take_profit_percent: float | None = None,
+        stop_loss_percent: float | None = None,
+        trailing_stop_percent: float | None = None,
         live: bool = False,
         exchange_adapter: Any = None,
         paper_parity_verified: bool = False,
@@ -59,8 +62,15 @@ class ExecutorAgent:
         self.leverage = leverage
         self.target_margin_percent = target_margin_percent
         self.target_risk_reward = target_risk_reward
+        self.take_profit_percent = take_profit_percent
+        self.stop_loss_percent = stop_loss_percent
+        self.trailing_stop_percent = trailing_stop_percent
         self.live = live
         self._exchange = exchange_adapter
+        self.live_readiness_reason = (
+            "ready" if (not live or exchange_adapter is not None)
+            else "exchange_adapter_not_configured"
+        )
         # Live entries must remain fail-closed until sizing, TP ladder, SL,
         # breakeven, trailing, HOLD and Decision EXIT all share the paper
         # lifecycle implementation. Existing-position EXIT remains available.
@@ -73,6 +83,7 @@ class ExecutorAgent:
     ) -> ExecutionReport:
         """Execute a Decision — main entry point."""
         now = datetime.now(tz=UTC).isoformat()
+
 
         if decision.action in ("SKIP", "HOLD"):
             return self._noop_report(decision, now)
@@ -100,6 +111,15 @@ class ExecutorAgent:
         entry_side: OrderSide = "BUY" if decision.action == "ENTRY_BUY" else "SELL"
         sl_side: OrderSide = "SELL" if entry_side == "BUY" else "BUY"
 
+        stop_loss = plan.stop_loss
+        if self.stop_loss_percent is not None and self.stop_loss_percent > 0:
+            distance = plan.entry_price * self.stop_loss_percent / 100.0
+            stop_loss = plan.entry_price - distance if entry_side == "BUY" else plan.entry_price + distance
+        take_profit_1 = plan.take_profit_1
+        if self.take_profit_percent is not None and self.take_profit_percent > 0:
+            distance = plan.entry_price * self.take_profit_percent / 100.0
+            take_profit_1 = plan.entry_price + distance if entry_side == "BUY" else plan.entry_price - distance
+
         orders: list[OrderRequest] = [
             OrderRequest(
                 symbol=decision.symbol, side=entry_side, order_type="MARKET",
@@ -112,19 +132,20 @@ class ExecutorAgent:
             ),
             OrderRequest(
                 symbol=decision.symbol, side=sl_side, order_type="STOP_MARKET",
-                quantity=quantity, stop_price=plan.stop_loss, reduce_only=True,
+                quantity=quantity, stop_price=stop_loss, reduce_only=True,
                 meta={
                     "role": "stop_loss",
                     "lifecycle_version": LIFECYCLE_VERSION,
+                    "stop_loss_percent": self.stop_loss_percent,
                 },
             ),
         ]
 
         levels = take_profit_levels(
             entry=plan.entry_price,
-            stop_loss=plan.stop_loss,
+            stop_loss=stop_loss,
             side=entry_side,
-            planned_levels=(plan.take_profit_1, plan.take_profit_2, plan.take_profit_3),
+            planned_levels=(take_profit_1, plan.take_profit_2, plan.take_profit_3),
             target_risk_reward=self.target_risk_reward,
         )
         quantities = take_profit_quantities(quantity, len(levels))
@@ -139,6 +160,8 @@ class ExecutorAgent:
                         "lifecycle_version": LIFECYCLE_VERSION,
                         "close_fraction": TP_FRACTIONS[index],
                         "target_risk_reward": self.target_risk_reward,
+                        "take_profit_percent": self.take_profit_percent,
+                        "trailing_stop_percent": self.trailing_stop_percent,
                     },
                 ))
 
@@ -361,4 +384,3 @@ class ExecutorAgent:
             average_entry_price=0.0, total_fees=0.0, timestamp=now,
             errors=[error],
         )
-

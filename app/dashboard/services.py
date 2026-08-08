@@ -13,6 +13,7 @@ from app.analytics import AnalyticsConfig, AnalyticsEngine
 from app.market.data_service import MarketDataService
 from app.monitoring import system_health_monitor
 from app.portfolio.sync import PortfolioSynchronizer
+from app.settings.execution_preferences import load_execution_preferences
 
 
 logger = logging.getLogger(__name__)
@@ -310,7 +311,9 @@ class DashboardService:
                     "entry": entry_price,
                     "modal": modal,
                     "pnl": pnl,
-                    "reason": ev.get("reason"),
+                    "reason": ev.get("reason") or position.get("close_reason"),
+                    "close_reason": position.get("close_reason") or ev.get("reason"),
+                    "close_label": ev.get("close_label") or position.get("close_label"),
                     "close_scope": "full",
                     "update_time": ev.get("timestamp"),
                 }
@@ -523,11 +526,16 @@ class DashboardService:
         }
 
     def snapshot(self) -> dict[str, Any]:
+        execution = load_execution_preferences()
+        from app.dashboard.routes.multi_portfolio import _build_multi_portfolio_payload
+
         return {
             "market": self.market(),
             "portfolio": self.portfolio(),
             "live_orders": self.live_orders(),
             "paper": self.paper(),
+            "multi_portfolio": _build_multi_portfolio_payload(),
+            "execution_mode": execution.mode,
             "backtest": self.backtest(),
             "analytics": self.analytics(),
             "health": self.health(),

@@ -3,11 +3,43 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from run_realtime import (
+    build_runtime_agent_coordinator,
     load_open_position_symbols,
     prepare_paper_signals,
     release_unused_memory,
     write_scan_outputs,
 )
+
+
+def test_runtime_coordinator_uses_binance_futures_adapter_for_live(monkeypatch) -> None:
+    from app.agent_pipeline.bridge import AgentPipelineRuntimeConfig
+    from app.settings.execution_preferences import ExecutionPreferences
+    from app.settings.exchange_credentials import ExchangeCredentialsRecord
+
+    config = AgentPipelineRuntimeConfig(enabled=True, execute_decisions=True, allow_live_orders=True)
+    credentials = ExchangeCredentialsRecord(
+        exchange="binance", api_key="key", api_secret="secret", testnet=True, updated_at=None,
+    )
+    monkeypatch.setattr("run_realtime.load_execution_preferences", lambda: ExecutionPreferences("live", True))
+    monkeypatch.setattr("run_realtime.load_exchange_credentials", lambda exchange: credentials)
+    monkeypatch.setattr("run_realtime.FuturesHttpClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr("app.executor_agent.binance_futures_adapter.FuturesAccountReader", lambda client: type("Reader", (), {"balances": lambda self: []})())
+    coordinator = build_runtime_agent_coordinator(config=config, exchange="binance")
+
+    assert coordinator.executor_agent.live is True
+    assert coordinator.executor_agent.paper_parity_verified is True
+    assert coordinator.executor_agent._exchange.__class__.__name__ == "BinanceFuturesExecutorAdapter"
+
+
+def test_runtime_coordinator_uses_same_executor_brain_in_dry_run(monkeypatch) -> None:
+    from app.agent_pipeline.bridge import AgentPipelineRuntimeConfig
+    from app.settings.execution_preferences import ExecutionPreferences
+
+    config = AgentPipelineRuntimeConfig(enabled=True, execute_decisions=True, allow_live_orders=True)
+    monkeypatch.setattr("run_realtime.load_execution_preferences", lambda: ExecutionPreferences("dry_run", False))
+    coordinator = build_runtime_agent_coordinator(config=config, exchange="binance")
+
+    assert coordinator.executor_agent.live is False
 
 
 def test_write_scan_outputs_creates_latest_and_history(tmp_path: Path) -> None:

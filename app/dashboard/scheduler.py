@@ -146,6 +146,9 @@ def start_scheduler() -> None:
             id="daily_reset_wib",
             name="Daily Reset 07:00 WIB",
             replace_existing=True,
+            misfire_grace_time=300,
+            coalesce=True,
+            max_instances=1,
         )
 
         _scheduler.start()
