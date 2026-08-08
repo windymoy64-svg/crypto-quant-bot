@@ -21,6 +21,12 @@
 - Secret audit dijalankan terhadap semua file yang akan di-track → `NO_SECRET_HITS`; `data/`, `logs/`, `.env` tetap ter-ignore.
 - GitHub Actions run #70 dipicu oleh push `6008a35` (status masih `in_progress` saat catatan ini ditulis).
 
+### Perbaikan CI setelah push pertama
+- Run #70 dan #71 **failure (exit 2)** → dua akar masalah ditemukan & diperbaiki:
+  1. `ci.yml` memakai Python 3.12, padahal `pyproject.toml` `requires-python = ">=3.13"` → diganti `python-version: "3.13"` (commit `7217061`).
+  2. Aturan `.gitignore` `data/` ikut meng-ignore **modul Python** `app/data/` → ditambah `!app/data/` dan modul `app/data/__init__.py` + `data_integrity.py` di-track (commit `1c0e216`).
+- Run CI terakhir commit `1c0e216` → **conclusion: success** (nama run baru, run ID `31242366364`).
+
 ### File
 - **Diubah:** `.gitignore`, `.github/workflows/ci.yml`, `SESSION_LOG.md`; `.git/` baru dibuat.
 - **Dibuat/Dihapus:** tidak ada file source yang dihapus.
