@@ -45,6 +45,7 @@ jobs:
         run: |
           bash -n verify_dashboard_api.sh
           bash -n check_production_health.sh
+          bash -n deploy_vps.sh
 
       - name: Prevent rejected run_api.py workarounds
         run: |
