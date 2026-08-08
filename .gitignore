@@ -43,6 +43,7 @@ Thumbs.db
 logs/
 reports/
 data/
+!app/data/
 
 # Jika ingin struktur folder tetap ada
 !logs/.gitkeep
