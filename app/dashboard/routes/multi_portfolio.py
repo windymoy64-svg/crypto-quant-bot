@@ -688,10 +688,14 @@ def _build_closed_position_history(
     current = (now or datetime.now(tz=UTC)).astimezone(UTC)
     session_start = current.replace(hour=0, minute=0, second=0, microsecond=0)
     reasons_by_position: dict[str, dict[str, Any]] = {}
+    protection_by_position: dict[str, list[dict[str, Any]]] = {}
     for metadata in order_metadata.values():
         position_id = str(metadata.get("position_id") or "")
         role = str(metadata.get("role") or "")
         reason = metadata.get("reason")
+        if position_id and metadata.get("metadata_kind") == "protection_intent":
+            protection_by_position.setdefault(position_id, []).append(metadata)
+            continue
         if (
             not position_id
             or not reason
@@ -717,6 +721,12 @@ def _build_closed_position_history(
         quantity = abs(_as_float(position.get("quantity")))
         leverage = max(_as_float(position.get("leverage")), 1.0)
         metadata = reasons_by_position.get(position_id, {})
+        reason = metadata.get("reason")
+        reason_source = "bot_order_metadata" if reason else ""
+        if not reason:
+            reason, reason_source = _infer_closed_position_reason(
+                position, protection_by_position.get(position_id, [])
+            )
         history.append({
             **position,
             "status": "CLOSED",
@@ -725,12 +735,44 @@ def _build_closed_position_history(
             "quantity": quantity,
             "modal": (entry_price * quantity / leverage) if entry_price and quantity else None,
             "pnl": position.get("realized_pnl"),
-            "reason": metadata.get("reason"),
-            "reason_source": "bot_order_metadata" if metadata else None,
+            "reason": reason,
+            "reason_source": reason_source,
             "close_scope": "full",
             "update_time": position.get("closed_at"),
         })
     return history
+
+
+def _infer_closed_position_reason(
+    position: dict[str, Any], protection: list[dict[str, Any]] | None = None,
+) -> tuple[str, str]:
+    """Infer exchange-side TP/SL closes when bot exit metadata is absent."""
+    close = _as_float(position.get("close_price", position.get("closePrice")))
+    stop = _as_float(position.get("stop_loss", position.get("slPrice")))
+    target = _as_float(position.get("take_profit", position.get("tpPrice")))
+    side = str(position.get("side") or "").upper()
+    protection = protection or []
+    if stop <= 0:
+        rows = [row for row in protection if row.get("role") == "stop_loss"]
+        stop = _as_float(rows[-1].get("trigger_price")) if rows else 0.0
+    if target <= 0:
+        rows = [row for row in protection if str(row.get("role", "")).startswith("take_profit_")]
+        prices = [_as_float(row.get("trigger_price")) for row in rows]
+        prices = [price for price in prices if price > 0]
+        if prices:
+            target = min(prices) if side in {"SHORT", "SELL"} else max(prices)
+    if close > 0:
+        if side in {"SHORT", "SELL"}:
+            if stop > 0 and close >= stop:
+                return "stop_loss_hit", "price_inference"
+            if target > 0 and close <= target:
+                return "take_profit_hit", "price_inference"
+        else:
+            if stop > 0 and close <= stop:
+                return "stop_loss_hit", "price_inference"
+            if target > 0 and close >= target:
+                return "take_profit_hit", "price_inference"
+    return "exchange_closed_without_bot_reason", "exchange_lifecycle"
 
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
@@ -777,6 +819,8 @@ def _normalize_bitunix_closed_position(row: dict[str, Any]) -> dict[str, Any]:
         "quantity": row.get("maxQty"),
         "entry_price": row.get("entryPrice"),
         "close_price": row.get("closePrice"),
+        "stop_loss": row.get("stopLoss", row.get("slPrice")),
+        "take_profit": row.get("takeProfit", row.get("tpPrice")),
         "leverage": row.get("leverage"),
         "margin_type": row.get("marginMode"),
         "realized_pnl": realized,

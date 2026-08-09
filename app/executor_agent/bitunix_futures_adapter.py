@@ -668,6 +668,65 @@ class BitunixFuturesExecutorAdapter:
                 if isinstance(plan.get("strategy_version"), dict) else None
             ),
         ))
+        self.record_protection_metadata(
+            symbol=str(plan.get("symbol") or ""), position_id=position_id,
+            side=str(plan.get("position_side") or ""), role="stop_loss",
+            trigger_price=stop,
+        )
+        for index, price in enumerate(levels, start=1):
+            self.record_protection_metadata(
+                symbol=str(plan.get("symbol") or ""), position_id=position_id,
+                side=str(plan.get("position_side") or ""),
+                role=f"take_profit_{index}", trigger_price=price,
+            )
+
+    def record_protection_metadata(
+        self, *, symbol: str, position_id: str, side: str,
+        role: str, trigger_price: float | None = None,
+    ) -> None:
+        """Persist exchange-side protection intent for later reason inference."""
+        if role not in {"stop_loss", *TP_ROLES} or not position_id:
+            return
+        order = OrderRequest(
+            symbol=symbol,
+            side="SELL" if str(side).upper() == "LONG" else "BUY",
+            order_type="LIMIT", quantity=0.0, price=trigger_price,
+            reduce_only=True,
+            meta={
+                "role": role,
+                "metadata_kind": "protection_intent",
+                "position_id": str(position_id),
+                "trigger_price": trigger_price,
+            },
+        )
+        self._record_order_metadata(
+            f"protection:{position_id}:{role}", order,
+            datetime.now(tz=UTC).isoformat(),
+        )
+
+    def record_protection_metadata(
+        self, *, symbol: str, position_id: str, side: str,
+        role: str, trigger_price: float | None = None,
+    ) -> None:
+        """Persist exchange-side protection intent for later reason inference."""
+        if role not in {"stop_loss", *TP_ROLES} or not position_id:
+            return
+        order = OrderRequest(
+            symbol=symbol,
+            side="SELL" if str(side).upper() == "LONG" else "BUY",
+            order_type="LIMIT", quantity=0.0, price=trigger_price,
+            reduce_only=True,
+            meta={
+                "role": role,
+                "metadata_kind": "protection_intent",
+                "position_id": str(position_id),
+                "trigger_price": trigger_price,
+            },
+        )
+        self._record_order_metadata(
+            f"protection:{position_id}:{role}", order,
+            datetime.now(tz=UTC).isoformat(),
+        )
 
     def _load_pending_take_profits(self) -> list[dict[str, Any]]:
         try:
@@ -880,6 +939,8 @@ class BitunixFuturesExecutorAdapter:
             "symbol": _canonical_symbol(order.symbol),
             "role": role,
             "reason": reason,
+            "metadata_kind": order.meta.get("metadata_kind", "bot_order"),
+            "trigger_price": order.meta.get("trigger_price"),
             "position_id": str(order.meta.get("position_id") or ""),
             "reduce_only": bool(order.reduce_only),
             "lifecycle_version": order.meta.get("lifecycle_version"),

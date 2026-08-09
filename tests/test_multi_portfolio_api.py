@@ -643,6 +643,52 @@ def test_bitunix_closed_position_normalization_uses_net_pnl() -> None:
     assert position["closed_at"]
 
 
+def test_closed_position_reason_infers_stop_loss_from_exchange_price() -> None:
+    history = multi_route._build_closed_position_history(
+        [{
+            "position_id": "sl-1", "symbol": "BTCUSDT", "side": "LONG",
+            "quantity": 1, "entry_price": 100, "close_price": 94,
+            "stop_loss": 95, "take_profit": 110,
+            "realized_pnl": -6, "closed_at": "2026-08-01T01:00:00+00:00",
+        }], {}, now=datetime(2026, 8, 1, 4, 0, tzinfo=UTC),
+    )
+
+    assert history[0]["reason"] == "stop_loss_hit"
+    assert history[0]["reason_source"] == "price_inference"
+
+
+def test_closed_position_reason_uses_protection_metadata_when_levels_missing() -> None:
+    history = multi_route._build_closed_position_history(
+        [{
+            "position_id": "tp-1", "symbol": "ETHUSDT", "side": "SHORT",
+            "quantity": 1, "entry_price": 100, "close_price": 90,
+            "realized_pnl": 10, "closed_at": "2026-08-01T01:00:00+00:00",
+        }], {
+            "protection:tp-1:take_profit_1": {
+                "metadata_kind": "protection_intent",
+                "position_id": "tp-1", "role": "take_profit_1",
+                "trigger_price": 92,
+            },
+        }, now=datetime(2026, 8, 1, 4, 0, tzinfo=UTC),
+    )
+
+    assert history[0]["reason"] == "take_profit_hit"
+    assert history[0]["reason_source"] == "price_inference"
+
+
+def test_closed_position_reason_has_exchange_fallback() -> None:
+    history = multi_route._build_closed_position_history(
+        [{
+            "position_id": "manual-1", "symbol": "SOLUSDT", "side": "LONG",
+            "quantity": 1, "entry_price": 100, "close_price": 101,
+            "realized_pnl": 1, "closed_at": "2026-08-01T01:00:00+00:00",
+        }], {}, now=datetime(2026, 8, 1, 4, 0, tzinfo=UTC),
+    )
+
+    assert history[0]["reason"] == "exchange_closed_without_bot_reason"
+    assert history[0]["reason_source"] == "exchange_lifecycle"
+
+
 @pytest.mark.parametrize("field", ["realizedPNL", "realizedPnl", "realized_pnl"])
 def test_bitunix_closed_position_preserves_positive_realized_pnl(field: str) -> None:
     position = multi_route._normalize_bitunix_closed_position({
