@@ -16,7 +16,7 @@
   </head>
   <body>
     <div class="app-shell">
-      <aside id="sidebar" class="sidebar">
+      <aside id="sidebar" class="sidebar navigation-rail">
         <div class="brand">
           <span class="brand-mark">CQ</span>
           <div>
@@ -39,11 +39,11 @@
         </nav>
       </aside>
 
-      <main class="terminal">
-        <header class="topbar">
+      <main class="terminal operations-shell">
+        <header class="topbar command-strip">
           <div class="topbar-title">
-            <p class="eyebrow">Read-only trading operations</p>
-            <h1>Quant Command Center</h1>
+            <p class="eyebrow">Execution desk / read-only</p>
+            <h1>Market Operations</h1>
           </div>
           <nav class="top-nav" aria-label="Dashboard sections">
             <a href="#overview" data-view-link="overview">Overview</a>
@@ -63,7 +63,12 @@
           </div>
         </header>
 
-        <section id="overview" class="metrics view-section active" data-view-section="overview">
+        <section id="overview" class="metrics view-section active operations-metrics" data-view-section="overview">
+          <div class="desk-intro">
+            <span class="desk-kicker">SESSION CONTROL</span>
+            <strong>Know the market. Protect the position.</strong>
+            <span class="desk-note">Realtime signals, execution state, and risk exposure in one operating view.</span>
+          </div>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-16 3 9h4v2h-5l-2-6-4 15-4-9H3z"/></svg></span><span class="status-badge neutral">Hari Ini</span></div><span>Trade</span><strong id="metric-trades-today">0</strong><div class="kpi-meta"><small>trade dieksekusi</small></div></article>
           <article class="kpi-card featured"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18v-2H5V3H3zm4 12l4-4 3 3 6-6-1.5-1.5L14 9l-3-3-6 6 2 3z"/></svg></span><span class="status-badge success">Hari Ini</span></div><span>Profit </span><strong id="metric-profit-today">0</strong><div class="kpi-meta"><small>realized PnL</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 012-2h12a2 2 0 012 2v1h1a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm14 7a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/></svg></span><span id="balance-source-badge" class="status-badge info">Paper</span></div><span>Balance</span><strong id="metric-balance">0</strong><div class="kpi-meta"><small id="balance-source-caption">paper/live source</small></div></article>
@@ -100,7 +105,7 @@
           <article id="universe" class="panel"><div class="panel-head"><div><p>Market</p><h2>Binance Coin Universe</h2></div><span id="universe-count" class="pill">0 symbols</span></div><input id="symbol-filter" placeholder="Filter symbols: BTC, ETH, SOL..." /><div id="symbol-universe" class="symbol-grid"></div><small id="universe-caption">Loaded from dashboard defaults and bot config.</small></article>
         </section>
 
-        <section class="workspace view-section active" data-view-section="overview">
+        <section class="workspace view-section active operations-feed" data-view-section="overview">
           <article id="signal-terminal-card" class="panel">
             <div class="panel-head">
               <div><p>Live Signal</p><h2>Signal Terminal</h2></div>

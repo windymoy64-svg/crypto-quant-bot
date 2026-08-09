@@ -3405,6 +3405,63 @@ button,input,select{font-family:inherit}
   .market-badge.latency,.market-badge.clock{display:none}
 }
 
+/* ===== Operations desk composition ===== */
+.operations-shell{max-width:1840px;padding:22px 30px 100px}
+.navigation-rail{width:auto}
+.command-strip{display:grid;grid-template-columns:minmax(190px,1fr) auto minmax(380px,1.6fr);align-items:center;gap:24px}
+.command-strip .top-actions{margin-left:0;justify-content:flex-end}
+.command-strip .top-nav{margin:0;border-left:0;padding:0;justify-content:center}
+.operations-metrics{display:grid;grid-template-columns:minmax(230px,1.35fr) repeat(7,minmax(105px,1fr));align-items:stretch;gap:9px}
+.operations-metrics .desk-intro{grid-row:span 1;display:flex;flex-direction:column;justify-content:space-between;min-height:132px;padding:17px 18px;border:1px solid var(--green-br);border-radius:var(--radius);background:linear-gradient(145deg,rgba(184,243,107,.13),rgba(14,21,27,.78) 68%);position:relative;overflow:hidden}
+.operations-metrics .desk-intro::after{content:"01";position:absolute;right:12px;bottom:-14px;color:rgba(184,243,107,.12);font-family:'DM Mono',monospace;font-size:74px;font-weight:500;line-height:1}
+.desk-kicker{font-family:'DM Mono',monospace;color:var(--green);font-size:9px;letter-spacing:.16em}
+.desk-intro strong{max-width:180px;font-size:19px;line-height:1.08;letter-spacing:-.05em;position:relative;z-index:1}
+.desk-note{max-width:210px;color:var(--txt-dim);font-size:10px;line-height:1.35;position:relative;z-index:1}
+.operations-metrics .kpi-card{min-height:132px}
+.operations-feed{grid-template-columns:minmax(0,1.45fr) minmax(280px,.55fr);align-items:start}
+.operations-feed #signal-terminal-card{min-height:430px}
+.operations-feed #pnl-stream-card{min-height:430px;position:relative;overflow:hidden}
+.operations-feed #pnl-stream-card::before{content:"LIVE";position:absolute;right:17px;top:74px;color:rgba(184,243,107,.08);font-family:'DM Mono',monospace;font-size:56px;font-weight:500;letter-spacing:-.1em;pointer-events:none;transform:rotate(-90deg);transform-origin:top right}
+.operations-feed .stream-list{position:relative;z-index:1}
+.operations-feed .panel-head h2{font-size:20px}
+.operations-feed .panel-head p{font-size:9px}
+.operations-feed .stream-list{max-height:340px;overflow:auto}
+.operations-feed .item{padding:15px 14px}
+.operations-feed .item strong{font-size:14px}
+.scanner-terminal{min-height:calc(100vh - 180px)}
+.scanner-terminal .panel-head{align-items:center}
+.portfolio-panel{min-height:500px}
+.agent-squad-panel{min-height:620px}
+
+@media (max-width:1450px){
+  .operations-shell{padding-left:20px;padding-right:20px}
+  .operations-metrics{grid-template-columns:minmax(190px,1.2fr) repeat(4,minmax(110px,1fr))}
+  .operations-metrics .kpi-card:nth-of-type(n+6){grid-row:2}
+}
+@media (max-width:1100px){
+  .command-strip{grid-template-columns:1fr auto;gap:12px}
+  .command-strip .top-nav{grid-column:1 / -1;justify-content:flex-start;border-top:1px solid var(--border);padding-top:8px}
+  .command-strip .top-actions{grid-column:1 / -1;justify-content:flex-start}
+  .operations-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .operations-metrics .desk-intro{grid-column:span 2}
+  .operations-metrics .kpi-card{min-height:118px}
+  .operations-feed{grid-template-columns:1fr}
+  .operations-feed #pnl-stream-card{min-height:280px}
+}
+@media (max-width:700px){
+  .operations-shell{padding:10px 10px 70px}
+  .command-strip{display:flex;flex-wrap:wrap;gap:10px}
+  .command-strip .topbar-title{flex:1 1 100%}
+  .command-strip .top-actions{display:flex}
+  .command-strip .top-actions .market-badge{display:none}
+  .operations-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .operations-metrics .desk-intro{grid-column:1 / -1;min-height:145px}
+  .operations-metrics .kpi-card{min-height:108px}
+  .operations-metrics .kpi-card:nth-of-type(n+6){grid-row:auto}
+  .operations-feed #signal-terminal-card,.operations-feed #pnl-stream-card{min-height:0}
+  .operations-feed #pnl-stream-card::before{top:56px;font-size:42px}
+}
+
 
 
 @media (max-width:640px){
