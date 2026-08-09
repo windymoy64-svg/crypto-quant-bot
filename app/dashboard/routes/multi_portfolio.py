@@ -415,6 +415,14 @@ def _attach_bitunix_position_tpsl(
                 and _compact_symbol(order.get("symbol")) == symbol
             )
         )]
+        # A partial close can rotate the exchange positionId while a pending
+        # TPSL order still carries the previous id. Prefer exact matches, but
+        # expose symbol-matched protection when no exact order remains.
+        if not matches and symbol:
+            matches = [
+                order for order in orders
+                if _compact_symbol(order.get("symbol")) == symbol
+            ]
         tp = next((_bitunix_protection_price(row, "tp") for row in matches
                    if _bitunix_protection_price(row, "tp") is not None), None)
         sl = next((_bitunix_protection_price(row, "sl") for row in matches

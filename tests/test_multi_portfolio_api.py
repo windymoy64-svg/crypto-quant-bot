@@ -565,6 +565,18 @@ def test_bitunix_tpsl_falls_back_to_symbol_when_order_omits_position_id() -> Non
     assert positions[0]["stop_loss"] == "0.091"
 
 
+def test_bitunix_tpsl_falls_back_to_symbol_when_position_id_rotates() -> None:
+    positions = [{"position_id": "new-p1", "symbol": "TAO/USDT"}]
+
+    multi_route._attach_bitunix_position_tpsl(positions, [{
+        "positionId": "old-p1", "symbol": "TAOUSDT",
+        "tpPrice": "350.0", "tpQty": "0.7",
+    }])
+
+    assert positions[0]["take_profit"] == "350.0"
+    assert positions[0]["take_profit_total_quantity"] == pytest.approx(0.7)
+
+
 def test_bitunix_details_loads_all_read_only_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

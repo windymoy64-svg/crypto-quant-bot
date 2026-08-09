@@ -108,6 +108,22 @@ def test_resume_after_partial_allocates_only_remaining_quantity(tmp_path) -> Non
     assert sum(qty for _, qty in adapter.placed) == 0.7
 
 
+def test_rearm_after_partial_restores_missing_remaining_tps(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    adapter.rows = [adapter.rows[-1]]
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(adapter, store)
+    controller.register(replace(_state(), remaining_quantity=0.7))
+
+    roles = controller.rearm_remaining_take_profits({
+        "position_id": "p1", "quantity": 0.7,
+    })
+
+    assert roles == ["take_profit_2", "take_profit_3"]
+    assert [role for role, _ in adapter.placed] == roles
+    assert [qty for _, qty in adapter.placed] == [0.3, 0.4]
+
+
 def test_shared_acr_trailing_tightens_live_stop_and_persists(tmp_path) -> None:
     adapter = StatefulAdapter()
     store = LiveLifecycleStore(tmp_path / "state.json")

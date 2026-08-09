@@ -1346,6 +1346,7 @@ def run_once(
     if agent_pipeline_config.enabled:
         coordinator: AgentPipelineCoordinator | None = None
         open_positions_map: dict[str, dict[str, object]] = {}
+        live_partial_close_symbols: set[str] = set()
         pending_entry_symbols: set[str] = set()
         pending_orders_read_ok = execution_preferences.mode not in {"dry_run", "live"}
         if execution_preferences.mode in {"dry_run", "live"} and exchange.lower() == "bitunix":
@@ -1384,6 +1385,18 @@ def run_once(
                                 "remaining_size": pos.get("quantity"),
                             }
                             pending_entry_symbols.add(symbol)
+                    previous_partial_snapshot = read_json_file(
+                        TELEGRAM_LIVE_PARTIAL_CHECKPOINT, None,
+                    )
+                    if isinstance(previous_partial_snapshot, dict):
+                        for symbol, position in open_positions_map.items():
+                            previous = previous_partial_snapshot.get(symbol)
+                            if not isinstance(previous, dict):
+                                continue
+                            old_quantity = abs(float(previous.get("quantity") or 0.0))
+                            current_quantity = abs(float(position.get("quantity") or 0.0))
+                            if old_quantity - current_quantity > 1e-12:
+                                live_partial_close_symbols.add(symbol)
                     for order in details.get("open_orders", []) or []:
                         if not isinstance(order, dict):
                             continue
@@ -1517,6 +1530,34 @@ def run_once(
                     coordinator.executor_agent.paper_parity_verified = False
             if live_lifecycle_updates:
                 agent_pipeline_payload["live_lifecycle_updates"] = live_lifecycle_updates
+
+        # Bitunix may consume or detach the remaining TPSL ladder after a
+        # partial close. Restore missing levels from the registered lifecycle.
+        if (
+            live_partial_close_symbols
+            and execution_preferences.mode == "live"
+            and execution_preferences.network_enabled
+            and exchange.lower() == "bitunix"
+            and coordinator is not None
+        ):
+            try:
+                from app.execution.live_lifecycle import LiveLifecycleController
+
+                adapter = getattr(coordinator.executor_agent, "_exchange", None)
+                if isinstance(adapter, BitunixFuturesExecutorAdapter):
+                    controller = LiveLifecycleController(adapter)
+                    for symbol in live_partial_close_symbols:
+                        position = open_positions_map.get(symbol)
+                        if not isinstance(position, dict):
+                            continue
+                        roles = controller.rearm_remaining_take_profits(position)
+                        if roles:
+                            logger.info(
+                                "Bitunix TP re-arm symbol=%s roles=%s",
+                                symbol, roles,
+                            )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Bitunix TP re-arm failed: %s", exc)
 
         # --- Decision → Paper execution bridge ---
         # When the Decision Agent returns EXIT for an open position, route it to

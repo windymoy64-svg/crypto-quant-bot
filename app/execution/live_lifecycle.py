@@ -92,12 +92,20 @@ class LiveLifecycleController:
         rows = self.adapter.pending_tpsl(symbol=state.symbol, position_id=position_id)
         active_tp_prices = {round(float(row.get("tpPrice") or 0), 8): row for row in rows if row.get("tpPrice")}
         state.tp_order_ids = {}
+        consumed = max(state.initial_quantity - remaining, 0.0)
+        cumulative_fraction = 0.0
         for index, level in enumerate(state.tp_levels[:3]):
             role = TP_ROLES[index]
             row = active_tp_prices.get(round(float(level), 8))
             if row is not None:
                 state.tp_order_ids[role] = str(row.get("id") or "")
-            elif not state.hold_mode:
+            cumulative_fraction += TP_FRACTIONS[index]
+            level_was_consumed = (
+                state.initial_quantity > 0
+                and consumed + max(state.initial_quantity * 1e-8, 1e-12)
+                >= state.initial_quantity * cumulative_fraction
+            )
+            if row is None and not state.hold_mode and level_was_consumed:
                 state.tp_hit[index] = True
         states[position_id] = state
         self.store.save(states)
@@ -158,8 +166,36 @@ class LiveLifecycleController:
         self.store.save(states)
         return state.current_stop
 
-    def _restore_remaining_take_profits(self, state: LiveLifecycleState) -> None:
+    def rearm_remaining_take_profits(
+        self, position: dict[str, Any],
+    ) -> list[str]:
+        """Restore missing TP orders after an exchange-side partial close."""
+        state = self.reconcile(position)
+        if state is None or state.hold_mode:
+            return []
+        rows = self.adapter.pending_tpsl(
+            symbol=state.symbol, position_id=state.position_id,
+        )
+        active_prices = {
+            round(float(row.get("tpPrice") or 0), 8)
+            for row in rows if row.get("tpPrice")
+        }
         remaining_roles = [
+            (index, TP_ROLES[index])
+            for index in range(min(3, len(state.tp_levels)))
+            if not state.tp_hit[index]
+            and round(float(state.tp_levels[index]), 8) not in active_prices
+        ]
+        if not remaining_roles:
+            return []
+        self._restore_remaining_take_profits(state, remaining_roles)
+        return [role for _, role in remaining_roles]
+
+    def _restore_remaining_take_profits(
+        self, state: LiveLifecycleState,
+        remaining_roles: list[tuple[int, str]] | None = None,
+    ) -> None:
+        remaining_roles = remaining_roles or [
             (index, TP_ROLES[index]) for index in range(min(3, len(state.tp_levels)))
             if not state.tp_hit[index]
         ]
@@ -169,7 +205,7 @@ class LiveLifecycleController:
         allocated = 0.0
         for offset, (index, role) in enumerate(remaining_roles):
             quantity = (
-                state.remaining_quantity - allocated
+                round(state.remaining_quantity - allocated, 8)
                 if offset == len(remaining_roles) - 1
                 else round(state.remaining_quantity * TP_FRACTIONS[index] / total_fraction, 8)
             )
