@@ -83,12 +83,6 @@ function renderRuntimeBadges(data){
   text("balance-source-badge",account?(data?.view_mode==="multi"?"Multi Real":`${source} Real`):hasExchangeData?"Paper":"...");
   text("balance-source-caption",account?"real exchange account":hasExchangeData?"paper simulation account":"loading...");
   text("pnl-stream-status", account ? `${view} REAL DATA` : hasExchangeData ? "PAPER DATA" : "...");
-  const bannerTitle=byId("execution-banner-title");
-  const bannerDetail=byId("execution-banner-detail");
-  const banner=byId("execution-banner");
-  if(bannerTitle) bannerTitle.textContent=liveExecution?"LIVE EXECUTION":mode==="DRY RUN"?"DRY-RUN SIMULATION":"PAPER EXECUTION";
-  if(bannerDetail) bannerDetail.textContent=liveExecution?"Exchange positions and order state are synchronized in realtime.":"Orders are simulated locally; no exchange orders are submitted.";
-  if(banner) banner.dataset.mode=liveExecution?"live":mode==="DRY RUN"?"dry":"paper";
 }
 function renderRealPortfolioSummary(data){
   const n=byId("portfolio-summary");

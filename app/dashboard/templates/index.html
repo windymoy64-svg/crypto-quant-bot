@@ -7,7 +7,7 @@
     <title>{{ app_name }} {{ release }}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
@@ -37,17 +37,12 @@
           <a href="#agents" data-view-link="agents"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3l7 4v6l-7 4-7-4V7l7-4zm0 4v6" /></svg></span><span>Agents</span></a>
           <a href="#settings" data-view-link="settings"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zM4 12h2m12 0h2M12 4v2m0 12v2" /></svg></span><span>Settings</span></a>
         </nav>
-        <div class="sidebar-footer">
-          <span>System posture</span>
-          <strong>Read-only operations</strong>
-          <small>Orders are controlled by the execution layer.</small>
-        </div>
       </aside>
 
       <main class="terminal">
         <header class="topbar">
           <div class="topbar-title">
-            <p class="eyebrow">Command center / realtime</p>
+            <p class="eyebrow">Read-only trading operations</p>
             <h1>Quant Command Center</h1>
           </div>
           <nav class="top-nav" aria-label="Dashboard sections">
@@ -67,18 +62,8 @@
             <span id="ws-status" class="pill">connecting</span>
           </div>
         </header>
-        <div id="execution-banner" class="execution-banner" aria-live="polite">
-          <div class="execution-banner-mark"><span></span></div>
-          <div><strong id="execution-banner-title">READ-ONLY OPERATIONS</strong><small id="execution-banner-detail">Market data and execution state are synchronized in realtime.</small></div>
-          <div class="execution-banner-meta"><span>PROTECTED</span><span>NO MANUAL ORDERS</span></div>
-        </div>
 
-        <section id="overview" class="overview-hero view-section active" data-view-section="overview">
-          <div class="overview-intro">
-            <div><p class="eyebrow">Account overview</p><h2>Capital at a glance</h2><span>Read the account before reading the market.</span></div>
-            <div class="overview-sync"><span class="sync-dot"></span><span>Snapshot synchronized</span><small id="overview-sync-time">Realtime</small></div>
-          </div>
-          <div class="metrics">
+        <section id="overview" class="metrics view-section active" data-view-section="overview">
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-16 3 9h4v2h-5l-2-6-4 15-4-9H3z"/></svg></span><span class="status-badge neutral">Hari Ini</span></div><span>Trade</span><strong id="metric-trades-today">0</strong><div class="kpi-meta"><small>trade dieksekusi</small></div></article>
           <article class="kpi-card featured"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18v-2H5V3H3zm4 12l4-4 3 3 6-6-1.5-1.5L14 9l-3-3-6 6 2 3z"/></svg></span><span class="status-badge success">Hari Ini</span></div><span>Profit </span><strong id="metric-profit-today">0</strong><div class="kpi-meta"><small>realized PnL</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 012-2h12a2 2 0 012 2v1h1a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V6zm14 7a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/></svg></span><span id="balance-source-badge" class="status-badge info">Paper</span></div><span>Balance</span><strong id="metric-balance">0</strong><div class="kpi-meta"><small id="balance-source-caption">paper/live source</small></div></article>
@@ -86,7 +71,6 @@
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg></span><span class="status-badge success">Profit</span></div><span>Trade Profit</span><strong id="metric-total-wins">0</strong><div class="kpi-meta"><small>trade menang</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><path d="M3 7l6 6 4-4 8 8M15 17h6v-6"/></svg></span><span class="status-badge warning">Loss</span></div><span>Trade Loss</span><strong id="metric-total-losses">0</strong><div class="kpi-meta"><small>trade rugi</small></div></article>
           <article class="kpi-card"><div class="kpi-top"><span class="kpi-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></span><span class="status-badge info">Winrate</span></div><span>Winrate</span><strong id="metric-winrate">0%</strong><div class="kpi-meta"><small>akurasi all-time</small></div></article>
-          </div>
         </section>
 
         <section class="workspace view-section" data-view-section="scanner">
