@@ -584,8 +584,18 @@ def test_reconcile_submits_only_newest_matching_tp_plan(tmp_path) -> None:
     assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
 
 
-def test_reconcile_prunes_queue_when_position_already_has_tp(tmp_path) -> None:
-    transport = _capturing_transport({"code": 0, "data": {"orderId": "unexpected"}})
+def test_reconcile_prunes_queue_when_position_already_has_tp(tmp_path, monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def transport(*, url, headers, body):
+        calls.append({"url": url, "headers": headers, "body": body})
+        if url.endswith("/tpsl/get_pending_orders"):
+            return {"code": 0, "data": [{
+                "positionId": "p1", "symbol": "SUIUSDT",
+                "tpPrice": "0.6785", "tpQty": "4.2",
+            }]}
+        return {"code": 0, "data": {"orderId": "unexpected"}}
+
     pending_path = tmp_path / "pending-tp.json"
     pending_path.write_text(json.dumps({"plans": [{
         "entry_order_id": "stale", "symbol": "SUI/USDT",
@@ -599,6 +609,10 @@ def test_reconcile_prunes_queue_when_position_already_has_tp(tmp_path) -> None:
         BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
         transport=transport, pending_tp_path=pending_path,
     )
+    monkeypatch.setattr(adapter, "pending_tpsl", lambda **_: [{
+        "positionId": "p1", "symbol": "SUIUSDT",
+        "tpPrice": "0.6785", "tpQty": "4.2",
+    }])
 
     results = adapter.reconcile_take_profits([{
         "position_id": "p1", "symbol": "SUIUSDT", "side": "SELL",
@@ -606,8 +620,63 @@ def test_reconcile_prunes_queue_when_position_already_has_tp(tmp_path) -> None:
     }], timestamp="2026-07-31T15:15:00Z")
 
     assert results == []
-    assert transport.calls == []
+    assert calls == []
     assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
+
+
+def test_reconcile_does_not_prune_stale_position_tp_without_pending_tpsl(
+    tmp_path, monkeypatch,
+) -> None:
+    transport = _capturing_transport({"code": 0, "data": {"orderId": "tp-1"}})
+    pending_path = tmp_path / "pending-tp.json"
+    pending_path.write_text(json.dumps({"plans": [{
+        "entry_order_id": "stale-row", "symbol": "SUI/USDT",
+        "position_side": "SHORT", "strategy": "tp1_partial_trailing_v1",
+        "take_profits": [{
+            "role": "take_profit_1", "side": "BUY",
+            "quantity": 4.2, "price": 0.678525,
+        }],
+    }]}), encoding="utf-8")
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=pending_path,
+    )
+    monkeypatch.setattr(adapter, "pending_tpsl", lambda **_: [])
+
+    results = adapter.reconcile_take_profits([{
+        "position_id": "p1", "symbol": "SUIUSDT", "side": "SELL",
+        "take_profit": "0.6785",
+    }], timestamp="2026-07-31T15:16:00Z")
+
+    assert [result.status for result in results] == ["SUBMITTED"]
+    assert transport.calls[0]["url"].endswith("/tpsl/place_order")
+
+
+def test_reconcile_preserves_plan_when_position_id_is_missing(tmp_path, caplog) -> None:
+    transport = _capturing_transport({"code": 0, "data": {"orderId": "unexpected"}})
+    pending_path = tmp_path / "pending-tp.json"
+    plan = {
+        "entry_order_id": "missing-id", "symbol": "BNB/USDT",
+        "position_side": "LONG", "strategy": "tp1_partial_trailing_v1",
+        "take_profits": [{
+            "role": "take_profit_1", "side": "SELL",
+            "quantity": 0.1, "price": 600,
+        }],
+    }
+    pending_path.write_text(json.dumps({"plans": [plan]}), encoding="utf-8")
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=pending_path,
+    )
+
+    results = adapter.reconcile_take_profits([{
+        "symbol": "BNBUSDT", "side": "BUY",
+    }], timestamp="2026-07-31T15:17:00Z")
+
+    assert results == []
+    assert transport.calls == []
+    assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == [plan]
+    assert "reason=position_id_missing" in caplog.text
 
 
 def test_reconcile_recomputes_rr_tp_from_exchange_entry_and_stop(tmp_path) -> None:

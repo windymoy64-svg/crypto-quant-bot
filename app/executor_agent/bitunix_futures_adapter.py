@@ -470,7 +470,7 @@ class BitunixFuturesExecutorAdapter:
         by_symbol: dict[str, list[dict[str, Any]]] = {}
         for position in positions:
             symbol = _canonical_symbol(position.get("symbol"))
-            if position.get("position_id") and symbol:
+            if symbol:
                 by_symbol.setdefault(symbol, []).append(position)
 
         results: list[ExecutionResult] = []
@@ -510,18 +510,47 @@ class BitunixFuturesExecutorAdapter:
                 if not expected_side or _canonical_position_side(row.get("side")) == expected_side
             ), None)
             if position is None:
+                logger.warning(
+                    "Bitunix TP reconciliation deferred symbol=%s side=%s "
+                    "entry_order_id=%s reason=position_not_found",
+                    symbol, expected_side, plan.get("entry_order_id"),
+                )
                 remaining.append(plan)
-                continue
-            if _float(position.get("take_profit")) > 0:
-                # Exchange already confirms protection for this live position.
-                # Remove all matching modern queue copies without submitting
-                # another TPSL order.
                 continue
             if newest_matching_index.get(plan_key) != plan_index:
                 # Stale duplicate for the currently active position. Drop it;
                 # only the latest plan below may create an exchange-side TP.
                 continue
             position_id = str(position.get("position_id") or "")
+            if not position_id:
+                logger.warning(
+                    "Bitunix TP reconciliation deferred symbol=%s side=%s "
+                    "entry_order_id=%s reason=position_id_missing",
+                    symbol, expected_side, plan.get("entry_order_id"),
+                )
+                remaining.append(plan)
+                continue
+            if _float(position.get("take_profit")) > 0:
+                # A position row can contain stale tpPrice data. Only prune a
+                # queued plan when pending TPSL confirms protection for this ID.
+                try:
+                    active_tpsl = self.pending_tpsl(
+                        symbol=symbol, position_id=position_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Bitunix TP reconciliation deferred symbol=%s "
+                        "position_id=%s reason=protection_check_failed error=%s",
+                        symbol, position_id, exc,
+                    )
+                    remaining.append(plan)
+                    continue
+                if any(
+                    _float(row.get("tpQty", row.get("qty"))) > 0
+                    for row in active_tpsl
+                ):
+                    # Exchange confirms protection for this exact position.
+                    continue
             queued = [
                 dict(raw) for raw in plan.get("take_profits", [])
                 if isinstance(raw, dict) and raw.get("role") in TP_ROLES
