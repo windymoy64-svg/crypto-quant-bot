@@ -62,6 +62,14 @@ class AgentPipelineConfig:
     # Shadow by default: computed + logged, but NOT applied to decisions.
     apply_llm_policy: bool = False
     policy_min_confidence: float = 0.6
+    entry_timing_enabled: bool = False
+    require_fresh_break: bool = False
+    require_volume: bool = False
+    block_extended_momentum: bool = False
+    hard_trend_alignment: bool = False
+    block_noise_regimes: bool = False
+    allow_zone_limit: bool = False
+    limit_expiry_seconds: float = 900.0
 
 class AgentPipelineCoordinator:
     """Wires specialist agents without mixing responsibilities."""
@@ -127,6 +135,13 @@ class AgentPipelineCoordinator:
                 chart_reading=reading, decision=None, execution=None,
                 scanner_chart_conflict=conflict,
             )
+        timing_reason = self._timing_gate(reading)
+        if timing_reason:
+            return PipelineResult(
+                stage="ENTRY", eligible=True, eligibility_reason=timing_reason,
+                chart_reading=reading, decision=None, execution=None,
+                scanner_chart_conflict=conflict,
+            )
         insight, learning_advisory = self._load_learning()
         policy, policy_validation = self._load_policy(insight)
         # Statistical learning adjustments only when explicitly enabled.
@@ -166,6 +181,22 @@ class AgentPipelineCoordinator:
             risk_approval=risk.to_dict(), learning_advisory=learning_advisory,
             scanner_chart_conflict=conflict,
         )
+
+    def _timing_gate(self, reading) -> str | None:
+        if not self.config.entry_timing_enabled:
+            return None
+        phase = reading.momentum_phase or {}
+        if self.config.require_fresh_break and phase.get("phase") not in {"initial", "fresh"}:
+            return "momentum_not_fresh"
+        if self.config.block_extended_momentum and phase.get("phase") == "extended":
+            return "momentum_extended"
+        if self.config.require_volume and float(phase.get("volume_ratio", 0.0)) < 1.15:
+            return "momentum_no_volume"
+        if self.config.hard_trend_alignment and not reading.trends_aligned:
+            return "trends_not_aligned_blocked"
+        if self.config.block_noise_regimes and reading.regime in {"RANGING", "MIXED"}:
+            return "noise_regime_blocked"
+        return None
 
     def monitor_position(self, *, symbol: str, position: PositionContext, htf_candles: list[Candle], mtf_candles: list[Candle], ltf_candles: list[Candle]) -> PipelineResult:
         reading = self.chart_agent.read(symbol, htf_candles, mtf_candles, ltf_candles)

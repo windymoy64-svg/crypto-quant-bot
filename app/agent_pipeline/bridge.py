@@ -101,6 +101,14 @@ class AgentPipelineRuntimeConfig:
     policy_min_confidence: float = 0.6
     # Scanner vs deterministic chart bias conflict handling.
     scanner_chart_conflict_policy: str = "REJECT"
+    entry_timing_enabled: bool = False
+    require_fresh_break: bool = False
+    require_volume: bool = False
+    block_extended_momentum: bool = False
+    hard_trend_alignment: bool = False
+    block_noise_regimes: bool = False
+    allow_zone_limit: bool = False
+    limit_expiry_seconds: float = 900.0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "AgentPipelineRuntimeConfig":
@@ -134,6 +142,14 @@ class AgentPipelineRuntimeConfig:
             scanner_chart_conflict_policy=_parse_conflict_policy(
                 data.get("scanner_chart_conflict_policy", "REJECT")
             ),
+            entry_timing_enabled=bool(data.get("entry_timing_enabled", False)),
+            require_fresh_break=bool(data.get("require_fresh_break", False)),
+            require_volume=bool(data.get("require_volume", False)),
+            block_extended_momentum=bool(data.get("block_extended_momentum", False)),
+            hard_trend_alignment=bool(data.get("hard_trend_alignment", False)),
+            block_noise_regimes=bool(data.get("block_noise_regimes", False)),
+            allow_zone_limit=bool(data.get("allow_zone_limit", False)),
+            limit_expiry_seconds=float(data.get("limit_expiry_seconds", 900.0)),
         )
 
 
@@ -290,6 +306,14 @@ def run_pipeline_bridge(
                 apply_llm_policy=config.apply_llm_policy,
                 policy_min_confidence=config.policy_min_confidence,
                 scanner_chart_conflict_policy=config.scanner_chart_conflict_policy,
+                entry_timing_enabled=config.entry_timing_enabled,
+                require_fresh_break=config.require_fresh_break,
+                require_volume=config.require_volume,
+                block_extended_momentum=config.block_extended_momentum,
+                hard_trend_alignment=config.hard_trend_alignment,
+                block_noise_regimes=config.block_noise_regimes,
+                allow_zone_limit=config.allow_zone_limit,
+                limit_expiry_seconds=config.limit_expiry_seconds,
             ),
         )
 

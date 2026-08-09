@@ -52,6 +52,7 @@ from app.chart_agent.confluence_engine import (
     meets_confluence_threshold,
 )
 from app.chart_agent.level_placement import atr_from_candles, select_entry_invalidation
+from app.chart_agent.momentum_phase import detect_momentum_phase
 
 
 # ---------------------------------------------------------------------------
@@ -755,6 +756,7 @@ class ChartReaderAgent:
         trends_aligned = (
             htf_trend == mtf_trend and htf_trend != "SIDE"
         )
+        momentum_phase = detect_momentum_phase(mtf_candles, breaks, bias)
 
         # 9. Extract key levels
         key_levels = _extract_key_levels(ltf_candles, obs)
@@ -800,6 +802,7 @@ class ChartReaderAgent:
                 reasons.append(f"level_source={level_meta['source']}")
         elif level_meta.get("reject"):
             reasons.append(f"level_reject={level_meta['reject']}")
+        reasons.append(f"momentum_phase={momentum_phase.phase}")
 
         return ChartReading(
             symbol=symbol,
@@ -829,6 +832,7 @@ class ChartReaderAgent:
                     confluence_score, regime_name
                 ),
                 "level_placement": level_meta,
+                "current_price": float(ltf_candles[-1].close) if ltf_candles else None,
             },
+            momentum_phase=momentum_phase.to_dict(),
         )
-

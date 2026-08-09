@@ -178,6 +178,7 @@ class ChartReading:
     invalidation_level: float | None = None
     techniques_used: list[str] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
+    momentum_phase: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -204,4 +205,5 @@ class ChartReading:
             "invalidation_level": self.invalidation_level,
             "techniques_used": list(self.techniques_used),
             "meta": self.meta,
+            "momentum_phase": self.momentum_phase,
         }

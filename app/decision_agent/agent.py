@@ -465,12 +465,12 @@ class DecisionMakerAgent:
         targets = _select_take_profits(reading, entry_price, risk)
         tp1, tp2, tp3 = targets
 
-        # Determine order type: MARKET if price already in zone, else LIMIT
-        order_type: str = "MARKET"
-        zone_width_pct = abs(reading.entry_zone[1] - reading.entry_zone[0]) / entry_price * 100
-        if zone_width_pct < 0.3:
-            # Very tight zone = likely already at level → MARKET
-            order_type = "MARKET"
+        # The chart agent's current price is the execution reference. Do not
+        # chase a price outside the planned zone; let the exchange fill it on
+        # a pullback instead.
+        current_price = float((reading.meta or {}).get("current_price") or entry_price)
+        in_zone = reading.entry_zone[0] <= current_price <= reading.entry_zone[1]
+        order_type: str = "MARKET" if in_zone else "LIMIT"
 
         rr = abs(tp1 - entry_price) / risk if risk > 0 else 0.0
         return EntryPlan(
@@ -500,4 +500,3 @@ class DecisionMakerAgent:
         if score >= 70:
             return "MEDIUM"
         return "LOW"
-

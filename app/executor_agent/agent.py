@@ -122,10 +122,14 @@ class ExecutorAgent:
 
         orders: list[OrderRequest] = [
             OrderRequest(
-                symbol=decision.symbol, side=entry_side, order_type="MARKET",
+                symbol=decision.symbol,
+                side=entry_side,
+                order_type=plan.order_type,
                 quantity=quantity,
+                price=plan.entry_price if plan.order_type == "LIMIT" else None,
                 meta={
                     "role": "entry", "reference_price": plan.entry_price,
+                    "expires_in_seconds": plan.expires_in_seconds,
                     "lifecycle_version": LIFECYCLE_VERSION,
                     "strategy_version": decision.meta.get("strategy_version"),
                 },

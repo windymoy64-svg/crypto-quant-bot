@@ -48,7 +48,15 @@
     "decision_llm_veto_min_confidence": 0.75,
     "apply_llm_policy": false,
     "policy_min_confidence": 0.6,
-    "scanner_chart_conflict_policy": "REJECT"
+    "scanner_chart_conflict_policy": "REJECT",
+    "entry_timing_enabled": true,
+    "require_fresh_break": true,
+    "require_volume": true,
+    "block_extended_momentum": true,
+    "hard_trend_alignment": true,
+    "block_noise_regimes": true,
+    "allow_zone_limit": true,
+    "limit_expiry_seconds": 600
   },
   "learning_recorder": {
     "enabled": true,

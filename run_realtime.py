@@ -1461,8 +1461,8 @@ def run_once(
             and paper_enabled
             and paper_engine is not None
         ):
-            # Route approved Chart/Decision Agent entries to paper immediately
-            # at market. The chart zone remains metadata for observability.
+            # Route approved Chart/Decision Agent entries to paper. LIMIT plans
+            # wait for the zone instead of buying the current momentum peak.
             agent_entry_signals: list[dict[str, object]] = []
             current_by_symbol = {
                 str(item.get("symbol")): float(item.get("entry", 0.0))
@@ -1481,7 +1481,9 @@ def run_once(
                 zone = plan.get("entry_zone") or [plan.get("entry_price"), plan.get("entry_price")]
                 current = current_by_symbol.get(symbol, float(plan.get("entry_price", 0.0)))
                 low, high = sorted((float(zone[0]), float(zone[1])))
-                mode = "MARKET"
+                mode = str(plan.get("order_type", "MARKET")).upper()
+                if mode not in {"MARKET", "LIMIT"}:
+                    mode = "MARKET"
                 dmeta = decision.get("meta") or {}
                 agent_entry_signals.append({
                     "symbol": symbol,
@@ -1490,6 +1492,7 @@ def run_once(
                     "current_price": current,
                     "entry_zone": [low, high],
                     "entry_mode": mode,
+                    "zone_limit": mode == "LIMIT",
                     "stop_loss": float(plan.get("stop_loss")),
                     "take_profit": [
                         value for value in [plan.get("take_profit_1"), plan.get("take_profit_2"), plan.get("take_profit_3")]
