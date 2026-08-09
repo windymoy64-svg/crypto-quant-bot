@@ -23,14 +23,31 @@ class TradeReporter:
         reasons = decision.get("reasons") if isinstance(decision.get("reasons"), list) else []
         thesis = escape(", ".join(str(reason) for reason in reasons if str(reason).strip()) or "signal accepted")
         results = execution.get("results") if isinstance(execution.get("results"), list) else []
-        result = next((item for item in results if isinstance(item, dict)), {})
-        success = bool(execution.get("success"))
-        title = "LIVE ENTRY EXECUTED" if success else "LIVE ORDER REJECTED"
-        icon = "✅" if success else "❌"
-        status = escape(str(result.get("status") or ("SUBMITTED" if success else "REJECTED")))
+        result = next(
+            (
+                item for item in results
+                if isinstance(item, dict)
+                and str((item.get("meta") or {}).get("role", "")).lower() == "entry"
+            ),
+            next((item for item in results if isinstance(item, dict)), {}),
+        )
+        raw_status = str(result.get("status") or "").upper()
+        status_value = raw_status or ("FILLED" if execution.get("success") else "REJECTED")
+        rejected = status_value == "REJECTED"
+        submitted = status_value in {"SUBMITTED", "PENDING", "NEW", "INIT"}
+        if rejected:
+            title, icon = "LIVE ORDER REJECTED", "❌"
+        elif submitted:
+            title, icon = "LIVE ENTRY SUBMITTED", "🟡"
+        else:
+            title, icon = "LIVE ENTRY EXECUTED", "✅"
+        status = escape(status_value)
         quantity = float(result.get("filled_quantity") or result.get("requested_quantity") or 0)
         notional = entry * quantity
-        exchange_reason = str(result.get("reason") or "exchange accepted" if success else result.get("reason") or "exchange rejected")
+        exchange_reason = str(
+            result.get("reason")
+            or ("exchange rejected" if rejected else "exchange accepted")
+        )
         order_id = escape(str(result.get("order_id") or "-"))
         return (
             f"{icon} {title}\n"

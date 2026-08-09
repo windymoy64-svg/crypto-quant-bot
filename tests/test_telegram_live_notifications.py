@@ -67,6 +67,18 @@ def test_rejection_reason_is_html_escaped() -> None:
     assert "amount &lt; minimum" in message
 
 
+def test_submitted_exchange_order_is_not_reported_as_rejected() -> None:
+    row = _payload("SUBMITTED")["entries"][0]["result"]
+    row["execution"]["success"] = False
+    row["execution"]["results"][0]["meta"]["role"] = "entry"
+    message = TradeReporter().format_live_execution(row["decision"], row["execution"])
+
+    assert "🟡 LIVE ENTRY SUBMITTED" in message
+    assert "Status: SUBMITTED" in message
+    assert "❌ LIVE ORDER REJECTED" not in message
+    assert "Exchange: exchange accepted" in message
+
+
 def test_notifier_posts_html_and_reports_success() -> None:
     response = MagicMock()
     response.__enter__.return_value.read.return_value = b'{"ok":true}'
