@@ -34,8 +34,13 @@ class TradeReporter:
         raw_status = str(result.get("status") or "").upper()
         status_value = raw_status or ("FILLED" if execution.get("success") else "REJECTED")
         rejected = status_value == "REJECTED"
+        protection_failed = "live_entry_take_profit_not_confirmed" in {
+            str(error) for error in (execution.get("errors") or [])
+        }
         submitted = status_value in {"SUBMITTED", "PENDING", "NEW", "INIT"}
-        if rejected:
+        if protection_failed:
+            title, icon = "LIVE ENTRY PROTECTION FAILED", "🚨"
+        elif rejected:
             title, icon = "LIVE ORDER REJECTED", "❌"
         elif submitted:
             title, icon = "LIVE ENTRY SUBMITTED", "🟡"

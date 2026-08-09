@@ -530,9 +530,12 @@ class BitunixFuturesExecutorAdapter:
                 )
                 remaining.append(plan)
                 continue
+            queued = [
+                dict(raw) for raw in plan.get("take_profits", [])
+                if isinstance(raw, dict) and raw.get("role") in TP_ROLES
+            ]
+            active_tpsl: list[dict[str, Any]] = []
             if _float(position.get("take_profit")) > 0:
-                # A position row can contain stale tpPrice data. Only prune a
-                # queued plan when pending TPSL confirms protection for this ID.
                 try:
                     active_tpsl = self.pending_tpsl(
                         symbol=symbol, position_id=position_id,
@@ -545,16 +548,24 @@ class BitunixFuturesExecutorAdapter:
                     )
                     remaining.append(plan)
                     continue
-                if any(
-                    _float(row.get("tpQty", row.get("qty"))) > 0
+
+            def _confirmed(raw: dict[str, Any]) -> bool:
+                expected_price = _float(raw.get("price"))
+                expected_qty = _float(raw.get("quantity"))
+                return any(
+                    _float(row.get("tpPrice")) > 0
+                    and abs(_float(row.get("tpPrice")) - expected_price)
+                    <= max(1e-8, abs(expected_price) * 1e-4)
+                    and _float(row.get("tpQty", row.get("qty"))) >= expected_qty
                     for row in active_tpsl
-                ):
-                    # Exchange confirms protection for this exact position.
-                    continue
-            queued = [
-                dict(raw) for raw in plan.get("take_profits", [])
-                if isinstance(raw, dict) and raw.get("role") in TP_ROLES
-            ]
+                )
+
+            queued = [raw for raw in queued if not _confirmed(raw)]
+            if not queued:
+                # All planned levels are confirmed for this exact position.
+                if plan.get("strategy") == LIFECYCLE_VERSION:
+                    self._register_live_lifecycle(plan, position, plan.get("take_profits", []))
+                continue
             unsent: list[dict[str, Any]] = []
             for index, raw in enumerate(queued):
                 price = float(raw["price"])

@@ -79,6 +79,16 @@ def test_submitted_exchange_order_is_not_reported_as_rejected() -> None:
     assert "Exchange: exchange accepted" in message
 
 
+def test_tp_protection_failure_is_reported_as_urgent() -> None:
+    row = _payload("SUBMITTED")["entries"][0]["result"]
+    row["execution"]["success"] = False
+    row["execution"]["errors"] = ["live_entry_take_profit_not_confirmed"]
+
+    message = TradeReporter().format_live_execution(row["decision"], row["execution"])
+
+    assert "🚨 LIVE ENTRY PROTECTION FAILED" in message
+
+
 def test_notifier_posts_html_and_reports_success() -> None:
     response = MagicMock()
     response.__enter__.return_value.read.return_value = b'{"ok":true}'

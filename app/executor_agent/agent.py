@@ -33,6 +33,7 @@ from app.execution.lifecycle_contract import (
 DEFAULT_RISK_PERCENT = 1.0
 MAX_POSITION_SIZE_PERCENT = 15.0
 DEFAULT_LEVERAGE = 1
+DEFAULT_TP_R_MULTIPLES = (2.0, 3.0, 4.0)
 
 
 class ExecutorAgent:
@@ -152,6 +153,17 @@ class ExecutorAgent:
             planned_levels=(take_profit_1, plan.take_profit_2, plan.take_profit_3),
             target_risk_reward=self.target_risk_reward,
         )
+        # Empty Settings means use the bot's deterministic default ladder.
+        # Keep this fallback at the executor boundary so every entry path,
+        # including chart-proposal paths, receives exchange-side TP orders.
+        risk = abs(plan.entry_price - stop_loss)
+        direction = 1.0 if entry_side == "BUY" else -1.0
+        default_levels = tuple(
+            round(plan.entry_price + direction * risk * multiple, 8)
+            for multiple in DEFAULT_TP_R_MULTIPLES
+        )
+        if len(levels) < len(default_levels):
+            levels = tuple(dict.fromkeys((*levels, *default_levels)))[:3]
         quantities = take_profit_quantities(quantity, len(levels))
         for index, (level, tp_qty) in enumerate(zip(levels, quantities)):
             if tp_qty > 0:
@@ -277,12 +289,28 @@ class ExecutorAgent:
             else 0.0
         )
         total_fees = sum(r.fees for r in results)
+        errors: list[str] = []
+        if self.live:
+            entry_ok = any(
+                r.status in {"SUBMITTED", "FILLED", "PARTIAL"}
+                and r.meta.get("role") == "entry"
+                for r in results
+            )
+            tp_orders = [
+                r for r in results
+                if str(r.meta.get("role", "")).startswith("take_profit_")
+            ]
+            confirmed_tp = [
+                r for r in tp_orders if r.status in {"SUBMITTED", "FILLED", "PARTIAL"}
+            ]
+            if entry_ok and len(confirmed_tp) != len(tp_orders):
+                errors.append("live_entry_take_profit_not_confirmed")
         return ExecutionReport(
             plan=exec_plan, results=results,
-            success=any(r.is_success for r in results),
+            success=any(r.is_success for r in results) and not errors,
             total_filled_quantity=filled_qty,
-            average_entry_price=avg_price,
-            total_fees=total_fees, timestamp=now,
+            average_entry_price=avg_price, total_fees=total_fees,
+            timestamp=now, errors=errors,
         )
 
     def _send_orders(self, orders: list[OrderRequest], now: str) -> list[ExecutionResult]:

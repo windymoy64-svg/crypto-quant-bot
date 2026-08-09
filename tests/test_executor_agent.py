@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from app.decision_agent.models import Decision, EntryPlan, ExitPlan
 from app.executor_agent.agent import ExecutorAgent
 from app.executor_agent.models import PositionContext
@@ -68,6 +70,28 @@ def test_entry_uses_exact_initial_size_30_30_40_tp_ladder() -> None:
         order.meta["strategy"] == "paper_live_lifecycle_v1"
         for order in take_profits
     )
+
+
+def test_empty_tp_settings_use_default_bot_r_multiple_ladder() -> None:
+    decision = _entry_decision()
+    decision = replace(
+        decision,
+        entry_plan=replace(
+            decision.entry_plan,
+            take_profit_1=None,
+            take_profit_2=None,
+            take_profit_3=None,
+        ),
+    )
+
+    report = ExecutorAgent(balance=10_000.0).execute(decision)
+    take_profits = [
+        order for order in report.plan.orders
+        if str(order.meta.get("role", "")).startswith("take_profit_")
+    ]
+
+    assert [order.price for order in take_profits] == [106.0, 109.0, 112.0]
+    assert len(take_profits) == 3
 
 
 def test_configured_rr_overrides_decision_tp_for_live_parity() -> None:
@@ -216,6 +240,32 @@ def test_live_entry_is_blocked_until_full_paper_parity_is_verified() -> None:
     assert report.success is False
     assert report.results == []
     assert report.errors == ["live_entry_blocked_paper_parity_incomplete"]
+
+
+def test_live_entry_is_not_successful_until_all_tp_orders_are_confirmed() -> None:
+    class PendingProtectionAdapter:
+        def place_orders(self, orders, *, timestamp):
+            from app.executor_agent.models import ExecutionResult
+
+            return [
+                ExecutionResult(
+                    status="SUBMITTED" if order.meta.get("role") == "entry" else "PENDING",
+                    order_id=f"{order.meta.get('role')}-1",
+                    symbol=order.symbol, side=order.side, order_type=order.order_type,
+                    requested_quantity=order.quantity, filled_quantity=0.0,
+                    average_price=0.0, timestamp=timestamp, meta=order.meta,
+                )
+                for order in orders
+            ]
+
+    report = ExecutorAgent(
+        live=True,
+        exchange_adapter=PendingProtectionAdapter(),
+        paper_parity_verified=True,
+    ).execute(_entry_decision())
+
+    assert report.success is False
+    assert report.errors == ["live_entry_take_profit_not_confirmed"]
 
 
 def test_paper_parity_gate_does_not_block_existing_position_exit() -> None:
