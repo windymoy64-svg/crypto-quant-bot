@@ -9,7 +9,7 @@ class TradeReporter:
     """Format trade reports for Telegram notification"""
 
     def format_live_execution(self, decision: dict[str, Any], execution: dict[str, Any]) -> str:
-        """Format the live execution result using Telegram HTML safely."""
+        """Format the live execution result in the operational alert layout."""
         action = str(decision.get("action") or "ENTRY").upper()
         symbol = escape(str(decision.get("symbol") or execution.get("symbol") or "UNKNOWN"))
         side = "SHORT" if action.endswith("SELL") else "LONG"
@@ -17,24 +17,37 @@ class TradeReporter:
         entry = float(plan.get("entry_price") or 0)
         stop = float(plan.get("stop_loss") or 0)
         tp1 = float(plan.get("take_profit_1") or 0)
+        score = float(decision.get("confidence_score") or 0)
+        confluence = float(decision.get("confluence_score") or 0)
+        regime = escape(str(decision.get("regime") or "UNKNOWN"))
+        reasons = decision.get("reasons") if isinstance(decision.get("reasons"), list) else []
+        thesis = escape(", ".join(str(reason) for reason in reasons if str(reason).strip()) or "signal accepted")
         results = execution.get("results") if isinstance(execution.get("results"), list) else []
+        result = next((item for item in results if isinstance(item, dict)), {})
         success = bool(execution.get("success"))
         title = "LIVE ENTRY EXECUTED" if success else "LIVE ORDER REJECTED"
         icon = "✅" if success else "❌"
-        reason = ""
-        for item in results:
-            if isinstance(item, dict) and item.get("reason"):
-                reason = escape(str(item["reason"]))
-                break
-        suffix = f"\nReason: {reason}" if reason else ""
+        status = escape(str(result.get("status") or ("SUBMITTED" if success else "REJECTED")))
+        quantity = float(result.get("filled_quantity") or result.get("requested_quantity") or 0)
+        notional = entry * quantity
+        exchange_reason = str(result.get("reason") or "exchange accepted" if success else result.get("reason") or "exchange rejected")
+        order_id = escape(str(result.get("order_id") or "-"))
         return (
-            f"{icon} <b>{title}</b>\n\n"
-            f"Symbol: <b>{symbol}</b>\n"
-            f"Direction: <b>{side}</b>\n"
-            f"Entry: ${entry:,.4f}\n"
-            f"Stop Loss: ${stop:,.4f}\n"
-            f"TP1: ${tp1:,.4f}\n"
-            f"Venue: Bitunix Futures{suffix}"
+            f"{icon} {title}\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"{symbol}  •  {side}\n"
+            f"Status: {status}\n\n"
+            f"💵 Entry: ${entry:,.6f}\n"
+            f"📦 Quantity: {quantity:,.8f}\n"
+            f"💰 Notional: ${notional:,.2f}\n"
+            f"🛡 Stop Loss: ${stop:,.6f}\n"
+            f"🎯 TP1: ${tp1:,.6f}\n\n"
+            f"📊 Score: {score:.1f}  •  Confluence: {confluence:.1f}\n"
+            f"🌐 Regime: {regime}\n"
+            f"🧠 Thesis: {thesis}\n\n"
+            f"📝 Exchange: {escape(exchange_reason)}\n"
+            f"🆔 Order: {order_id}\n"
+            "🏦 Venue: Bitunix Futures"
         )
 
     def format_entry(self, position: dict[str, Any], signal: dict[str, Any] | None = None) -> str:
@@ -127,29 +140,26 @@ class TradeReporter:
             reason_text = "Signal BUY detected"
 
         msg = f"""🟢 ENTRY POSITION
+━━━━━━━━━━━━━━━━━━
 
-Symbol: {sym}
-Direction: {"LONG" if side == "BUY" else "SHORT"}
-Entry: ${entry:,.4f}
-Size: {size:,.4f}
-Modal: ${modal:,.2f}
+{sym}  •  {"LONG" if side == "BUY" else "SHORT"}
+Status: FILLED
 
-Stop Loss: ${sl:,.4f}
-Take Profit 1: ${tp1:,.4f}
-Take Profit 2: ${tp2:,.4f}
-Take Profit 3: ${tp3:,.4f}
-Trailing: Inactive
+💵 Entry: ${entry:,.6f}
+📦 Quantity: {size:,.8f}
+💰 Notional: ${modal:,.2f}
 
-Score: {score:.0f} | RR: {risk_reward:.1f}:1
-Confidence: {conf:.2f}%
-Strategy: {strategy}
+🛡 Stop Loss: ${sl:,.6f}
+🎯 TP1: ${tp1:,.6f}
 
-Reason:
-{reason_text}
+📊 Score: {score:.1f}  •  Confidence: {conf:.1f}
+🧠 Thesis: {reason_text}
+
+🏦 Venue: Paper Trading
 """
         return msg.strip()
 
-    def format_close(self, position: dict[str, Any]) -> str:
+    def format_close(self, position: dict[str, Any], *, venue: str = "Paper Trading") -> str:
         """Format position close notification"""
         sym = position.get("symbol", "UNKNOWN")
         side = position.get("side", "BUY")
@@ -194,27 +204,26 @@ Reason:
 
         msg = f"""
 {icon} CLOSE POSITION
+━━━━━━━━━━━━━━━━━━
 
-Symbol: {sym}
-Direction: {"LONG" if side == "BUY" else "SHORT"}
-Entry: ${entry:,.4f}
-Exit: ${exit_price:,.4f}
-Size Closed: {closed_size:,.4f}
-Modal: ${modal:,.2f}
+{sym}  •  {"LONG" if side == "BUY" else "SHORT"}
+Status: CLOSED
 
-Stop Loss: ${sl:,.4f}
-Trailing Stop: {trailing_text}
-Trailing Active: {'Yes' if trailing_active else 'No'}
+💵 Entry: ${entry:,.6f}
+🚪 Exit: ${exit_price:,.6f}
+📦 Quantity: {closed_size:,.8f}
+💰 Notional: ${modal:,.2f}
 
-{chr(10).join(tp_status)}
+🛡 Stop Loss: ${sl:,.6f}
+🎯 TP1: ${float(tp_list[0]) if tp_list else 0:,.6f}
 
-Realized P&L: ${pnl:,.2f} ({pnl_pct:+.2f}%)
-Close Reason: {reason_label}
-Entry Reason: {entry_reason or "-"}
+📈 Realized P&L: ${pnl:,.2f} ({pnl_pct:+.2f}%)
+📝 Reason: {reason_label}
+🏦 Venue: {venue}
 """
         return msg.strip()
 
-    def format_partial_close(self, position: dict[str, Any]) -> str:
+    def format_partial_close(self, position: dict[str, Any], *, venue: str = "Paper Trading") -> str:
         """Format partial close notification"""
         sym = position.get("symbol", "UNKNOWN")
         side = position.get("side", "BUY")
@@ -232,16 +241,19 @@ Entry Reason: {entry_reason or "-"}
         
         msg = f"""
 🟡 PARTIAL CLOSE
+━━━━━━━━━━━━━━━━━━
 
-Symbol: {sym}
-Direction: {"LONG" if side == "BUY" else "SHORT"}
-Entry: ${entry:,.4f}
-Exit: ${exit_price:,.4f}
-Size Closed: {partial_size:,.4f}
-Remaining: {remaining:,.4f}
+{sym}  •  {"LONG" if side == "BUY" else "SHORT"}
+Status: PARTIAL
 
-Realized P&L: ${partial_pnl:,.2f} ({pnl_pct:+.2f}%)
-Reason: {reason.replace('_', ' ').title()}
+💵 Entry: ${entry:,.6f}
+🚪 Exit: ${exit_price:,.6f}
+📦 Closed: {partial_size:,.8f}
+📦 Remaining: {remaining:,.8f}
+
+📈 Realized P&L: ${partial_pnl:,.2f} ({pnl_pct:+.2f}%)
+📝 Reason: {reason.replace('_', ' ').title()}
+🏦 Venue: {venue}
 """
         return msg.strip()
 

@@ -43,13 +43,17 @@ def _payload(status: str = "FILLED", reason: str = "") -> dict:
     }
 
 
-def test_live_execution_message_is_readable_html() -> None:
+def test_live_execution_message_contains_operational_fields() -> None:
     row = _payload()["entries"][0]["result"]
     message = TradeReporter().format_live_execution(row["decision"], row["execution"])
 
-    assert "✅ <b>LIVE ENTRY EXECUTED</b>" in message
-    assert "<b>HYPE/USDT</b>" in message
-    assert "<b>SHORT</b>" in message
+    assert "✅ LIVE ENTRY EXECUTED" in message
+    assert "HYPE/USDT  •  SHORT" in message
+    assert "Status: FILLED" in message
+    assert "📦 Quantity: 28.60000000" in message
+    assert "📊 Score: 90.0  •  Confluence: 67.0" in message
+    assert "🌐 Regime: TRENDING_BEARISH" in message
+    assert "🧠 Thesis: bias=BEARISH, confluence=67" in message
     assert "Stop Loss" in message
     assert "TP1" in message
     assert "Bitunix Futures" in message
@@ -59,7 +63,7 @@ def test_rejection_reason_is_html_escaped() -> None:
     row = _payload("REJECTED", "amount < minimum")["entries"][0]["result"]
     message = TradeReporter().format_live_execution(row["decision"], row["execution"])
 
-    assert "❌ <b>LIVE ORDER REJECTED</b>" in message
+    assert "❌ LIVE ORDER REJECTED" in message
     assert "amount &lt; minimum" in message
 
 
@@ -163,3 +167,33 @@ def test_live_pipeline_notification_is_deduplicated() -> None:
     assert run_realtime.notify_live_pipeline_executions(notifier, _payload()) == 1
     assert run_realtime.notify_live_pipeline_executions(notifier, _payload()) == 0
     notifier.send.assert_called_once()
+
+
+def test_live_partial_close_is_detected_from_quantity_diff(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "telegram-partial.json"
+    notifier = MagicMock()
+    notifier.send.return_value = True
+    initial = {
+        "ADA/USDT": {
+            "symbol": "ADA/USDT", "side": "LONG", "quantity": 23.5,
+            "entry_price": 0.184, "last_price": 0.189,
+        },
+    }
+
+    assert run_realtime.notify_new_bitunix_partial_closes(
+        notifier, initial, checkpoint_path=checkpoint,
+    ) == 0
+    reduced = {"ADA/USDT": {**initial["ADA/USDT"], "quantity": 12.0}}
+    assert run_realtime.notify_new_bitunix_partial_closes(
+        notifier, reduced, checkpoint_path=checkpoint,
+    ) == 1
+    message = notifier.send.call_args.args[0]
+    assert "🟡 PARTIAL CLOSE" in message
+    assert "Closed: 11.50000000" in message
+    assert "Reason: Take Profit" in message
+
+    notifier.reset_mock()
+    assert run_realtime.notify_new_bitunix_partial_closes(
+        notifier, reduced, checkpoint_path=checkpoint,
+    ) == 0
+    notifier.send.assert_not_called()

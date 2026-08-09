@@ -82,6 +82,7 @@ from app.learning_agent.runtime import (
 
 logger = logging.getLogger(__name__)
 TELEGRAM_LIVE_CLOSE_CHECKPOINT = Path("logs/telegram_live_close_checkpoint.json")
+TELEGRAM_LIVE_PARTIAL_CHECKPOINT = Path("logs/telegram_live_partial_checkpoint.json")
 
 
 def release_unused_memory() -> None:
@@ -174,7 +175,7 @@ def notify_new_bitunix_closes(
             "realized_pnl": float(row.get("net_pnl", row.get("realized_pnl")) or 0.0),
             "close_reason": row.get("reason") or "exchange_closed",
         }
-        if notifier.send(reporter.format_close(position)) is not True:
+        if notifier.send(reporter.format_close(position, venue="Bitunix Futures")) is not True:
             logger.warning(
                 "Telegram live close delivery failed position_id=%s symbol=%s",
                 row.get("position_id"), row.get("symbol"),
@@ -191,6 +192,69 @@ def notify_new_bitunix_closes(
         temporary = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
         temporary.write_text(json.dumps({"seen": sorted(seen)}, indent=2), encoding="utf-8")
         temporary.replace(checkpoint_path)
+    return delivered
+
+
+def notify_new_bitunix_partial_closes(
+    notifier: Any,
+    open_positions: dict[str, dict[str, object]],
+    *,
+    checkpoint_path: Path = TELEGRAM_LIVE_PARTIAL_CHECKPOINT,
+) -> int:
+    """Notify when an open Bitunix position quantity decreases between scans."""
+    snapshot = {
+        str(symbol): {
+            "quantity": abs(float(position.get("quantity") or position.get("remaining_size") or 0.0)),
+            "position": dict(position),
+        }
+        for symbol, position in open_positions.items()
+        if isinstance(position, dict)
+    }
+    previous = read_json_file(checkpoint_path, None)
+    if not isinstance(previous, dict):
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        logger.info("Telegram live-partial baseline initialized rows=%s", len(snapshot))
+        return 0
+
+    from app.telegram.trade_reporter import TradeReporter
+
+    reporter = TradeReporter()
+    delivered = 0
+    for symbol, current in snapshot.items():
+        old = previous.get(symbol)
+        if not isinstance(old, dict):
+            continue
+        old_quantity = abs(float(old.get("quantity") or 0.0))
+        current_quantity = abs(float(current.get("quantity") or 0.0))
+        closed_quantity = old_quantity - current_quantity
+        if closed_quantity <= 1e-12:
+            continue
+
+        position = dict(current.get("position") or {})
+        side = str(position.get("side") or old.get("position", {}).get("side") or "LONG").upper()
+        entry = float(position.get("entry_price") or position.get("entry") or old.get("position", {}).get("entry_price") or 0.0)
+        exit_price = float(position.get("last_price") or position.get("mark_price") or position.get("current_price") or entry)
+        direction = 1.0 if side in {"LONG", "BUY"} else -1.0
+        partial_pnl = (exit_price - entry) * direction * closed_quantity
+        reason = "take_profit" if partial_pnl >= 0 else "stop_loss"
+        event_position = {
+            **position,
+            "symbol": position.get("symbol") or symbol,
+            "side": "BUY" if side in {"LONG", "BUY"} else "SELL",
+            "entry": entry,
+            "partial_exit_price": exit_price,
+            "partial_size_closed": closed_quantity,
+            "remaining_size": current_quantity,
+            "partial_realized_pnl": partial_pnl,
+            "partial_reason": position.get("partial_reason") or reason,
+        }
+        if notifier.send(reporter.format_partial_close(event_position, venue="Bitunix Futures")) is True:
+            delivered += 1
+
+    temporary = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
+    temporary.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    temporary.replace(checkpoint_path)
     return delivered
 
 
@@ -1338,6 +1402,11 @@ def run_once(
                                 if "/" not in compact and compact.endswith("USDT")
                                 else compact
                             )
+                    if telegram_notifier is not None:
+                        notify_new_bitunix_partial_closes(
+                            telegram_notifier,
+                            open_positions_map,
+                        )
             except Exception as exc:  # noqa: BLE001
                 pending_orders_read_ok = False
                 print(f"bitunix positions fallback to paper: {exc}", flush=True)
@@ -1390,6 +1459,8 @@ def run_once(
                 market_data=market_data,
                 coordinator=coordinator,
             )
+            if telegram_notifier is not None:
+                notify_live_pipeline_executions(telegram_notifier, agent_pipeline_payload)
         except Exception as exc:  # noqa: BLE001
             agent_pipeline_payload = {
                 "enabled": True,
