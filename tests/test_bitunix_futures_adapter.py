@@ -426,12 +426,12 @@ def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) ->
     assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
 
 
-def test_expired_tp_queue_emergency_closes_unprotected_position(tmp_path) -> None:
+def test_expired_tp_queue_requires_manual_action_without_closing(tmp_path) -> None:
     calls = []
 
     def transport(*, url, headers, body):
         calls.append({"url": url, "body": body})
-        return {"code": 0, "data": {"orderId": "emergency-close-1", "status": "NEW"}}
+        return {"code": 0, "data": {"orderId": "unexpected", "status": "NEW"}}
 
     pending_path = tmp_path / "pending-tp.json"
     pending_path.write_text(json.dumps({"plans": [{
@@ -453,11 +453,11 @@ def test_expired_tp_queue_emergency_closes_unprotected_position(tmp_path) -> Non
         "quantity": 1.0, "entry_price": 1.0, "stop_loss": 0.98,
     }], timestamp="2026-01-01T00:01:00+00:00")
 
-    assert len(results) == 1
-    assert results[0].status == "SUBMITTED"
-    assert results[0].meta["role"] == "emergency_tp_protection_close"
-    assert calls[0]["body"]["positionId"] == "position-1"
-    assert calls[0]["body"]["reduceOnly"] is True
+    assert results == []
+    assert calls == []
+    saved = json.loads(pending_path.read_text(encoding="utf-8"))["plans"][0]
+    assert saved["protection_status"] == "manual_action_required"
+    assert "KAITO/USDT" in adapter._blocked_entry_symbols
 
 
 def test_reconcile_preserves_legacy_ladder_without_submitting_it(tmp_path) -> None:
@@ -656,6 +656,52 @@ def test_reconcile_prunes_queue_when_position_already_has_tp(tmp_path, monkeypat
     assert results == []
     assert calls == []
     assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
+
+
+def test_repair_unprotected_position_places_default_three_level_ladder(tmp_path, monkeypatch) -> None:
+    transport = _capturing_transport({"code": 0, "data": {"orderId": "repair-tp"}})
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=tmp_path / "pending-tp.json",
+    )
+    monkeypatch.setattr(adapter, "pending_tpsl", lambda **_: [])
+
+    results = adapter.repair_unprotected_positions([{
+        "position_id": "ada-position", "symbol": "ADAUSDT", "side": "SELL",
+        "entry_price": "0.1942", "stop_loss": "0.1997", "quantity": 51.0,
+    }], timestamp="2026-08-10T00:00:00Z")
+
+    assert len(results) == 3
+    assert all(result.status == "SUBMITTED" for result in results)
+    assert [call["body"]["tpPrice"] for call in transport.calls] == [
+        "0.1832", "0.1777", "0.1722",
+    ]
+    assert [call["body"]["tpQty"] for call in transport.calls] == [
+        "15.3", "15.3", "20.4",
+    ]
+
+
+def test_repair_skips_existing_tp_even_when_position_aggregate_is_null(
+    tmp_path, monkeypatch,
+) -> None:
+    transport = _capturing_transport({"code": 0, "data": {"orderId": "unexpected"}})
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=tmp_path / "pending-tp.json",
+    )
+    monkeypatch.setattr(adapter, "pending_tpsl", lambda **_: [{
+        "position_id": "ada-position", "symbol": "ADAUSDT",
+        "tpPrice": "0.1832", "tpQty": "15.3",
+    }])
+
+    results = adapter.repair_unprotected_positions([{
+        "position_id": "ada-position", "symbol": "ADAUSDT", "side": "SELL",
+        "entry_price": "0.1942", "stop_loss": "0.1997", "quantity": 51.0,
+        "take_profit": None,
+    }], timestamp="2026-08-10T00:00:00Z")
+
+    assert results == []
+    assert transport.calls == []
 
 
 def test_reconcile_does_not_prune_stale_position_tp_without_pending_tpsl(

@@ -60,6 +60,9 @@ BITUNIX_TPSL_CANCEL_PATH = "/api/v1/futures/tpsl/cancel_order"
 BITUNIX_OPENAPI_BLOCKLIST_PATH = Path("logs/bitunix_openapi_unsupported.json")
 BITUNIX_PENDING_TP_PATH = Path("logs/bitunix_pending_take_profits.json")
 TP_PROTECTION_TIMEOUT_SECONDS = 60
+TP_MAX_PLACEMENT_ATTEMPTS = 3
+DEFAULT_TP_R_MULTIPLES = (2.0, 3.0, 4.0)
+DEFAULT_TP_FRACTIONS = (0.3, 0.3, 0.4)
 BITUNIX_ORDER_METADATA_PATH = Path("logs/bitunix_order_metadata.json")
 TP1_TRAILING_STRATEGY = "tp1_partial_trailing_v1"
 SUPPORTED_TP_STRATEGIES = {TP1_TRAILING_STRATEGY, LIFECYCLE_VERSION}
@@ -217,6 +220,10 @@ class BitunixFuturesExecutorAdapter:
 
         if not self._credentials.configured:
             raise RuntimeError("credentials_missing")
+        # Unit transports that only capture POSTs intentionally do not expose
+        # a private GET endpoint. Live adapters always use the real query path.
+        if self._query_transport is None and self._transport is not None:
+            return []
         params: dict[str, Any] = {"limit": 100}
         if symbol:
             params["symbol"] = symbol.replace("/", "").replace("-", "").upper()
@@ -248,7 +255,8 @@ class BitunixFuturesExecutorAdapter:
             row for row in rows
             if (
                 not position_id
-                or str(row.get("positionId") or "") == str(position_id)
+                or not str(row.get("positionId") or row.get("position_id") or "")
+                or str(row.get("positionId") or row.get("position_id")) == str(position_id)
             )
             and (
                 not compact
@@ -532,52 +540,42 @@ class BitunixFuturesExecutorAdapter:
                 remaining.append(plan)
                 continue
             if self._tp_plan_expired(plan, timestamp):
-                emergency = self._emergency_close_unprotected(
-                    position, symbol=symbol, position_id=position_id,
-                    timestamp=timestamp,
+                self._blocked_entry_symbols.add(symbol)
+                logger.error(
+                    "Bitunix TP protection requires manual action symbol=%s position_id=%s",
+                    symbol, position_id,
                 )
-                results.append(emergency)
-                if emergency.status == "REJECTED":
-                    remaining.append({
-                        **plan,
-                        "emergency_close_attempts": int(plan.get("emergency_close_attempts", 0)) + 1,
-                        "last_emergency_close_at": timestamp,
-                        "protection_status": "emergency_close_failed",
-                    })
-                else:
-                    logger.error(
-                        "Bitunix emergency close submitted symbol=%s position_id=%s "
-                        "reason=take_profit_timeout",
-                        symbol, position_id,
-                    )
+                remaining.append({
+                    **plan,
+                    "last_protection_alert_at": timestamp,
+                    "protection_status": "manual_action_required",
+                })
                 continue
             queued = [
                 dict(raw) for raw in plan.get("take_profits", [])
                 if isinstance(raw, dict) and raw.get("role") in TP_ROLES
             ]
-            active_tpsl: list[dict[str, Any]] = []
-            if _float(position.get("take_profit")) > 0:
-                try:
-                    active_tpsl = self.pending_tpsl(
-                        symbol=symbol, position_id=position_id,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "Bitunix TP reconciliation deferred symbol=%s "
-                        "position_id=%s reason=protection_check_failed error=%s",
-                        symbol, position_id, exc,
-                    )
-                    remaining.append(plan)
-                    continue
+            try:
+                active_tpsl = self.pending_tpsl(
+                    symbol=symbol, position_id=position_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Bitunix TP reconciliation deferred symbol=%s "
+                    "position_id=%s reason=protection_check_failed error=%s",
+                    symbol, position_id, exc,
+                )
+                remaining.append(plan)
+                continue
 
             def _confirmed(raw: dict[str, Any]) -> bool:
                 expected_price = _float(raw.get("price"))
                 expected_qty = _float(raw.get("quantity"))
                 return any(
-                    _float(row.get("tpPrice")) > 0
-                    and abs(_float(row.get("tpPrice")) - expected_price)
+                    _float(row.get("tpPrice", row.get("takeProfitPrice"))) > 0
+                    and abs(_float(row.get("tpPrice", row.get("takeProfitPrice"))) - expected_price)
                     <= max(1e-8, abs(expected_price) * 1e-4)
-                    and _float(row.get("tpQty", row.get("qty"))) >= expected_qty
+                    and _float(row.get("tpQty", row.get("qty", row.get("takeProfitQty")))) >= expected_qty
                     for row in active_tpsl
                 )
 
@@ -587,7 +585,21 @@ class BitunixFuturesExecutorAdapter:
                 if plan.get("strategy") == LIFECYCLE_VERSION:
                     self._register_live_lifecycle(plan, position, plan.get("take_profits", []))
                 continue
+            attempts = int(plan.get("tp_placement_attempts", 0))
+            if attempts >= TP_MAX_PLACEMENT_ATTEMPTS:
+                self._blocked_entry_symbols.add(symbol)
+                remaining.append({
+                    **plan,
+                    "protection_status": "protection_failed",
+                    "last_protection_failure_at": timestamp,
+                })
+                logger.error(
+                    "Bitunix TP placement retry cap reached symbol=%s position_id=%s",
+                    symbol, position_id,
+                )
+                continue
             unsent: list[dict[str, Any]] = []
+            placed_any = False
             for index, raw in enumerate(queued):
                 price = float(raw["price"])
                 target_rr = _float(raw.get("target_risk_reward"))
@@ -620,18 +632,76 @@ class BitunixFuturesExecutorAdapter:
                         ),
                     },
                 )
+                if any(
+                    abs(_float(row.get("tpPrice", row.get("takeProfitPrice"))) - price)
+                    <= max(1e-8, abs(price) * 1e-4)
+                    for row in active_tpsl
+                ):
+                    continue
                 result = self._place_take_profit(order, position_id, timestamp)
                 results.append(result)
+                placed_any = True
                 if result.status == "REJECTED":
                     # Keep only the failed TP and later levels. Earlier levels
                     # were accepted and must not be duplicated on the next scan.
                     unsent = queued[index:]
                     break
             if unsent:
-                remaining.append({**plan, "take_profits": unsent})
+                remaining.append({
+                    **plan, "take_profits": unsent,
+                    "tp_placement_attempts": attempts + (1 if placed_any else 0),
+                })
             elif plan.get("strategy") == LIFECYCLE_VERSION:
                 self._register_live_lifecycle(plan, position, queued)
         self._save_pending_take_profits(remaining)
+        return results
+
+    def repair_unprotected_positions(
+        self, positions: list[dict[str, Any]], *, timestamp: str,
+    ) -> list[ExecutionResult]:
+        """Repair open positions that have an SL but no exchange-side TP."""
+        results: list[ExecutionResult] = []
+        for position in positions:
+            symbol = _canonical_symbol(position.get("symbol"))
+            position_id = str(position.get("position_id") or position.get("positionId") or "")
+            entry = _float(position.get("entry_price", position.get("entry")))
+            stop = _float(position.get("stop_loss", position.get("stopLoss")))
+            quantity = _float(position.get("quantity", position.get("qty")))
+            side = _canonical_position_side(position.get("side"))
+            if not symbol or not position_id or entry <= 0 or stop <= 0 or quantity <= 0 or side not in {"LONG", "SHORT"}:
+                continue
+            try:
+                active = self.pending_tpsl(symbol=symbol, position_id=position_id)
+            except Exception as exc:  # noqa: BLE001
+                self._blocked_entry_symbols.add(symbol)
+                logger.error("Bitunix TP repair read failed symbol=%s error=%s", symbol, exc)
+                continue
+            if any(_float(row.get("tpPrice", row.get("takeProfitPrice"))) > 0 for row in active):
+                continue
+            risk = abs(entry - stop)
+            direction = 1.0 if side == "LONG" else -1.0
+            exit_side = "SELL" if side == "LONG" else "BUY"
+            quantities = [quantity * fraction for fraction in DEFAULT_TP_FRACTIONS]
+            failed = False
+            for index, (multiple, tp_quantity) in enumerate(zip(DEFAULT_TP_R_MULTIPLES, quantities)):
+                order = OrderRequest(
+                    symbol=symbol, side=exit_side, order_type="LIMIT",
+                    quantity=tp_quantity,
+                    price=round(entry + direction * risk * multiple, 8),
+                    reduce_only=True,
+                    meta={"role": TP_ROLES[index], "position_id": position_id, "repair": True,
+                          "target_risk_reward": multiple},
+                )
+                result = self._place_take_profit(order, position_id, timestamp)
+                results.append(result)
+                if result.status == "REJECTED":
+                    failed = True
+                    break
+            if failed:
+                self._blocked_entry_symbols.add(symbol)
+                logger.error("Bitunix TP repair failed symbol=%s position_id=%s", symbol, position_id)
+            else:
+                logger.info("Bitunix TP repair submitted symbol=%s position_id=%s", symbol, position_id)
         return results
 
     @staticmethod

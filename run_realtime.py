@@ -587,6 +587,21 @@ def build_runtime_agent_coordinator(
                 result.order_id,
                 result.reason,
             )
+        repairs = adapter.repair_unprotected_positions(
+            exchange_positions, timestamp=datetime.now(tz=UTC).isoformat(),
+        )
+        for result in repairs:
+            log = logger.info if result.status != "REJECTED" else logger.error
+            log(
+                "Bitunix TP repair symbol=%s role=%s status=%s quantity=%s "
+                "order_id=%s reason=%s",
+                result.symbol,
+                result.meta.get("role", "take_profit"),
+                result.status,
+                result.requested_quantity,
+                result.order_id,
+                result.reason,
+            )
     balance = 10_000.0
     if network_enabled:
         balance = adapter.available_balance("USDT")
@@ -658,9 +673,15 @@ def reconcile_live_take_profits_at_startup(runtime_config: dict[str, object]) ->
             enabled=True, dry_run=False, confirm_live=True,
         ),
     )
+    repair = getattr(adapter, "repair_unprotected_positions", None)
+    repairs = (
+        repair(positions, timestamp=datetime.now(tz=UTC).isoformat())
+        if callable(repair) else []
+    )
     results = adapter.reconcile_take_profits(
         positions, timestamp=datetime.now(tz=UTC).isoformat(),
     )
+    results = [*repairs, *results]
     for result in results:
         log = logger.info if result.status != "REJECTED" else logger.error
         log(
