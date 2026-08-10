@@ -67,6 +67,7 @@ TP_QUANTITY_EPSILON = 1e-8
 DEFAULT_TP_R_MULTIPLES = (2.0, 3.0, 4.0)
 DEFAULT_TP_FRACTIONS = (0.3, 0.3, 0.4)
 BITUNIX_ORDER_METADATA_PATH = Path("logs/bitunix_order_metadata.json")
+BITUNIX_MIN_AMOUNT_PATH = Path("logs/bitunix_min_amounts.json")
 TP1_TRAILING_STRATEGY = "tp1_partial_trailing_v1"
 SUPPORTED_TP_STRATEGIES = {TP1_TRAILING_STRATEGY, LIFECYCLE_VERSION}
 logger = logging.getLogger(__name__)
@@ -118,6 +119,7 @@ class BitunixFuturesExecutorAdapter:
         leverage: int | None = None,
         blocked_entry_symbols: set[str] | None = None,
         pending_tp_path: Path | None = None,
+        min_amount_path: Path | None = None,
         order_metadata_path: Path | None = None,
         lifecycle_store_path: Path | None = None,
     ) -> None:
@@ -128,6 +130,11 @@ class BitunixFuturesExecutorAdapter:
         self._query_transport = query_transport
         self._leverage = int(leverage) if leverage is not None else None
         self._pending_tp_path = pending_tp_path or BITUNIX_PENDING_TP_PATH
+        self._min_amount_path = min_amount_path or (
+            pending_tp_path.with_name("bitunix_min_amounts.json")
+            if pending_tp_path is not None else BITUNIX_MIN_AMOUNT_PATH
+        )
+        self._minimum_amounts = self._load_minimum_amounts()
         self._lifecycle_store_path = lifecycle_store_path or (
             pending_tp_path.with_name("bitunix_live_lifecycle.json")
             if pending_tp_path is not None else Path("logs/bitunix_live_lifecycle.json")
@@ -596,8 +603,11 @@ class BitunixFuturesExecutorAdapter:
                     )
                 )
 
+            minimum_amount = self._minimum_amounts.get(symbol, 0.0)
             incomplete: list[dict[str, Any]] = []
             for raw in queued:
+                if minimum_amount and _float(raw.get("quantity")) <= minimum_amount:
+                    continue
                 shortfall = _float(raw.get("quantity")) - _covered_quantity(raw)
                 if shortfall > TP_QUANTITY_EPSILON:
                     incomplete.append({**raw, "quantity": shortfall})
@@ -622,6 +632,7 @@ class BitunixFuturesExecutorAdapter:
                 continue
             unsent: list[dict[str, Any]] = []
             placed_any = False
+            permanent_rejection = False
             for index, raw in enumerate(queued):
                 price = float(raw["price"])
                 target_rr = _float(raw.get("target_risk_reward"))
@@ -666,14 +677,21 @@ class BitunixFuturesExecutorAdapter:
                     )
                     # Keep only the failed TP and later levels. Earlier levels
                     # were accepted and must not be duplicated on the next scan.
+                    permanent_rejection = _is_minimum_amount_rejection(result)
+                    if permanent_rejection:
+                        self._remember_minimum_amount(symbol, float(raw["quantity"]))
                     unsent = queued[index:]
                     break
             if unsent:
+                if permanent_rejection:
+                    unsent = queued[index + 1:]
                 remaining.append({
                     **plan, "take_profits": unsent,
-                    "tp_placement_attempts": attempts + (1 if placed_any else 0),
+                    "tp_placement_attempts": attempts + (
+                        1 if placed_any and not permanent_rejection else 0
+                    ),
                 })
-            elif plan.get("strategy") == LIFECYCLE_VERSION:
+            elif plan.get("strategy") == LIFECYCLE_VERSION and not permanent_rejection:
                 self._register_live_lifecycle(plan, position, queued)
         self._save_pending_take_profits(remaining)
         return results
@@ -702,6 +720,10 @@ class BitunixFuturesExecutorAdapter:
             direction = 1.0 if side == "LONG" else -1.0
             exit_side = "SELL" if side == "LONG" else "BUY"
             quantities = [quantity * fraction for fraction in DEFAULT_TP_FRACTIONS]
+            has_existing_tp = any(
+                _float(row.get("tpPrice", row.get("takeProfitPrice"))) > 0
+                for row in active
+            )
             def _price_matches(actual: float, expected: float) -> bool:
                 return abs(actual - expected) <= max(
                     TP_QUANTITY_EPSILON, abs(expected) * TP_PRICE_TOLERANCE,
@@ -718,12 +740,17 @@ class BitunixFuturesExecutorAdapter:
                     )
                 )
 
+            minimum_amount = self._minimum_amounts.get(symbol, 0.0)
+
             failed = False
+            permanent_min_rejection = False
             submitted_for_position = False
             for index, (multiple, tp_quantity) in enumerate(zip(DEFAULT_TP_R_MULTIPLES, quantities)):
                 tp_price = round(entry + direction * risk * multiple, 8)
                 tp_quantity = max(0.0, tp_quantity - _covered(tp_price))
                 if tp_quantity <= TP_QUANTITY_EPSILON:
+                    continue
+                if has_existing_tp and tp_quantity <= minimum_amount:
                     continue
                 order = OrderRequest(
                     symbol=symbol, side=exit_side, order_type="LIMIT",
@@ -735,6 +762,9 @@ class BitunixFuturesExecutorAdapter:
                 result = self._place_take_profit(order, position_id, timestamp)
                 results.append(result)
                 if result.status == "REJECTED":
+                    if _is_minimum_amount_rejection(result):
+                        permanent_min_rejection = True
+                        self._remember_minimum_amount(symbol, tp_quantity)
                     logger.error(
                         "Bitunix TP repair rejected symbol=%s position_id=%s "
                         "role=%s reason=%s raw=%s",
@@ -744,11 +774,15 @@ class BitunixFuturesExecutorAdapter:
                     failed = True
                     break
                 submitted_for_position = True
-            if failed and not submitted_for_position:
+            if failed and not submitted_for_position and not has_existing_tp:
                 fallback_price = round(entry + direction * risk * DEFAULT_TP_R_MULTIPLES[0], 8)
+                fallback_covered = _covered(fallback_price)
+                fallback_quantity = max(0.0, quantity - fallback_covered)
+                if fallback_quantity <= TP_QUANTITY_EPSILON:
+                    continue
                 fallback = OrderRequest(
                     symbol=symbol, side=exit_side, order_type="LIMIT",
-                    quantity=quantity, price=fallback_price, reduce_only=True,
+                    quantity=fallback_quantity, price=fallback_price, reduce_only=True,
                     meta={
                         "role": "take_profit_1", "position_id": position_id,
                         "repair": True, "repair_fallback": "single_full_quantity",
@@ -757,8 +791,11 @@ class BitunixFuturesExecutorAdapter:
                 )
                 fallback_result = self._place_take_profit(fallback, position_id, timestamp)
                 results.append(fallback_result)
+                if _is_minimum_amount_rejection(fallback_result):
+                    permanent_min_rejection = True
+                    self._remember_minimum_amount(symbol, fallback_quantity)
                 failed = fallback_result.status == "REJECTED"
-            if failed:
+            if failed and not permanent_min_rejection:
                 self._blocked_entry_symbols.add(symbol)
                 logger.error("Bitunix TP repair failed symbol=%s position_id=%s", symbol, position_id)
             else:
@@ -1224,6 +1261,38 @@ class BitunixFuturesExecutorAdapter:
             meta=order.meta,
         )
 
+    def _load_minimum_amounts(self) -> dict[str, float]:
+        try:
+            payload = json.loads(self._min_amount_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            str(symbol): _float(value)
+            for symbol, value in payload.items()
+            if _float(value) > 0
+        }
+
+    def _remember_minimum_amount(self, symbol: str, quantity: float) -> None:
+        canonical = _canonical_symbol(symbol)
+        if not canonical or quantity <= 0:
+            return
+        self._minimum_amounts[canonical] = max(
+            quantity, self._minimum_amounts.get(canonical, 0.0),
+        )
+        try:
+            self._min_amount_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._min_amount_path.with_suffix(
+                self._min_amount_path.suffix + ".tmp"
+            )
+            temporary.write_text(
+                json.dumps(self._minimum_amounts, indent=2), encoding="utf-8",
+            )
+            temporary.replace(self._min_amount_path)
+        except OSError:
+            logger.warning("Could not persist Bitunix minimum amount symbol=%s", canonical)
+
 
 def _map_status(*, status: str, filled: float, requested: float) -> str:
     normalized = (status or "").upper()
@@ -1242,6 +1311,12 @@ def _map_status(*, status: str, filled: float, requested: float) -> str:
     if filled > 0:
         return "PARTIAL"
     return "SUBMITTED"
+
+
+def _is_minimum_amount_rejection(result: ExecutionResult) -> bool:
+    raw = result.meta.get("raw") if isinstance(result.meta, dict) else None
+    code = raw.get("code") if isinstance(raw, dict) else None
+    return code == 30017 or "minimum amount" in str(result.reason).lower()
 
 
 def _fmt_number(value: float) -> str:
