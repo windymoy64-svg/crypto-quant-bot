@@ -691,6 +691,39 @@ def reconcile_live_take_profits_at_startup(runtime_config: dict[str, object]) ->
             result.order_id, result.reason,
         )
 
+
+def register_existing_live_lifecycle_positions(
+    positions: list[dict[str, object]],
+    *,
+    adapter: BitunixFuturesExecutorAdapter,
+) -> None:
+    """Load persisted lifecycle states for already-open live positions.
+
+    Existing positions are not adopted here. Registration is created only by
+    the lifecycle plan reconciliation; this function makes those persisted
+    states available to the monitor immediately after a restart.
+    """
+    from app.execution.live_lifecycle import LiveLifecycleStore
+
+    store = LiveLifecycleStore()
+    states = store.load()
+    open_ids = {
+        str(position.get("position_id") or "")
+        for position in positions
+        if isinstance(position, dict)
+    }
+    stale_ids = [key for key in states if key not in open_ids]
+    if stale_ids:
+        for key in stale_ids:
+            states.pop(key, None)
+        store.save(states)
+    from app.execution.live_lifecycle import LiveLifecycleController
+
+    controller = LiveLifecycleController(adapter)
+    for position in positions:
+        if isinstance(position, dict) and str(position.get("position_id") or "") not in states:
+            controller.register_existing_position(position)
+
 def write_scan_outputs(
     results: list[dict[str, object]],
     short_results: list[dict[str, object]],
@@ -1449,6 +1482,10 @@ def run_once(
                 if isinstance(pos, dict) and pos.get("symbol"):
                     open_positions_map[str(pos["symbol"])] = pos
         if execution_preferences.mode == "live" and exchange.lower() == "bitunix":
+            register_existing_live_lifecycle_positions(
+                list(open_positions_map.values()),
+                adapter=adapter,
+            )
             # A live position without exchange-confirmed TP must reserve its
             # symbol. Never open another position while protection is missing.
             for live_position in open_positions_map.values():
@@ -1533,14 +1570,14 @@ def run_once(
 
                 adapter = getattr(coordinator.executor_agent, "_exchange", None)
                 if isinstance(adapter, BitunixFuturesExecutorAdapter):
-                    controller = LiveLifecycleController(adapter)
+                    controller = LiveLifecycleController(
+                        adapter, trailing_stop_percent=trailing_stop_percent,
+                    )
                     for monitored in agent_pipeline_payload.get("monitor") or []:
                         if not isinstance(monitored, dict) or monitored.get("skipped"):
                             continue
                         result = monitored.get("result") or {}
                         decision = result.get("decision") or {}
-                        if str(decision.get("action") or "").upper() != "HOLD":
-                            continue
                         symbol = str(monitored.get("symbol") or decision.get("symbol") or "")
                         position = open_positions_map.get(symbol)
                         if not isinstance(position, dict):

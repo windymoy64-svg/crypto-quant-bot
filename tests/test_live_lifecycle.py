@@ -127,12 +127,49 @@ def test_rearm_after_partial_restores_missing_remaining_tps(tmp_path) -> None:
 def test_shared_acr_trailing_tightens_live_stop_and_persists(tmp_path) -> None:
     adapter = StatefulAdapter()
     store = LiveLifecycleStore(tmp_path / "state.json")
-    controller = LiveLifecycleController(adapter, store)
+    controller = LiveLifecycleController(adapter, store, trailing_stop_percent=3)
     controller.register(replace(_state(), hold_mode=True))
     new_stop = controller.update_stop_from_candles("p1", _candles())
-    assert new_stop is not None and new_stop >= 100
+    assert new_stop is not None and 100 < new_stop < 114
     assert adapter.tightened == [new_stop]
     assert store.load()["p1"].current_stop == new_stop
+
+
+def test_percentage_trailing_waits_for_long_activation_threshold(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(adapter, store, trailing_stop_percent=3)
+    controller.register(_state())
+
+    candles = [Candle("BTC/USDT", "2026-01-01T00:00:00Z", 100, 102, 99, 102, 1)]
+
+    assert controller.update_stop_from_candles("p1", candles) is None
+    assert adapter.tightened == []
+    assert store.load()["p1"].trailing_active is False
+
+
+def test_percentage_trailing_short_stays_below_entry_and_only_improves(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(adapter, store, trailing_stop_percent=3)
+    state = replace(_state(), side="SHORT", initial_stop=103, current_stop=103)
+    controller.register(state)
+
+    candles = [
+        Candle("BTC/USDT", "2026-01-01T00:00:00Z", 100, 101, 96, 97, 1),
+        Candle("BTC/USDT", "2026-01-01T00:01:00Z", 97, 98, 94, 95, 1),
+    ]
+
+    new_stop = controller.update_stop_from_candles("p1", candles)
+    assert new_stop is not None and 95 < new_stop < 100
+    assert adapter.tightened == [new_stop]
+
+    lower_price_candles = candles + [
+        Candle("BTC/USDT", "2026-01-01T00:02:00Z", 95, 96, 90, 91, 1),
+    ]
+    improved = controller.update_stop_from_candles("p1", lower_price_candles)
+    assert improved is not None and improved < new_stop
+    assert adapter.tightened[-1] == improved
 
 
 def test_monitor_hold_manages_registered_but_skips_legacy(tmp_path) -> None:
@@ -154,6 +191,29 @@ def test_monitor_hold_manages_registered_but_skips_legacy(tmp_path) -> None:
     )
     assert managed["managed"] is True
     assert managed["hold_mode"] is True
+
+
+def test_monitor_non_hold_decision_still_manages_trailing(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    controller = LiveLifecycleController(
+        adapter, LiveLifecycleStore(tmp_path / "state.json"),
+        trailing_stop_percent=3,
+    )
+    controller.register(_state())
+    managed = apply_live_lifecycle_monitor(
+        controller, position={"position_id": "p1", "quantity": 1},
+        decision={"action": "EXIT", "meta": {}},
+        ltf_candles=_candles(),
+    )
+    assert managed["managed"] is True
+
+
+def test_store_keeps_existing_open_lifecycle_state(tmp_path) -> None:
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(StatefulAdapter(), store, trailing_stop_percent=3)
+    controller.register(_state())
+
+    assert store.load()["p1"].position_id == "p1"
 
 
 def test_execute_exit_gate_allows_immediate_exit_without_pnl_filter(tmp_path) -> None:

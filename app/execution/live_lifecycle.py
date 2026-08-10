@@ -9,7 +9,6 @@ from typing import Any
 
 from app.core.models import Candle
 from app.execution.lifecycle_contract import LIFECYCLE_VERSION, TP_FRACTIONS, TP_ROLES
-from app.strategies.acr_engine_bridge import compute_acr_trailing_stop
 
 
 @dataclass
@@ -27,6 +26,8 @@ class LiveLifecycleState:
     lifecycle_version: str = LIFECYCLE_VERSION
     hold_mode: bool = False
     trailing_active: bool = False
+    peak_price: float | None = None
+    trough_price: float | None = None
     tp_hit: list[bool] = field(default_factory=lambda: [False, False, False])
     tp_order_ids: dict[str, str] = field(default_factory=dict)
 
@@ -63,9 +64,15 @@ class LiveLifecycleStore:
 class LiveLifecycleController:
     """Manage only explicitly registered lifecycle-v1 positions."""
 
-    def __init__(self, adapter: Any, store: LiveLifecycleStore | None = None) -> None:
+    def __init__(
+        self,
+        adapter: Any,
+        store: LiveLifecycleStore | None = None,
+        trailing_stop_percent: float | None = None,
+    ) -> None:
         self.adapter = adapter
         self.store = store or LiveLifecycleStore()
+        self.trailing_stop_percent = trailing_stop_percent
 
     def register(self, state: LiveLifecycleState) -> None:
         states = self.store.load()
@@ -74,6 +81,35 @@ class LiveLifecycleController:
             raise RuntimeError("position_id_lifecycle_conflict")
         states[state.position_id] = existing or state
         self.store.save(states)
+
+    def register_existing_position(self, position: dict[str, Any]) -> bool:
+        """Adopt an open position only when its complete TP ladder is present."""
+        position_id = str(position.get("position_id") or "")
+        entry = float(position.get("entry_price") or position.get("entry") or 0)
+        stop = float(position.get("stop_loss") or 0)
+        quantity = float(position.get("quantity") or position.get("remaining_size") or 0)
+        if not position_id or entry <= 0 or stop <= 0 or quantity <= 0:
+            return False
+        rows = self.adapter.pending_tpsl(
+            symbol=str(position.get("symbol") or ""), position_id=position_id,
+        )
+        levels = sorted({
+            float(row.get("tpPrice")) for row in rows if float(row.get("tpPrice") or 0) > 0
+        })
+        if len(levels) != 3:
+            return False
+        self.register(LiveLifecycleState(
+            position_id=position_id,
+            symbol=str(position.get("symbol") or ""),
+            side=str(position.get("side") or ""),
+            entry_price=entry,
+            initial_stop=stop,
+            current_stop=stop,
+            initial_quantity=quantity,
+            remaining_quantity=quantity,
+            tp_levels=levels,
+        ))
+        return True
 
     def reconcile(self, position: dict[str, Any]) -> LiveLifecycleState | None:
         """Reconcile partial fills and authoritative TP IDs after restart."""
@@ -138,30 +174,53 @@ class LiveLifecycleController:
         state = states.get(str(position_id))
         if state is None:
             return None
-        synthetic = {
-            "side": state.side, "entry": state.entry_price,
-            "trailing_stop_loss": state.current_stop,
-        }
-        candidate = compute_acr_trailing_stop(synthetic, candles, buffer_pct=buffer_pct)
-        # HOLD gets BE protection at >=1R even before a clean swing appears.
-        if state.hold_mode and candles:
-            current = float(candles[-1].close)
-            risk = abs(state.entry_price - state.initial_stop)
-            favorable = (
-                current >= state.entry_price + risk
-                if state.side.upper() in {"BUY", "LONG"}
-                else current <= state.entry_price - risk
-            )
-            if favorable:
-                candidate = max(candidate or state.entry_price, state.entry_price) if state.side.upper() in {"BUY", "LONG"} else min(candidate or state.entry_price, state.entry_price)
-        if candidate is None:
+        percent = float(self.trailing_stop_percent or 0)
+        if percent <= 0 or not candles:
             return None
+
+        is_long = state.side.upper() in {"BUY", "LONG"}
+        current = float(candles[-1].close)
+        if is_long:
+            peak = max(
+                [state.peak_price or state.entry_price]
+                + [float(candle.high) for candle in candles]
+            )
+            state.peak_price = peak
+            activation_price = state.entry_price * (1 + percent / 100)
+            if current < activation_price:
+                states[state.position_id] = state
+                self.store.save(states)
+                return None
+            state.trailing_active = True
+            candidate = peak * (1 - percent / 100)
+            valid_candidate = state.entry_price < candidate < current
+            improving = candidate > state.current_stop
+        else:
+            trough = min(
+                [state.trough_price or state.entry_price]
+                + [float(candle.low) for candle in candles]
+            )
+            state.trough_price = trough
+            activation_price = state.entry_price * (1 - percent / 100)
+            if current > activation_price:
+                states[state.position_id] = state
+                self.store.save(states)
+                return None
+            state.trailing_active = True
+            candidate = trough * (1 + percent / 100)
+            valid_candidate = current < candidate < state.entry_price
+            improving = candidate < state.current_stop
+
+        if not valid_candidate or not improving:
+            states[state.position_id] = state
+            self.store.save(states)
+            return None
+
         self.adapter.tighten_stop(
             symbol=state.symbol, position_id=state.position_id, side=state.side,
             new_stop=float(candidate), quantity=state.remaining_quantity,
         )
         state.current_stop = float(candidate)
-        state.trailing_active = True
         states[state.position_id] = state
         self.store.save(states)
         return state.current_stop
@@ -227,17 +286,15 @@ def apply_live_lifecycle_monitor(
     decision: dict[str, Any],
     ltf_candles: list[Candle],
 ) -> dict[str, Any]:
-    """Apply one agent HOLD observation to a registered live position."""
+    """Apply one live price observation to a registered live position."""
 
     position_id = str(position.get("position_id") or "")
     state = controller.reconcile(position)
     if state is None:
         return {"managed": False, "reason": "legacy_or_unregistered_position"}
-    if str(decision.get("action") or "").upper() != "HOLD":
-        return {"managed": False, "reason": "decision_not_hold"}
     meta = decision.get("meta") if isinstance(decision.get("meta"), dict) else {}
-    hold_mode = bool(meta.get("hold_mode", not bool(meta.get("tp1_enabled", True))))
-    state = controller.set_hold(position_id, hold_mode)
+    hold_mode = bool(meta.get("hold_mode", False))
+    state = controller.set_hold(position_id, hold_mode) if hold_mode else controller.reconcile(position)
     new_stop = controller.update_stop_from_candles(position_id, ltf_candles)
     return {
         "managed": True, "position_id": position_id,
