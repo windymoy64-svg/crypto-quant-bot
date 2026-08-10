@@ -759,6 +759,30 @@ def test_reconcile_preserves_plan_when_position_id_is_missing(tmp_path, caplog) 
     assert "reason=position_id_missing" in caplog.text
 
 
+def test_reconcile_prunes_old_orphan_plan_without_touching_exchange(tmp_path) -> None:
+    transport = _capturing_transport({"code": 0, "data": {"orderId": "unexpected"}})
+    pending_path = tmp_path / "pending-tp.json"
+    pending_path.write_text(json.dumps({"plans": [{
+        "entry_order_id": "orphan", "symbol": "SOL/USDT",
+        "position_side": "SHORT", "strategy": "tp1_partial_trailing_v1",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "take_profits": [{
+            "role": "take_profit_1", "side": "BUY", "quantity": 1.0,
+            "price": 100,
+        }],
+    }]}), encoding="utf-8")
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=pending_path,
+    )
+
+    results = adapter.reconcile_take_profits([], timestamp="2026-01-01T02:00:00+00:00")
+
+    assert results == []
+    assert transport.calls == []
+    assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
+
+
 def test_reconcile_recomputes_rr_tp_from_exchange_entry_and_stop(tmp_path) -> None:
     transport = _capturing_transport({"code": 0, "data": {"orderId": "tp-rr2"}})
     pending_path = tmp_path / "pending-tp.json"

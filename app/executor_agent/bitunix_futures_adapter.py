@@ -61,6 +61,7 @@ BITUNIX_OPENAPI_BLOCKLIST_PATH = Path("logs/bitunix_openapi_unsupported.json")
 BITUNIX_PENDING_TP_PATH = Path("logs/bitunix_pending_take_profits.json")
 TP_PROTECTION_TIMEOUT_SECONDS = 60
 TP_MAX_PLACEMENT_ATTEMPTS = 3
+TP_ORPHAN_PLAN_RETENTION_SECONDS = 3600
 DEFAULT_TP_R_MULTIPLES = (2.0, 3.0, 4.0)
 DEFAULT_TP_FRACTIONS = (0.3, 0.3, 0.4)
 BITUNIX_ORDER_METADATA_PATH = Path("logs/bitunix_order_metadata.json")
@@ -215,6 +216,7 @@ class BitunixFuturesExecutorAdapter:
 
     def pending_tpsl(
         self, *, symbol: str | None = None, position_id: str | None = None,
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
         """Read authoritative pending TP/SL orders from Bitunix."""
 
@@ -224,7 +226,7 @@ class BitunixFuturesExecutorAdapter:
         # a private GET endpoint. Live adapters always use the real query path.
         if self._query_transport is None and self._transport is not None:
             return []
-        params: dict[str, Any] = {"limit": 100}
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 1000))}
         if symbol:
             params["symbol"] = symbol.replace("/", "").replace("-", "").upper()
         if position_id:
@@ -524,7 +526,14 @@ class BitunixFuturesExecutorAdapter:
                     "entry_order_id=%s reason=position_not_found",
                     symbol, expected_side, plan.get("entry_order_id"),
                 )
-                remaining.append(plan)
+                if not self._orphan_plan_expired(plan, timestamp):
+                    remaining.append(plan)
+                else:
+                    logger.info(
+                        "Bitunix TP plan pruned symbol=%s side=%s "
+                        "entry_order_id=%s reason=orphan_plan_expired",
+                        symbol, expected_side, plan.get("entry_order_id"),
+                    )
                 continue
             if newest_matching_index.get(plan_key) != plan_index:
                 # Stale duplicate for the currently active position. Drop it;
@@ -683,6 +692,7 @@ class BitunixFuturesExecutorAdapter:
             exit_side = "SELL" if side == "LONG" else "BUY"
             quantities = [quantity * fraction for fraction in DEFAULT_TP_FRACTIONS]
             failed = False
+            submitted_for_position = False
             for index, (multiple, tp_quantity) in enumerate(zip(DEFAULT_TP_R_MULTIPLES, quantities)):
                 order = OrderRequest(
                     symbol=symbol, side=exit_side, order_type="LIMIT",
@@ -697,6 +707,21 @@ class BitunixFuturesExecutorAdapter:
                 if result.status == "REJECTED":
                     failed = True
                     break
+                submitted_for_position = True
+            if failed and not submitted_for_position:
+                fallback_price = round(entry + direction * risk * DEFAULT_TP_R_MULTIPLES[0], 8)
+                fallback = OrderRequest(
+                    symbol=symbol, side=exit_side, order_type="LIMIT",
+                    quantity=quantity, price=fallback_price, reduce_only=True,
+                    meta={
+                        "role": "take_profit_1", "position_id": position_id,
+                        "repair": True, "repair_fallback": "single_full_quantity",
+                        "target_risk_reward": DEFAULT_TP_R_MULTIPLES[0],
+                    },
+                )
+                fallback_result = self._place_take_profit(fallback, position_id, timestamp)
+                results.append(fallback_result)
+                failed = fallback_result.status == "REJECTED"
             if failed:
                 self._blocked_entry_symbols.add(symbol)
                 logger.error("Bitunix TP repair failed symbol=%s position_id=%s", symbol, position_id)
@@ -719,6 +744,22 @@ class BitunixFuturesExecutorAdapter:
         if current.tzinfo is None:
             current = current.replace(tzinfo=UTC)
         return (current - started).total_seconds() >= TP_PROTECTION_TIMEOUT_SECONDS
+
+    @staticmethod
+    def _orphan_plan_expired(plan: dict[str, Any], timestamp: str) -> bool:
+        created = str(plan.get("created_at") or "")
+        if not created:
+            return False
+        try:
+            started = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            current = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=UTC)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        return (current - started).total_seconds() >= TP_ORPHAN_PLAN_RETENTION_SECONDS
 
     def _emergency_close_unprotected(
         self, position: dict[str, Any], *, symbol: str,
