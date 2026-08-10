@@ -649,12 +649,17 @@ def _normalize_bitunix_order(
     metadata = (order_metadata or {}).get(str(row.get("orderId") or ""), {})
     bot_role = str(metadata.get("role") or "")
     bot_reason = str(metadata.get("reason") or "")
+    is_filled = status in {"FILLED", "PART_FILLED", "PARTIAL"}
     has_bot_close_reason = bool(
         reduce_only
+        and is_filled
         and bot_reason
         and (bot_role == "exit" or bot_role == "stop_loss" or bot_role.startswith("take_profit_"))
     )
-    if has_bot_close_reason:
+    if has_bot_close_reason and _as_float(realized) < 0 and bot_role.startswith("take_profit_"):
+        reason = "stop_loss"
+        has_bot_close_reason = False
+    elif has_bot_close_reason:
         reason = bot_reason
     elif status in {"FILLED", "PART_FILLED", "PARTIAL"}:
         reason = "position_reduced" if reduce_only else "entry_filled"
@@ -694,7 +699,7 @@ def _normalize_bitunix_order(
         "reason": reason,
         "bot_role": bot_role or None,
         "reason_source": "bot_order_metadata" if has_bot_close_reason else "bitunix_order_lifecycle",
-        "close_scope": "partial" if bot_role.startswith("take_profit_") else ("full" if bot_role == "exit" else None),
+        "close_scope": "partial" if has_bot_close_reason and bot_role.startswith("take_profit_") else ("full" if has_bot_close_reason and bot_role in {"exit", "stop_loss"} else None),
         "close_label": (
             f"Partial close — {bot_reason.replace('_', ' ')}"
             if has_bot_close_reason and bot_role.startswith("take_profit_")
@@ -748,6 +753,8 @@ def _build_closed_position_history(
             or (role not in {"exit", "stop_loss"} and not role.startswith("take_profit_"))
         ):
             continue
+        if metadata.get("status") not in {"FILLED", "PART_FILLED", "PARTIAL"}:
+            continue
         previous = reasons_by_position.get(position_id)
         if previous is None or str(metadata.get("created_at") or "") >= str(previous.get("created_at") or ""):
             reasons_by_position[position_id] = metadata
@@ -768,6 +775,9 @@ def _build_closed_position_history(
         leverage = max(_as_float(position.get("leverage")), 1.0)
         metadata = reasons_by_position.get(position_id, {})
         reason = metadata.get("reason")
+        realized_pnl = _as_float(position.get("realized_pnl", position.get("realizedPNL")))
+        if str(metadata.get("role") or "").startswith("take_profit_") and realized_pnl < 0:
+            reason = None
         reason_source = "bot_order_metadata" if reason else ""
         if not reason:
             reason, reason_source = _infer_closed_position_reason(
@@ -807,13 +817,23 @@ def _infer_closed_position_reason(
         prices = [price for price in prices if price > 0]
         if prices:
             target = min(prices) if side in {"SHORT", "SELL"} else max(prices)
+    trailing_stops = [
+        _as_float(row.get("trigger_price"))
+        for row in protection
+        if row.get("reason") == "trailing_stop"
+    ]
+    trailing_stop = max(trailing_stops) if side not in {"SHORT", "SELL"} and trailing_stops else min(trailing_stops) if trailing_stops else 0.0
     if close > 0:
         if side in {"SHORT", "SELL"}:
+            if trailing_stop > 0 and close >= trailing_stop:
+                return "trailing_stop", "price_inference"
             if stop > 0 and close >= stop:
                 return "stop_loss_hit", "price_inference"
             if target > 0 and close <= target:
                 return "take_profit_hit", "price_inference"
         else:
+            if trailing_stop > 0 and close <= trailing_stop:
+                return "trailing_stop", "price_inference"
             if stop > 0 and close <= stop:
                 return "stop_loss_hit", "price_inference"
             if target > 0 and close >= target:

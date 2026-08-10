@@ -302,7 +302,8 @@ def test_bitunix_order_history_restores_exact_bot_close_reason() -> None:
         {
             "exit-123": {
                 "role": "exit", "reason": "choch_bearish_against_long",
-                "position_id": "position-1",
+            "position_id": "position-1",
+                "metadata_kind": "bot_order",
             }
         },
     )
@@ -635,6 +636,7 @@ def test_closed_position_history_is_current_session_one_row_with_bot_reason() ->
         "exit-order": {
             "position_id": "today-1", "role": "exit",
             "reason": "structure_invalidation", "created_at": "2026-08-01T01:17:17+00:00",
+            "status": "FILLED",
         },
         "entry-order": {
             "position_id": "today-1", "role": "entry", "reason": "entry",
@@ -698,6 +700,44 @@ def test_closed_position_reason_uses_protection_metadata_when_levels_missing() -
 
     assert history[0]["reason"] == "take_profit_hit"
     assert history[0]["reason_source"] == "price_inference"
+
+
+def test_closed_loss_never_uses_take_profit_intent_as_reason() -> None:
+    history = multi_route._build_closed_position_history(
+        [{
+            "position_id": "loss-1", "symbol": "BTCUSDT", "side": "LONG",
+            "quantity": 1, "entry_price": 100, "close_price": 94,
+            "realized_pnl": -6, "closed_at": "2026-08-01T01:00:00+00:00",
+        }], {
+            "protection:loss-1:take_profit_1": {
+                "metadata_kind": "protection_intent",
+                "position_id": "loss-1", "role": "take_profit_1",
+                "trigger_price": 106,
+            },
+        }, now=datetime(2026, 8, 1, 4, 0, tzinfo=UTC),
+    )
+
+    assert history[0]["reason"] == "exchange_closed_without_bot_reason"
+
+
+def test_filled_tp_order_has_partial_reason_only_when_profitable() -> None:
+    order = multi_route._normalize_bitunix_order(
+        {
+            "orderId": "tp-filled", "symbol": "BTCUSDT", "side": "SELL",
+            "orderType": "LIMIT", "status": "FILLED", "qty": "0.3",
+            "tradeQty": "0.3", "dealAvgPrice": "106", "reduceOnly": True,
+            "realizedPNL": "1.8",
+        },
+        {
+            "tp-filled": {
+                "role": "take_profit_1", "reason": "take_profit_1",
+                "position_id": "p1", "metadata_kind": "bot_order",
+            }
+        },
+    )
+
+    assert order["reason"] == "take_profit_1"
+    assert order["close_scope"] == "partial"
 
 
 def test_closed_position_reason_has_exchange_fallback() -> None:

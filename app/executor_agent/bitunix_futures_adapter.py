@@ -353,10 +353,27 @@ class BitunixFuturesExecutorAdapter:
         is_short = _canonical_position_side(side) == "SHORT"
         if new_stop <= 0 or (is_short and new_stop >= current) or (not is_short and new_stop <= current):
             raise ValueError("stop_update_must_tighten_risk")
-        return self.modify_tpsl_order(
+        result = self.modify_tpsl_order(
             order_id=str(stops[0]["id"]), stop_price=new_stop,
             stop_quantity=quantity,
         )
+        self._record_order_metadata(
+            f"protection:{position_id}:stop_loss",
+            OrderRequest(
+                symbol=symbol, side="BUY" if _canonical_position_side(side) == "SHORT" else "SELL",
+                order_type="STOP", quantity=quantity, price=new_stop,
+                reduce_only=True,
+                meta={
+                    "role": "stop_loss",
+                    "reason": "trailing_stop",
+                    "metadata_kind": "protection_intent",
+                    "position_id": str(position_id),
+                    "trigger_price": new_stop,
+                },
+            ),
+            datetime.now(tz=UTC).isoformat(),
+        )
+        return result
 
     def place_lifecycle_take_profit(
         self, *, symbol: str, position_id: str, side: str, role: str,
@@ -978,6 +995,7 @@ class BitunixFuturesExecutorAdapter:
             meta={
                 "role": role,
                 "metadata_kind": "protection_intent",
+                "reason": "stop_loss",
                 "position_id": str(position_id),
                 "trigger_price": trigger_price,
             },
