@@ -681,7 +681,7 @@ def test_repair_unprotected_position_places_default_three_level_ladder(tmp_path,
     ]
 
 
-def test_repair_skips_existing_tp_even_when_position_aggregate_is_null(
+def test_repair_completes_missing_levels_when_position_aggregate_is_null(
     tmp_path, monkeypatch,
 ) -> None:
     transport = _capturing_transport({"code": 0, "data": {"orderId": "unexpected"}})
@@ -700,8 +700,51 @@ def test_repair_skips_existing_tp_even_when_position_aggregate_is_null(
         "take_profit": None,
     }], timestamp="2026-08-10T00:00:00Z")
 
-    assert results == []
-    assert transport.calls == []
+    assert [result.status for result in results] == ["SUBMITTED", "SUBMITTED"]
+    assert [call["body"]["tpPrice"] for call in transport.calls] == [
+        "0.1777", "0.1722",
+    ]
+
+
+def test_tpsl_place_handles_list_response_without_crashing(tmp_path) -> None:
+    transport = _capturing_transport({"code": 0, "data": []})
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=tmp_path / "pending-tp.json",
+    )
+
+    result = adapter._place_take_profit(
+        OrderRequest(
+            symbol="BNB/USDT", side="SELL", order_type="LIMIT",
+            quantity=0.1, price=600, reduce_only=True,
+        ),
+        "position-1", "2026-08-10T00:00:00Z",
+    )
+
+    assert result.status == "REJECTED"
+    assert result.reason == "empty_response_data"
+    assert result.meta["raw"] == {"code": 0, "data": []}
+
+
+def test_tpsl_place_accepts_order_in_list_response(tmp_path) -> None:
+    transport = _capturing_transport({
+        "code": 0, "data": [{"orderId": "tp-list", "status": "NEW"}],
+    })
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=tmp_path / "pending-tp.json",
+    )
+
+    result = adapter._place_take_profit(
+        OrderRequest(
+            symbol="BNB/USDT", side="SELL", order_type="LIMIT",
+            quantity=0.1, price=600, reduce_only=True,
+        ),
+        "position-1", "2026-08-10T00:00:00Z",
+    )
+
+    assert result.status == "SUBMITTED"
+    assert result.order_id == "tp-list"
 
 
 def test_reconcile_does_not_prune_stale_position_tp_without_pending_tpsl(

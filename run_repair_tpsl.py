@@ -70,8 +70,10 @@ def _price(row: dict[str, Any], kind: str) -> float:
     return _float(row.get("slPrice", row.get("stopLossPrice")))
 
 
-def list_orders(adapter: BitunixFuturesExecutorAdapter) -> list[dict[str, Any]]:
-    rows = adapter.pending_tpsl(limit=1000)
+def list_orders(
+    adapter: BitunixFuturesExecutorAdapter, symbol: str | None = None,
+) -> list[dict[str, Any]]:
+    rows = adapter.pending_tpsl(symbol=symbol, limit=1000)
     print(f"pending TPSL rows returned: {len(rows)}")
     if len(rows) >= 1000:
         print("WARNING: exchange returned the query limit; repeat after cancellation")
@@ -131,6 +133,26 @@ def explain_or_repair(adapter: BitunixFuturesExecutorAdapter, symbol: str, confi
     results = adapter.repair_unprotected_positions(
         positions, timestamp=datetime.now(tz=UTC).isoformat(),
     )
+    if not results:
+        for row in positions:
+            position_id = str(row.get("position_id") or row.get("positionId") or "")
+            active = adapter.pending_tpsl(symbol=compact, position_id=position_id)
+            tp_rows = [item for item in active if _is_tp(item)]
+            tp_quantity = sum(
+                _float(item.get("tpQty", item.get("qty"))) for item in tp_rows
+            )
+            position_quantity = _float(row.get("quantity", row.get("qty")))
+            coverage = (tp_quantity / position_quantity * 100) if position_quantity else 0
+            print(json.dumps({
+                "status": "NO_ACTION",
+                "symbol": compact,
+                "position_id": position_id,
+                "tp_order_count": len(tp_rows),
+                "tp_quantity": tp_quantity,
+                "position_quantity": position_quantity,
+                "coverage_percent": round(coverage, 4),
+                "reason": "no_missing_default_tp_levels_detected",
+            }, indent=2, default=str))
     for result in results:
         print(json.dumps({
             "status": result.status,
@@ -193,7 +215,7 @@ def main() -> int:
     if args.list_rows or args.cancel_excess or args.explain:
         adapter = _adapter(args.confirm)
         if args.list_rows:
-            list_orders(adapter)
+            list_orders(adapter, args.symbol)
         if args.cancel_excess:
             cancel_excess(adapter, args.symbol, confirm=args.confirm)
         if args.explain:

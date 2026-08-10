@@ -62,6 +62,8 @@ BITUNIX_PENDING_TP_PATH = Path("logs/bitunix_pending_take_profits.json")
 TP_PROTECTION_TIMEOUT_SECONDS = 60
 TP_MAX_PLACEMENT_ATTEMPTS = 3
 TP_ORPHAN_PLAN_RETENTION_SECONDS = 3600
+TP_PRICE_TOLERANCE = 1e-3
+TP_QUANTITY_EPSILON = 1e-8
 DEFAULT_TP_R_MULTIPLES = (2.0, 3.0, 4.0)
 DEFAULT_TP_FRACTIONS = (0.3, 0.3, 0.4)
 BITUNIX_ORDER_METADATA_PATH = Path("logs/bitunix_order_metadata.json")
@@ -577,18 +579,29 @@ class BitunixFuturesExecutorAdapter:
                 remaining.append(plan)
                 continue
 
-            def _confirmed(raw: dict[str, Any]) -> bool:
-                expected_price = _float(raw.get("price"))
-                expected_qty = _float(raw.get("quantity"))
-                return any(
-                    _float(row.get("tpPrice", row.get("takeProfitPrice"))) > 0
-                    and abs(_float(row.get("tpPrice", row.get("takeProfitPrice"))) - expected_price)
-                    <= max(1e-8, abs(expected_price) * 1e-4)
-                    and _float(row.get("tpQty", row.get("qty", row.get("takeProfitQty")))) >= expected_qty
-                    for row in active_tpsl
+            def _price_matches(actual: float, expected: float) -> bool:
+                return abs(actual - expected) <= max(
+                    TP_QUANTITY_EPSILON, abs(expected) * TP_PRICE_TOLERANCE,
                 )
 
-            queued = [raw for raw in queued if not _confirmed(raw)]
+            def _covered_quantity(raw: dict[str, Any]) -> float:
+                expected_price = _float(raw.get("price"))
+                return sum(
+                    _float(row.get("tpQty", row.get("qty", row.get("takeProfitQty"))))
+                    for row in active_tpsl
+                    if _float(row.get("tpPrice", row.get("takeProfitPrice"))) > 0
+                    and _price_matches(
+                        _float(row.get("tpPrice", row.get("takeProfitPrice"))),
+                        expected_price,
+                    )
+                )
+
+            incomplete: list[dict[str, Any]] = []
+            for raw in queued:
+                shortfall = _float(raw.get("quantity")) - _covered_quantity(raw)
+                if shortfall > TP_QUANTITY_EPSILON:
+                    incomplete.append({**raw, "quantity": shortfall})
+            queued = incomplete
             if not queued:
                 # All planned levels are confirmed for this exact position.
                 if plan.get("strategy") == LIFECYCLE_VERSION:
@@ -641,16 +654,16 @@ class BitunixFuturesExecutorAdapter:
                         ),
                     },
                 )
-                if any(
-                    abs(_float(row.get("tpPrice", row.get("takeProfitPrice"))) - price)
-                    <= max(1e-8, abs(price) * 1e-4)
-                    for row in active_tpsl
-                ):
-                    continue
                 result = self._place_take_profit(order, position_id, timestamp)
                 results.append(result)
                 placed_any = True
                 if result.status == "REJECTED":
+                    logger.error(
+                        "Bitunix TP placement rejected symbol=%s position_id=%s "
+                        "role=%s reason=%s raw=%s",
+                        symbol, position_id, raw.get("role"), result.reason,
+                        result.meta.get("raw"),
+                    )
                     # Keep only the failed TP and later levels. Earlier levels
                     # were accepted and must not be duplicated on the next scan.
                     unsent = queued[index:]
@@ -685,19 +698,36 @@ class BitunixFuturesExecutorAdapter:
                 self._blocked_entry_symbols.add(symbol)
                 logger.error("Bitunix TP repair read failed symbol=%s error=%s", symbol, exc)
                 continue
-            if any(_float(row.get("tpPrice", row.get("takeProfitPrice"))) > 0 for row in active):
-                continue
             risk = abs(entry - stop)
             direction = 1.0 if side == "LONG" else -1.0
             exit_side = "SELL" if side == "LONG" else "BUY"
             quantities = [quantity * fraction for fraction in DEFAULT_TP_FRACTIONS]
+            def _price_matches(actual: float, expected: float) -> bool:
+                return abs(actual - expected) <= max(
+                    TP_QUANTITY_EPSILON, abs(expected) * TP_PRICE_TOLERANCE,
+                )
+
+            def _covered(expected_price: float) -> float:
+                return sum(
+                    _float(row.get("tpQty", row.get("qty", row.get("takeProfitQty"))))
+                    for row in active
+                    if _float(row.get("tpPrice", row.get("takeProfitPrice"))) > 0
+                    and _price_matches(
+                        _float(row.get("tpPrice", row.get("takeProfitPrice"))),
+                        expected_price,
+                    )
+                )
+
             failed = False
             submitted_for_position = False
             for index, (multiple, tp_quantity) in enumerate(zip(DEFAULT_TP_R_MULTIPLES, quantities)):
+                tp_price = round(entry + direction * risk * multiple, 8)
+                tp_quantity = max(0.0, tp_quantity - _covered(tp_price))
+                if tp_quantity <= TP_QUANTITY_EPSILON:
+                    continue
                 order = OrderRequest(
                     symbol=symbol, side=exit_side, order_type="LIMIT",
-                    quantity=tp_quantity,
-                    price=round(entry + direction * risk * multiple, 8),
+                    quantity=tp_quantity, price=tp_price,
                     reduce_only=True,
                     meta={"role": TP_ROLES[index], "position_id": position_id, "repair": True,
                           "target_risk_reward": multiple},
@@ -705,6 +735,12 @@ class BitunixFuturesExecutorAdapter:
                 result = self._place_take_profit(order, position_id, timestamp)
                 results.append(result)
                 if result.status == "REJECTED":
+                    logger.error(
+                        "Bitunix TP repair rejected symbol=%s position_id=%s "
+                        "role=%s reason=%s raw=%s",
+                        symbol, position_id, TP_ROLES[index], result.reason,
+                        result.meta.get("raw"),
+                    )
                     failed = True
                     break
                 submitted_for_position = True
@@ -1093,7 +1129,18 @@ class BitunixFuturesExecutorAdapter:
                 meta={**order.meta, "raw": payload},
             )
 
-        data = payload.get("data") or {}
+        data = payload.get("data")
+        if isinstance(data, list):
+            data = next((item for item in data if isinstance(item, dict)), None)
+        if not isinstance(data, dict):
+            return ExecutionResult(
+                status="REJECTED", order_id="", symbol=order.symbol,
+                side=order.side, order_type=order.order_type,
+                requested_quantity=order.quantity, filled_quantity=0.0,
+                average_price=0.0, timestamp=timestamp,
+                reason="empty_response_data",
+                meta={**order.meta, "raw": payload},
+            )
         order_id = str(data.get("orderId") or "")
         filled_qty = _float(data.get("dealVolume") or data.get("filledQty"))
         avg_price = _float(data.get("dealAvgPrice") or data.get("avgPrice"))
