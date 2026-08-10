@@ -9,6 +9,7 @@ from typing import Any
 
 from app.risk.manager import calculate_position_size
 from app.execution.lifecycle_contract import LIFECYCLE_VERSION
+from app.execution.close_reason import classify_close_reason
 
 
 logger = logging.getLogger(__name__)
@@ -1018,6 +1019,10 @@ class RealtimePaperTradingEngine:
             exit_price,
             size_to_close,
         )
+        reason = classify_close_reason(
+            position, close_price=exit_price, realized_pnl=pnl_partial,
+            explicit_reason=reason,
+        )
 
         state["balance"] = (
             float(state["balance"]) + pnl_partial
@@ -1090,6 +1095,10 @@ class RealtimePaperTradingEngine:
             float(position.get("realized_pnl_partial", 0.0))
             + pnl_final,
             2,
+        )
+        reason = classify_close_reason(
+            position, close_price=exit_price, realized_pnl=total_pnl,
+            explicit_reason=reason,
         )
 
         state["balance"] = (

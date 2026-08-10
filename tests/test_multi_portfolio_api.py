@@ -679,7 +679,7 @@ def test_closed_position_reason_infers_stop_loss_from_exchange_price() -> None:
         }], {}, now=datetime(2026, 8, 1, 4, 0, tzinfo=UTC),
     )
 
-    assert history[0]["reason"] == "stop_loss_hit"
+    assert history[0]["reason"] == "stop_loss"
     assert history[0]["reason_source"] == "price_inference"
 
 
@@ -698,7 +698,7 @@ def test_closed_position_reason_uses_protection_metadata_when_levels_missing() -
         }, now=datetime(2026, 8, 1, 4, 0, tzinfo=UTC),
     )
 
-    assert history[0]["reason"] == "take_profit_hit"
+    assert history[0]["reason"] == "take_profit_1"
     assert history[0]["reason_source"] == "price_inference"
 
 

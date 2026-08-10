@@ -36,6 +36,7 @@ from app.exchange.binance_futures.client import (
 )
 from app.settings.exchange_credentials import SUPPORTED_EXCHANGES, load_exchange_credentials
 from app.settings.portfolio_preferences import load_portfolio_preferences
+from app.execution.close_reason import classify_close_reason
 
 
 logger = logging.getLogger(__name__)
@@ -774,15 +775,23 @@ def _build_closed_position_history(
         quantity = abs(_as_float(position.get("quantity")))
         leverage = max(_as_float(position.get("leverage")), 1.0)
         metadata = reasons_by_position.get(position_id, {})
-        reason = metadata.get("reason")
         realized_pnl = _as_float(position.get("realized_pnl", position.get("realizedPNL")))
+        reason = classify_close_reason(
+            position,
+            close_price=_as_float(position.get("close_price", position.get("closePrice"))),
+            realized_pnl=realized_pnl,
+            explicit_reason=(metadata.get("reason") if metadata else None),
+            filled_role=(metadata.get("role") if metadata else None),
+        )
         if str(metadata.get("role") or "").startswith("take_profit_") and realized_pnl < 0:
             reason = None
-        reason_source = "bot_order_metadata" if reason else ""
-        if not reason:
+        reason_source = "bot_order_metadata" if metadata.get("reason") and metadata.get("status") in {"FILLED", "PART_FILLED", "PARTIAL"} else ""
+        if reason == "exchange_closed_without_bot_reason":
             reason, reason_source = _infer_closed_position_reason(
                 position, protection_by_position.get(position_id, [])
             )
+        elif not reason_source:
+            reason_source = "price_inference"
         history.append({
             **position,
             "status": "CLOSED",
@@ -828,16 +837,16 @@ def _infer_closed_position_reason(
             if trailing_stop > 0 and close >= trailing_stop:
                 return "trailing_stop", "price_inference"
             if stop > 0 and close >= stop:
-                return "stop_loss_hit", "price_inference"
+                return "stop_loss", "price_inference"
             if target > 0 and close <= target:
-                return "take_profit_hit", "price_inference"
+                return "take_profit_1", "price_inference"
         else:
             if trailing_stop > 0 and close <= trailing_stop:
                 return "trailing_stop", "price_inference"
             if stop > 0 and close <= stop:
-                return "stop_loss_hit", "price_inference"
+                return "stop_loss", "price_inference"
             if target > 0 and close >= target:
-                return "take_profit_hit", "price_inference"
+                return "take_profit_1", "price_inference"
     return "exchange_closed_without_bot_reason", "exchange_lifecycle"
 
 
