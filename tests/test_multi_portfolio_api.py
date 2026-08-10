@@ -529,6 +529,18 @@ def test_bitunix_position_normalization_preserves_attached_tp_sl() -> None:
     assert position["opened_at"].endswith("+00:00")
 
 
+def test_bitunix_position_normalization_supports_nested_and_multiple_tps() -> None:
+    position = multi_route._normalize_bitunix_position({
+        "symbol": "KAITOUSDT", "side": "BUY", "qty": "10",
+        "avgOpenPrice": "1.0", "takeProfit": ["1.04", "1.06", "1.08"],
+        "stopLoss": {"price": "0.98"},
+    })
+
+    assert position["take_profit"] == 1.04
+    assert position["take_profits"] == [1.04, 1.06, 1.08]
+    assert position["stop_loss"] == "0.98"
+
+
 def test_bitunix_position_derives_mark_price_from_exchange_unrealized_pnl() -> None:
     position = multi_route._normalize_bitunix_position({
         "symbol": "BNBUSDT", "side": "BUY", "qty": "0.07",

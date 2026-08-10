@@ -423,15 +423,21 @@ def _attach_bitunix_position_tpsl(
                 order for order in orders
                 if _compact_symbol(order.get("symbol")) == symbol
             ]
+        tp_levels: list[float] = []
+        for row in matches:
+            for level in _bitunix_protection_levels(row, "tp"):
+                if level not in tp_levels:
+                    tp_levels.append(level)
         tp = next((_bitunix_protection_price(row, "tp") for row in matches
                    if _bitunix_protection_price(row, "tp") is not None), None)
         sl = next((_bitunix_protection_price(row, "sl") for row in matches
                    if _bitunix_protection_price(row, "sl") is not None), None)
         if tp is not None:
             position["take_profit"] = tp
+            position["take_profits"] = tp_levels
         if sl is not None:
             position["stop_loss"] = sl
-        tp_orders = [row for row in matches if _bitunix_protection_price(row, "tp") is not None]
+        tp_orders = [row for row in matches if _bitunix_protection_levels(row, "tp")]
         sl_orders = [row for row in matches if _bitunix_protection_price(row, "sl") is not None]
         position["take_profit_order_count"] = len(tp_orders)
         position["stop_loss_order_count"] = len(sl_orders)
@@ -457,9 +463,9 @@ def _compact_symbol(value: Any) -> str:
 def _bitunix_protection_price(row: dict[str, Any], kind: str) -> Any | None:
     """Read TP/SL trigger price across Bitunix response variants."""
     keys = (
-        ("tpPrice", "takeProfitPrice", "tpTriggerPrice")
+        ("tpPrice", "takeProfitPrice", "tpTriggerPrice", "takeProfit", "take_profit")
         if kind == "tp"
-        else ("slPrice", "stopLossPrice", "slTriggerPrice")
+        else ("slPrice", "stopLossPrice", "slTriggerPrice", "stopLoss", "stop_loss")
     )
     candidates = [row]
     nested_keys = (
@@ -474,12 +480,43 @@ def _bitunix_protection_price(row: dict[str, Any], kind: str) -> Any | None:
     for candidate in candidates:
         for key in keys:
             value = candidate.get(key)
+            if isinstance(value, list):
+                values = [_as_float(item) for item in value]
+                return next((item for item in values if item > 0), None)
             if _as_float(value) > 0:
                 return value
         # A nested protection object may expose its trigger simply as price.
         if candidate is not row and _as_float(candidate.get("price")) > 0:
             return candidate.get("price")
     return None
+
+
+def _bitunix_protection_levels(row: dict[str, Any], kind: str) -> list[float]:
+    """Extract all protection levels from common Bitunix response shapes."""
+    keys = (
+        ("tpPrice", "takeProfitPrice", "tpTriggerPrice", "takeProfit", "take_profit")
+        if kind == "tp"
+        else ("slPrice", "stopLossPrice", "slTriggerPrice", "stopLoss", "stop_loss")
+    )
+    candidates: list[Any] = [row]
+    nested_keys = ("tpOrder", "takeProfit", "take_profits") if kind == "tp" else ("slOrder", "stopLoss", "stop_loss")
+    for key in nested_keys:
+        value = row.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+        elif isinstance(value, list):
+            candidates.extend(value)
+    levels: list[float] = []
+    for candidate in candidates:
+        values = [candidate.get(key) for key in keys] + [candidate.get("price")] if isinstance(candidate, dict) else [candidate]
+        for value in values:
+            if isinstance(value, list):
+                values.extend(value)
+                continue
+            parsed = _as_float(value)
+            if parsed > 0 and parsed not in levels:
+                levels.append(parsed)
+    return levels
 
 
 def _bitunix_private_get(
@@ -558,8 +595,8 @@ def _normalize_bitunix_position(row: dict[str, Any]) -> dict[str, Any]:
     if _as_float(mark_price) <= 0 and entry_price > 0 and abs(quantity) > 0:
         direction = -1 if side in {"SHORT", "SELL"} else 1
         mark_price = entry_price + (unrealized_pnl / (abs(quantity) * direction))
-    take_profit = row.get("tpPrice", row.get("takeProfitPrice"))
-    stop_loss = row.get("slPrice", row.get("stopLossPrice"))
+    take_profit = _bitunix_protection_price(row, "tp")
+    stop_loss = _bitunix_protection_price(row, "sl")
     risk_distance = abs(entry_price - _as_float(stop_loss))
     actual_risk_reward = (
         abs(entry_price - _as_float(take_profit)) / risk_distance
@@ -586,6 +623,7 @@ def _normalize_bitunix_position(row: dict[str, Any]) -> dict[str, Any]:
         # Preserve it for Active Orders instead of relying on pending orders:
         # attached TP/SL are not necessarily exposed as standalone orders.
         "take_profit": take_profit,
+        "take_profits": _bitunix_protection_levels(row, "tp"),
         "stop_loss": stop_loss,
         "actual_risk_reward": actual_risk_reward,
     }
