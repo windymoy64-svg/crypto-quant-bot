@@ -59,6 +59,7 @@ BITUNIX_TPSL_MODIFY_PATH = "/api/v1/futures/tpsl/modify_order"
 BITUNIX_TPSL_CANCEL_PATH = "/api/v1/futures/tpsl/cancel_order"
 BITUNIX_OPENAPI_BLOCKLIST_PATH = Path("logs/bitunix_openapi_unsupported.json")
 BITUNIX_PENDING_TP_PATH = Path("logs/bitunix_pending_take_profits.json")
+TP_PROTECTION_TIMEOUT_SECONDS = 60
 BITUNIX_ORDER_METADATA_PATH = Path("logs/bitunix_order_metadata.json")
 TP1_TRAILING_STRATEGY = "tp1_partial_trailing_v1"
 SUPPORTED_TP_STRATEGIES = {TP1_TRAILING_STRATEGY, LIFECYCLE_VERSION}
@@ -530,6 +531,26 @@ class BitunixFuturesExecutorAdapter:
                 )
                 remaining.append(plan)
                 continue
+            if self._tp_plan_expired(plan, timestamp):
+                emergency = self._emergency_close_unprotected(
+                    position, symbol=symbol, position_id=position_id,
+                    timestamp=timestamp,
+                )
+                results.append(emergency)
+                if emergency.status == "REJECTED":
+                    remaining.append({
+                        **plan,
+                        "emergency_close_attempts": int(plan.get("emergency_close_attempts", 0)) + 1,
+                        "last_emergency_close_at": timestamp,
+                        "protection_status": "emergency_close_failed",
+                    })
+                else:
+                    logger.error(
+                        "Bitunix emergency close submitted symbol=%s position_id=%s "
+                        "reason=take_profit_timeout",
+                        symbol, position_id,
+                    )
+                continue
             queued = [
                 dict(raw) for raw in plan.get("take_profits", [])
                 if isinstance(raw, dict) and raw.get("role") in TP_ROLES
@@ -613,6 +634,41 @@ class BitunixFuturesExecutorAdapter:
         self._save_pending_take_profits(remaining)
         return results
 
+    @staticmethod
+    def _tp_plan_expired(plan: dict[str, Any], timestamp: str) -> bool:
+        created = str(plan.get("created_at") or "")
+        if not created:
+            return False
+        try:
+            started = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            current = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=UTC)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=UTC)
+        return (current - started).total_seconds() >= TP_PROTECTION_TIMEOUT_SECONDS
+
+    def _emergency_close_unprotected(
+        self, position: dict[str, Any], *, symbol: str,
+        position_id: str, timestamp: str,
+    ) -> ExecutionResult:
+        side = "SELL" if _canonical_position_side(position.get("side")) == "LONG" else "BUY"
+        quantity = _float(position.get("quantity", position.get("qty")))
+        order = OrderRequest(
+            symbol=symbol, side=side, order_type="MARKET", quantity=quantity,
+            reduce_only=True,
+            meta={
+                "role": "emergency_tp_protection_close",
+                "position_id": position_id,
+                "reason": "take_profit_timeout",
+            },
+        )
+        if quantity <= 0:
+            return self._reject(order, timestamp, "emergency_close_quantity_missing")
+        return self.place_order(order, timestamp=timestamp)
+
     def _place_take_profit(
         self, order: OrderRequest, position_id: str, timestamp: str,
     ) -> ExecutionResult:
@@ -657,6 +713,9 @@ class BitunixFuturesExecutorAdapter:
             "initial_stop": stop.stop_price,
             "reference_entry": entry.meta.get("reference_price"),
             "strategy_version": entry.meta.get("strategy_version"),
+            "created_at": datetime.now(tz=UTC).isoformat(),
+            "protection_status": "tp_pending",
+            "emergency_close_attempts": 0,
             "tp_levels": [float(item.price) for item in take_profits if item.price],
             "take_profits": [{
                 "role": str(item.meta.get("role")), "side": item.side,

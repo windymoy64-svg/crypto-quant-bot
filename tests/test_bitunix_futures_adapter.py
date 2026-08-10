@@ -426,6 +426,40 @@ def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) ->
     assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
 
 
+def test_expired_tp_queue_emergency_closes_unprotected_position(tmp_path) -> None:
+    calls = []
+
+    def transport(*, url, headers, body):
+        calls.append({"url": url, "body": body})
+        return {"code": 0, "data": {"orderId": "emergency-close-1", "status": "NEW"}}
+
+    pending_path = tmp_path / "pending-tp.json"
+    pending_path.write_text(json.dumps({"plans": [{
+        "entry_order_id": "entry-1", "symbol": "KAITOUSDT",
+        "position_side": "LONG", "strategy": "paper_live_lifecycle_v1",
+        "created_at": "2020-01-01T00:00:00+00:00",
+        "take_profits": [{
+            "role": "take_profit_1", "side": "SELL", "quantity": 1.0,
+            "price": 1.04,
+        }],
+    }]}), encoding="utf-8")
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=pending_path,
+    )
+
+    results = adapter.reconcile_take_profits([{
+        "position_id": "position-1", "symbol": "KAITOUSDT", "side": "BUY",
+        "quantity": 1.0, "entry_price": 1.0, "stop_loss": 0.98,
+    }], timestamp="2026-01-01T00:01:00+00:00")
+
+    assert len(results) == 1
+    assert results[0].status == "SUBMITTED"
+    assert results[0].meta["role"] == "emergency_tp_protection_close"
+    assert calls[0]["body"]["positionId"] == "position-1"
+    assert calls[0]["body"]["reduceOnly"] is True
+
+
 def test_reconcile_preserves_legacy_ladder_without_submitting_it(tmp_path) -> None:
     transport = _capturing_transport({"code": 0, "data": {"orderId": "tp"}})
     pending_path = tmp_path / "pending-tp.json"

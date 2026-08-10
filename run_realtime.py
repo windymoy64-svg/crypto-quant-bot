@@ -1427,6 +1427,19 @@ def run_once(
             for pos in paper.get("open_positions", []) or []:
                 if isinstance(pos, dict) and pos.get("symbol"):
                     open_positions_map[str(pos["symbol"])] = pos
+        if execution_preferences.mode == "live" and exchange.lower() == "bitunix":
+            # A live position without exchange-confirmed TP must reserve its
+            # symbol. Never open another position while protection is missing.
+            for live_position in open_positions_map.values():
+                if not isinstance(live_position, dict):
+                    continue
+                has_tp = bool(
+                    live_position.get("take_profit")
+                    or live_position.get("take_profits")
+                    or live_position.get("take_profit_order_count")
+                )
+                if not has_tp and live_position.get("symbol"):
+                    pending_entry_symbols.add(str(live_position["symbol"]))
         try:
             coordinator = build_runtime_agent_coordinator(
                 config=agent_pipeline_config,
