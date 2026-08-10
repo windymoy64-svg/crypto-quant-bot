@@ -705,7 +705,7 @@ def register_existing_live_lifecycle_positions(
     """
     from app.execution.live_lifecycle import LiveLifecycleStore
 
-    store = LiveLifecycleStore()
+    store = LiveLifecycleStore(getattr(adapter, "_lifecycle_store_path", "logs/bitunix_live_lifecycle.json"))
     states = store.load()
     open_ids = {
         str(position.get("position_id") or "")
@@ -719,7 +719,7 @@ def register_existing_live_lifecycle_positions(
         store.save(states)
     from app.execution.live_lifecycle import LiveLifecycleController
 
-    controller = LiveLifecycleController(adapter)
+    controller = LiveLifecycleController(adapter, store)
     for position in positions:
         if isinstance(position, dict) and str(position.get("position_id") or "") not in states:
             controller.register_existing_position(position)
@@ -1397,7 +1397,10 @@ def run_once(
             runtime_config.get("agent_pipeline"), dict
         ) else None
     )
-    if agent_pipeline_config.enabled:
+    if agent_pipeline_config.enabled or (
+        execution_preferences.mode == "live"
+        and exchange.lower() == "bitunix"
+    ):
         coordinator: AgentPipelineCoordinator | None = None
         open_positions_map: dict[str, dict[str, object]] = {}
         live_partial_close_symbols: set[str] = set()
@@ -1482,10 +1485,6 @@ def run_once(
                 if isinstance(pos, dict) and pos.get("symbol"):
                     open_positions_map[str(pos["symbol"])] = pos
         if execution_preferences.mode == "live" and exchange.lower() == "bitunix":
-            register_existing_live_lifecycle_positions(
-                list(open_positions_map.values()),
-                adapter=adapter,
-            )
             # A live position without exchange-confirmed TP must reserve its
             # symbol. Never open another position while protection is missing.
             for live_position in open_positions_map.values():
@@ -1514,6 +1513,11 @@ def run_once(
                 and not pending_orders_read_ok
             ):
                 coordinator.executor_agent.live = False
+            lifecycle_adapter = getattr(coordinator.executor_agent, "_exchange", None)
+            if isinstance(lifecycle_adapter, BitunixFuturesExecutorAdapter):
+                register_existing_live_lifecycle_positions(
+                    list(open_positions_map.values()), adapter=lifecycle_adapter,
+                )
             # Soft-entry needs raw scanner WATCH rows. ACR enrichment often
             # rewrites non-confirmed directional rows to SKIP, which would hide
             # WATCH candidates from the agent entirely.
@@ -1551,46 +1555,43 @@ def run_once(
                 "error": f"pipeline_bridge_failed: {exc}",
             }
 
-        # Registered lifecycle-v1 Bitunix positions share paper ACR trailing
-        # and HOLD semantics. Legacy/manual positions are deliberately skipped.
+        # Trailing protection is an execution concern, not an agent decision.
+        # Process every open Bitunix position on every live cycle.
         if (
-            isinstance(agent_pipeline_payload, dict)
-            and execution_preferences.mode == "live"
+            execution_preferences.mode == "live"
             and execution_preferences.network_enabled
             and exchange.lower() == "bitunix"
-            and agent_pipeline_config.execute_decisions
-            and coordinator is not None
+            and open_positions_map
         ):
             live_lifecycle_updates: list[dict[str, object]] = []
             try:
                 from app.execution.live_lifecycle import (
                     LiveLifecycleController,
-                    apply_live_lifecycle_monitor,
                 )
 
-                adapter = getattr(coordinator.executor_agent, "_exchange", None)
-                if isinstance(adapter, BitunixFuturesExecutorAdapter):
+                lifecycle_adapter = getattr(coordinator.executor_agent, "_exchange", None)
+                if isinstance(lifecycle_adapter, BitunixFuturesExecutorAdapter):
                     controller = LiveLifecycleController(
-                        adapter, trailing_stop_percent=trailing_stop_percent,
+                        lifecycle_adapter, trailing_stop_percent=trailing_stop_percent,
                     )
-                    for monitored in agent_pipeline_payload.get("monitor") or []:
-                        if not isinstance(monitored, dict) or monitored.get("skipped"):
-                            continue
-                        result = monitored.get("result") or {}
-                        decision = result.get("decision") or {}
-                        symbol = str(monitored.get("symbol") or decision.get("symbol") or "")
-                        position = open_positions_map.get(symbol)
+                    for symbol, position in open_positions_map.items():
                         if not isinstance(position, dict):
                             continue
-                        fetched = market_data.fetch_ohlcv(
-                            symbol, timeframe=agent_pipeline_config.ltf_timeframe,
-                            limit=agent_pipeline_config.ltf_limit,
-                        )
-                        candles = list(getattr(fetched, "candles", []) or [])
-                        live_lifecycle_updates.append(apply_live_lifecycle_monitor(
-                            controller, position=position, decision=decision,
-                            ltf_candles=candles,
-                        ))
+                        try:
+                            fetched = market_data.fetch_ohlcv(
+                                symbol, timeframe=agent_pipeline_config.ltf_timeframe,
+                                limit=agent_pipeline_config.ltf_limit,
+                            )
+                            candles = list(getattr(fetched, "candles", []) or [])
+                            from app.execution.live_lifecycle import apply_live_lifecycle_monitor
+                            live_lifecycle_updates.append(apply_live_lifecycle_monitor(
+                                controller, position=position, decision={}, ltf_candles=candles,
+                            ))
+                        except Exception as exc:  # noqa: BLE001
+                            live_lifecycle_updates.append({
+                                "managed": False, "position_id": position.get("position_id"),
+                                "error": f"live_trailing_failed:{exc}",
+                            })
             except Exception as exc:  # noqa: BLE001
                 # Fail closed: lifecycle mutation failure blocks readiness and
                 # is exposed in the artifact; it never falls back to legacy.
@@ -1599,7 +1600,7 @@ def run_once(
                 })
                 if coordinator is not None:
                     coordinator.executor_agent.paper_parity_verified = False
-            if live_lifecycle_updates:
+            if live_lifecycle_updates and isinstance(agent_pipeline_payload, dict):
                 agent_pipeline_payload["live_lifecycle_updates"] = live_lifecycle_updates
 
         # Bitunix may consume or detach the remaining TPSL ladder after a

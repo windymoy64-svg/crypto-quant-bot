@@ -148,6 +148,46 @@ def test_percentage_trailing_waits_for_long_activation_threshold(tmp_path) -> No
     assert store.load()["p1"].trailing_active is False
 
 
+def test_percentage_trailing_activates_on_high_even_if_candle_closes_below_threshold(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(adapter, store, trailing_stop_percent=3)
+    controller.register(_state())
+    candles = [Candle("BTC/USDT", "2026-01-01T00:00:00Z", 100, 104, 99, 102, 1)]
+
+    new_stop = controller.update_stop_from_candles("p1", candles)
+
+    assert new_stop is not None
+    assert new_stop > 100
+    assert store.load()["p1"].trailing_active is True
+
+
+def test_existing_position_can_register_without_tp_ladder(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    adapter.rows = [adapter.rows[-1]]
+    controller = LiveLifecycleController(
+        adapter, LiveLifecycleStore(tmp_path / "state.json"), trailing_stop_percent=3,
+    )
+
+    assert controller.register_existing_position({
+        "position_id": "p1", "symbol": "BTC/USDT", "side": "LONG",
+        "entry_price": 100, "stop_loss": 97, "quantity": 1,
+    }) is True
+
+
+def test_short_trailing_activates_on_low_even_if_candle_closes_above_threshold(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(adapter, store, trailing_stop_percent=3)
+    controller.register(replace(_state(), side="SHORT", initial_stop=103, current_stop=103))
+    candles = [Candle("BTC/USDT", "2026-01-01T00:00:00Z", 100, 101, 96, 99, 1)]
+
+    new_stop = controller.update_stop_from_candles("p1", candles)
+
+    assert new_stop is not None
+    assert new_stop < 100
+
+
 def test_percentage_trailing_short_stays_below_entry_and_only_improves(tmp_path) -> None:
     adapter = StatefulAdapter()
     store = LiveLifecycleStore(tmp_path / "state.json")

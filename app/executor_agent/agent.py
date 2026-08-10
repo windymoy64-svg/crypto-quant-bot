@@ -164,6 +164,10 @@ class ExecutorAgent:
         )
         if len(levels) < len(default_levels):
             levels = tuple(dict.fromkeys((*levels, *default_levels)))[:3]
+        if self.live and (len(levels) != 3 or not _valid_protection_levels(
+            entry=plan.entry_price, stop=stop_loss, levels=levels, side=entry_side,
+        )):
+            return self._error_report(decision, now, "invalid_final_sl_tp_order_geometry")
         quantities = take_profit_quantities(quantity, len(levels))
         for index, (level, tp_qty) in enumerate(zip(levels, quantities)):
             if tp_qty > 0:
@@ -416,3 +420,14 @@ class ExecutorAgent:
             average_entry_price=0.0, total_fees=0.0, timestamp=now,
             errors=[error],
         )
+
+
+def _valid_protection_levels(
+    *, entry: float, stop: float, levels: tuple[float, ...], side: str,
+) -> bool:
+    if entry <= 0 or stop <= 0 or len(levels) != 3:
+        return False
+    ordered = tuple(float(value) for value in levels)
+    if str(side).upper() in {"SELL", "SHORT"}:
+        return stop > entry > ordered[0] > ordered[1] > ordered[2] > 0
+    return 0 < stop < entry < ordered[0] < ordered[1] < ordered[2]

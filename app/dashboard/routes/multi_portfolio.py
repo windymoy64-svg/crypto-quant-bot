@@ -738,6 +738,11 @@ def _build_closed_position_history(
     position history and the exact bot exit reason correlated by position ID.
     """
     current = (now or datetime.now(tz=UTC)).astimezone(UTC)
+    try:
+        from app.execution.live_lifecycle import LiveLifecycleStore
+        lifecycle_states = LiveLifecycleStore().load()
+    except Exception:  # noqa: BLE001
+        lifecycle_states = {}
     session_start = current.replace(hour=0, minute=0, second=0, microsecond=0)
     reasons_by_position: dict[str, dict[str, Any]] = {}
     protection_by_position: dict[str, list[dict[str, Any]]] = {}
@@ -775,6 +780,14 @@ def _build_closed_position_history(
         quantity = abs(_as_float(position.get("quantity")))
         leverage = max(_as_float(position.get("leverage")), 1.0)
         metadata = reasons_by_position.get(position_id, {})
+        lifecycle = lifecycle_states.get(position_id)
+        if lifecycle is not None:
+            position = {
+                **position,
+                "trailing_active": lifecycle.trailing_active,
+                "trailing_stop_loss": lifecycle.current_stop if lifecycle.trailing_active else None,
+                "static_stop_loss": lifecycle.initial_stop,
+            }
         realized_pnl = _as_float(position.get("realized_pnl", position.get("realizedPNL")))
         reason = classify_close_reason(
             position,
@@ -786,7 +799,7 @@ def _build_closed_position_history(
         if str(metadata.get("role") or "").startswith("take_profit_") and realized_pnl < 0:
             reason = None
         reason_source = "bot_order_metadata" if metadata.get("reason") and metadata.get("status") in {"FILLED", "PART_FILLED", "PARTIAL"} else ""
-        if reason == "exchange_closed_without_bot_reason":
+        if reason == "exchange_closed_without_bot_reason" or not reason:
             reason, reason_source = _infer_closed_position_reason(
                 position, protection_by_position.get(position_id, [])
             )
@@ -822,10 +835,13 @@ def _infer_closed_position_reason(
         stop = _as_float(rows[-1].get("trigger_price")) if rows else 0.0
     if target <= 0:
         rows = [row for row in protection if str(row.get("role", "")).startswith("take_profit_")]
-        prices = [_as_float(row.get("trigger_price")) for row in rows]
-        prices = [price for price in prices if price > 0]
+        prices = [
+            (_as_float(row.get("trigger_price")), str(row.get("role")))
+            for row in rows
+            if _as_float(row.get("trigger_price")) > 0
+        ]
         if prices:
-            target = min(prices) if side in {"SHORT", "SELL"} else max(prices)
+            target = (min(prices)[0] if side in {"SHORT", "SELL"} else max(prices)[0])
     trailing_stops = [
         _as_float(row.get("trigger_price"))
         for row in protection
@@ -839,14 +855,25 @@ def _infer_closed_position_reason(
             if stop > 0 and close >= stop:
                 return "stop_loss", "price_inference"
             if target > 0 and close <= target:
-                return "take_profit_1", "price_inference"
+                roles = [
+                    ("take_profit_1", _as_float(row.get("trigger_price")))
+                    for row in protection
+                    if row.get("role") == "take_profit_1"
+                ]
+                return (roles[0][0] if roles else "take_profit_1"), "price_inference"
         else:
             if trailing_stop > 0 and close <= trailing_stop:
                 return "trailing_stop", "price_inference"
             if stop > 0 and close <= stop:
                 return "stop_loss", "price_inference"
             if target > 0 and close >= target:
-                return "take_profit_1", "price_inference"
+                roles = [
+                    (str(row.get("role")), _as_float(row.get("trigger_price")))
+                    for row in protection
+                    if str(row.get("role", "")).startswith("take_profit_")
+                ]
+                hit = [role for role, price in roles if price > 0 and close >= price]
+                return (hit[-1] if hit else "take_profit_1"), "price_inference"
     return "exchange_closed_without_bot_reason", "exchange_lifecycle"
 
 
@@ -905,7 +932,7 @@ def _normalize_bitunix_closed_position(row: dict[str, Any]) -> dict[str, Any]:
         "opened_at": _millis_to_iso(row.get("ctime")),
         "closed_at": _millis_to_iso(row.get("mtime")),
         "status": "CLOSED",
-        "reason": "closed_position",
+        "reason": None,
     }
 
 

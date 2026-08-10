@@ -25,6 +25,8 @@ def classify_close_reason(
     side = str(position.get("side") or "").upper()
     is_short = side in {"SHORT", "SELL"}
 
+    if explicit_reason in {"closed_position", "exchange_order", "position_reduced"}:
+        explicit_reason = None
     if explicit_reason:
         if explicit_reason.startswith("take_profit_") and pnl <= 0:
             return _classify_by_price(position, close_price, pnl, is_short)

@@ -96,8 +96,10 @@ class LiveLifecycleController:
         levels = sorted({
             float(row.get("tpPrice")) for row in rows if float(row.get("tpPrice") or 0) > 0
         })
-        if len(levels) != 3:
-            return False
+        if len(levels) > 3:
+            levels = levels[:3]
+        if str(position.get("side") or "").upper() in {"SHORT", "SELL"}:
+            levels = list(reversed(levels))
         self.register(LiveLifecycleState(
             position_id=position_id,
             symbol=str(position.get("symbol") or ""),
@@ -109,6 +111,18 @@ class LiveLifecycleController:
             remaining_quantity=quantity,
             tp_levels=levels,
         ))
+        record_protection = getattr(self.adapter, "record_protection_metadata", None)
+        if callable(record_protection):
+            record_protection(
+                symbol=str(position.get("symbol") or ""), position_id=position_id,
+                side=str(position.get("side") or ""), role="stop_loss", trigger_price=stop,
+            )
+            for index, level in enumerate(levels[:3], start=1):
+                record_protection(
+                    symbol=str(position.get("symbol") or ""), position_id=position_id,
+                    side=str(position.get("side") or ""),
+                    role=f"take_profit_{index}", trigger_price=level,
+                )
         return True
 
     def reconcile(self, position: dict[str, Any]) -> LiveLifecycleState | None:
@@ -121,7 +135,10 @@ class LiveLifecycleController:
             return None  # Legacy/manual position: immutable by this controller.
         remaining = float(position.get("quantity") or position.get("remaining_size") or 0)
         if remaining <= 0:
-            states.pop(position_id, None)
+            # Keep the last protection state available for the closed-position
+            # reason classifier until the next live-position reconciliation.
+            state.remaining_quantity = 0.0
+            states[position_id] = state
             self.store.save(states)
             return None
         state.remaining_quantity = remaining
@@ -187,13 +204,13 @@ class LiveLifecycleController:
             )
             state.peak_price = peak
             activation_price = state.entry_price * (1 + percent / 100)
-            if current < activation_price:
+            if peak < activation_price:
                 states[state.position_id] = state
                 self.store.save(states)
                 return None
             state.trailing_active = True
             candidate = peak * (1 - percent / 100)
-            valid_candidate = state.entry_price < candidate < current
+            valid_candidate = state.entry_price < candidate
             improving = candidate > state.current_stop
         else:
             trough = min(
@@ -202,13 +219,13 @@ class LiveLifecycleController:
             )
             state.trough_price = trough
             activation_price = state.entry_price * (1 - percent / 100)
-            if current > activation_price:
+            if trough > activation_price:
                 states[state.position_id] = state
                 self.store.save(states)
                 return None
             state.trailing_active = True
             candidate = trough * (1 + percent / 100)
-            valid_candidate = current < candidate < state.entry_price
+            valid_candidate = candidate < state.entry_price
             improving = candidate < state.current_stop
 
         if not valid_candidate or not improving:

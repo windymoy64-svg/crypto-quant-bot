@@ -1020,6 +1020,7 @@ class BitunixFuturesExecutorAdapter:
             meta={
                 "role": role,
                 "metadata_kind": "protection_intent",
+                "reason": "stop_loss" if role == "stop_loss" else role,
                 "position_id": str(position_id),
                 "trigger_price": trigger_price,
             },
@@ -1211,7 +1212,7 @@ class BitunixFuturesExecutorAdapter:
 
         if order_id:
             try:
-                self._record_order_metadata(order_id, order, timestamp)
+                self._record_order_metadata(order_id, order, timestamp, status=status)
             except OSError:
                 # Metadata is observability only. An accepted exchange order
                 # must never be reported as failed because local persistence
@@ -1232,6 +1233,7 @@ class BitunixFuturesExecutorAdapter:
 
     def _record_order_metadata(
         self, order_id: str, order: OrderRequest, timestamp: str,
+        *, status: str | None = None,
     ) -> None:
         """Persist bot-owned reason/role for exact Bitunix order correlation."""
 
@@ -1251,6 +1253,7 @@ class BitunixFuturesExecutorAdapter:
             "symbol": _canonical_symbol(order.symbol),
             "role": role,
             "reason": reason,
+            "status": status,
             "metadata_kind": order.meta.get("metadata_kind", "bot_order"),
             "trigger_price": order.meta.get("trigger_price"),
             "position_id": str(order.meta.get("position_id") or ""),
