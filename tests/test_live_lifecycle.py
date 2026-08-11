@@ -404,6 +404,24 @@ def test_reconcile_uses_exchange_stop_over_stale_lifecycle_stop(tmp_path) -> Non
     assert state.current_stop == 97
 
 
+def test_trailing_status_is_persisted_for_active_short_wait(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(adapter, store, trailing_stop_percent=2)
+    controller.register(replace(_state(), side="SHORT", initial_stop=103, current_stop=97))
+
+    controller.update_stop_from_candles(
+        "p1",
+        [Candle("BTC/USDT", "2026-01-01T00:00:00Z", 100, 101, 97, 99, 1)],
+    )
+    state = store.load()["p1"]
+
+    assert state.trailing_active is True
+    assert state.trailing_status == "active_not_tightening"
+    assert state.trailing_percent == 2
+    assert state.trailing_candidate_stop is not None
+
+
 def test_production_wiring_continues_after_one_position_fetch_failure(tmp_path, monkeypatch) -> None:
     """A broken candle fetch for one symbol cannot suppress other positions."""
     import run_realtime

@@ -207,7 +207,11 @@ class LiveLifecycleController:
         if state is None:
             return None
         percent = float(self.trailing_stop_percent or 0)
+        state.trailing_percent = percent or None
         if percent <= 0 or not candles:
+            state.trailing_status = "disabled" if percent <= 0 else "waiting_for_candles"
+            states[state.position_id] = state
+            self.store.save(states)
             return None
 
         is_long = state.side.upper() in {"BUY", "LONG"}
@@ -220,6 +224,9 @@ class LiveLifecycleController:
             state.peak_price = peak
             activation_price = state.entry_price * (1 + percent / 100)
             if peak < activation_price:
+                state.trailing_active = False
+                state.trailing_status = "inactive"
+                state.trailing_candidate_stop = None
                 states[state.position_id] = state
                 self.store.save(states)
                 logger.info(
@@ -231,6 +238,7 @@ class LiveLifecycleController:
                 return None
             state.trailing_active = True
             candidate = peak * (1 - percent / 100)
+            state.trailing_candidate_stop = float(candidate)
             valid_candidate = state.entry_price < candidate
             improving = candidate > state.current_stop
         else:
@@ -241,6 +249,9 @@ class LiveLifecycleController:
             state.trough_price = trough
             activation_price = state.entry_price * (1 - percent / 100)
             if trough > activation_price:
+                state.trailing_active = False
+                state.trailing_status = "inactive"
+                state.trailing_candidate_stop = None
                 states[state.position_id] = state
                 self.store.save(states)
                 logger.info(
@@ -252,10 +263,12 @@ class LiveLifecycleController:
                 return None
             state.trailing_active = True
             candidate = trough * (1 + percent / 100)
+            state.trailing_candidate_stop = float(candidate)
             valid_candidate = candidate < state.entry_price
             improving = candidate < state.current_stop
 
         if not valid_candidate or not improving:
+            state.trailing_status = "active_not_tightening"
             states[state.position_id] = state
             self.store.save(states)
             logger.info(
@@ -268,11 +281,18 @@ class LiveLifecycleController:
             return None
 
         previous_stop = state.current_stop
-        self.adapter.tighten_stop(
-            symbol=state.symbol, position_id=state.position_id, side=state.side,
-            new_stop=float(candidate), quantity=state.remaining_quantity,
-        )
+        try:
+            self.adapter.tighten_stop(
+                symbol=state.symbol, position_id=state.position_id, side=state.side,
+                new_stop=float(candidate), quantity=state.remaining_quantity,
+            )
+        except Exception:
+            state.trailing_status = "active_update_failed"
+            states[state.position_id] = state
+            self.store.save(states)
+            raise
         state.current_stop = float(candidate)
+        state.trailing_status = "active_updated"
         states[state.position_id] = state
         self.store.save(states)
         logger.info(
