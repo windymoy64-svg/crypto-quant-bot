@@ -391,6 +391,72 @@ def test_production_wiring_moves_short_stop_with_setting_percent(tmp_path, monke
     assert fake.tightened == [pytest.approx(0.195288, abs=1e-9)]
 
 
+def test_reconcile_uses_exchange_stop_over_stale_lifecycle_stop(tmp_path) -> None:
+    """Manual/external SL changes are authoritative for the next trail."""
+    adapter = StatefulAdapter()
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(adapter, store, trailing_stop_percent=2)
+    controller.register(replace(_state(), current_stop=99))
+
+    state = controller.reconcile({"position_id": "p1", "quantity": 1})
+
+    assert state is not None
+    assert state.current_stop == 97
+
+
+def test_production_wiring_continues_after_one_position_fetch_failure(tmp_path, monkeypatch) -> None:
+    """A broken candle fetch for one symbol cannot suppress other positions."""
+    import run_realtime
+
+    fake, adapter = _ada_adapter(tmp_path)
+    monkeypatch.setattr(
+        run_realtime, "resolve_live_bitunix_lifecycle_adapter",
+        lambda coordinator: adapter,
+    )
+
+    class MixedMarketData:
+        def fetch_ohlcv(self, symbol, *, timeframe, limit):
+            if symbol == "BROKENUSDT":
+                raise RuntimeError("temporary_candle_failure")
+            return _AdaMarketData().fetch_ohlcv(
+                symbol, timeframe=timeframe, limit=limit,
+            )
+
+    positions = {
+        "BROKENUSDT": {**_ada_position(), "position_id": "broken"},
+        "ADAUSDT": _ada_position(),
+    }
+    updates = run_realtime.apply_live_trailing_protection(
+        coordinator=None,
+        trailing_stop_percent=2,
+        open_positions_map=positions,
+        market_data=MixedMarketData(),
+        timeframe="5m",
+        limit=100,
+    )
+
+    assert len(updates) == 2
+    assert any(item.get("error") == "live_trailing_failed:temporary_candle_failure" for item in updates)
+    assert any(item.get("managed") is True for item in updates)
+    assert fake.tightened
+
+
+def test_live_trailing_artifact_persists_latest_percent_and_results(tmp_path) -> None:
+    import json
+    import run_realtime
+
+    target = tmp_path / "trailing.json"
+    run_realtime.write_live_trailing_artifact(
+        str(target), trailing_stop_percent=2,
+        updates=[{"managed": True, "position_id": "ada", "new_stop": 0.1938}],
+    )
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["exchange"] == "bitunix"
+    assert payload["trailing_stop_percent"] == 2
+    assert payload["updates"][0]["new_stop"] == 0.1938
+
+
 def test_production_wiring_never_moves_without_percent_setting(tmp_path, monkeypatch) -> None:
     """Without the trailing percentage, no stop mutation is submitted."""
     import run_realtime

@@ -783,6 +783,12 @@ def apply_live_trailing_protection(
     the coordinator is unavailable. Returns per-position lifecycle updates.
     """
     updates: list[dict[str, object]] = []
+    logger.info(
+        "trailing_dispatch percent=%s position_count=%d symbols=%s",
+        trailing_stop_percent,
+        len(open_positions_map),
+        sorted(str(symbol) for symbol in open_positions_map),
+    )
     try:
         adapter = resolve_live_bitunix_lifecycle_adapter(coordinator)
         if not isinstance(adapter, BitunixFuturesExecutorAdapter):
@@ -815,15 +821,29 @@ def apply_live_trailing_protection(
             if not isinstance(position, dict):
                 continue
             try:
+                logger.info(
+                    "trailing_fetch symbol=%s position_id=%s",
+                    symbol, position.get("position_id"),
+                )
                 fetched = market_data.fetch_ohlcv(
                     symbol, timeframe=timeframe, limit=limit,
                 )
                 candles = list(getattr(fetched, "candles", []) or [])
-                updates.append(apply_live_lifecycle_monitor(
+                result = apply_live_lifecycle_monitor(
                     controller, position=position, decision={},
                     ltf_candles=candles,
-                ))
+                )
+                updates.append(result)
+                logger.info(
+                    "trailing_result symbol=%s position_id=%s managed=%s new_stop=%s error=%s",
+                    symbol, position.get("position_id"), result.get("managed"),
+                    result.get("new_stop"), result.get("error", ""),
+                )
             except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "trailing_fetch_failed symbol=%s position_id=%s error=%s",
+                    symbol, position.get("position_id"), exc,
+                )
                 updates.append({
                     "managed": False, "position_id": position.get("position_id"),
                     "error": f"live_trailing_failed:{exc}",
@@ -834,6 +854,27 @@ def apply_live_trailing_protection(
             "managed": False, "error": f"live_lifecycle_failed:{exc}",
         })
     return updates
+
+
+def write_live_trailing_artifact(
+    path: str,
+    *,
+    trailing_stop_percent: float | None,
+    updates: list[dict[str, object]],
+) -> None:
+    """Persist the latest trailing result independently from scan output."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "timestamp": datetime.now(tz=UTC).isoformat(),
+        "exchange": "bitunix",
+        "trailing_stop_percent": trailing_stop_percent,
+        "updates": updates,
+    }
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(target)
+
 
 def write_scan_outputs(
     results: list[dict[str, object]],
@@ -1203,6 +1244,9 @@ def run_once(
     live_config_path = str(runtime_config.get("live_config", "configs/live_trading.json"))
     latest_output = str(runtime_config.get("latest_output", "logs/latest_signals.json"))
     history_output = str(runtime_config.get("history_output", "logs/signals.jsonl"))
+    trailing_output = str(
+        runtime_config.get("trailing_output", "logs/live_trailing_status.json")
+    )
 
     scan_config = load_json(scan_config_path)
     exchange = str(scan_config.get("exchange", "binance"))
@@ -1244,6 +1288,11 @@ def run_once(
             ).trailing_stop_percent
         except Exception as exc:  # noqa: BLE001
             logger.warning("live trailing percent unavailable: %s", exc)
+    logger.info(
+        "trailing_config exchange=%s mode=%s network_enabled=%s percent=%s",
+        exchange.lower(), execution_preferences.mode,
+        execution_preferences.network_enabled, trailing_stop_percent,
+    )
     paper_enabled = bool(runtime_config.get("paper_trading_enabled", True)) and (
         execution_preferences.mode == "paper"
     )
@@ -1513,6 +1562,7 @@ def run_once(
     # open positions. Never mutates paper/live state unless
     # ``execute_decisions=true`` is set explicitly.
     agent_pipeline_payload: dict[str, object] | None = None
+    live_lifecycle_updates: list[dict[str, object]] = []
     live_closed_positions: list[dict[str, object]] = []
     agent_pipeline_config = AgentPipelineRuntimeConfig.from_dict(
         runtime_config.get("agent_pipeline") if isinstance(
@@ -1619,6 +1669,32 @@ def run_once(
                 )
                 if not has_tp and live_position.get("symbol"):
                     pending_entry_symbols.add(str(live_position["symbol"]))
+
+        # Trailing protection runs immediately after positions are fetched.
+        # It must not wait for TP repair, coordinator construction, or agent
+        # decisions; a TP failure must never suppress stop protection.
+        if (
+            execution_preferences.mode == "live"
+            and execution_preferences.network_enabled
+            and exchange.lower() == "bitunix"
+            and open_positions_map
+        ):
+            live_lifecycle_updates = apply_live_trailing_protection(
+                coordinator=None,
+                trailing_stop_percent=trailing_stop_percent,
+                open_positions_map=open_positions_map,
+                market_data=market_data,
+                timeframe=agent_pipeline_config.ltf_timeframe,
+                limit=agent_pipeline_config.ltf_limit,
+            )
+            write_live_trailing_artifact(
+                trailing_output,
+                trailing_stop_percent=trailing_stop_percent,
+                updates=live_lifecycle_updates,
+            )
+            if live_lifecycle_updates and isinstance(agent_pipeline_payload, dict):
+                agent_pipeline_payload["live_lifecycle_updates"] = live_lifecycle_updates
+
         try:
             coordinator = build_runtime_agent_coordinator(
                 config=agent_pipeline_config,
@@ -1669,6 +1745,8 @@ def run_once(
                 market_data=market_data,
                 coordinator=coordinator,
             )
+            if live_lifecycle_updates:
+                agent_pipeline_payload["live_lifecycle_updates"] = live_lifecycle_updates
             if telegram_notifier is not None:
                 notify_live_pipeline_executions(telegram_notifier, agent_pipeline_payload)
         except Exception as exc:  # noqa: BLE001
@@ -1676,33 +1754,6 @@ def run_once(
                 "enabled": True,
                 "error": f"pipeline_bridge_failed: {exc}",
             }
-
-        # Trailing protection is an execution concern, not an agent decision.
-        # Process every open Bitunix position on every live cycle, independent
-        # of coordinator/pipeline health.
-        if (
-            execution_preferences.mode == "live"
-            and execution_preferences.network_enabled
-            and exchange.lower() == "bitunix"
-            and open_positions_map
-        ):
-            live_lifecycle_updates = apply_live_trailing_protection(
-                coordinator=coordinator,
-                trailing_stop_percent=trailing_stop_percent,
-                open_positions_map=open_positions_map,
-                market_data=market_data,
-                timeframe=agent_pipeline_config.ltf_timeframe,
-                limit=agent_pipeline_config.ltf_limit,
-            )
-            if live_lifecycle_updates and isinstance(agent_pipeline_payload, dict):
-                agent_pipeline_payload["live_lifecycle_updates"] = live_lifecycle_updates
-            if coordinator is not None and any(
-                isinstance(item, dict)
-                and str(item.get("error", "")).startswith("live_lifecycle_failed")
-                for item in live_lifecycle_updates
-            ):
-                # Fail closed: lifecycle mutation failure blocks readiness.
-                coordinator.executor_agent.paper_parity_verified = False
 
         # Bitunix may consume or detach the remaining TPSL ladder after a
         # partial close. Restore missing levels from the registered lifecycle.

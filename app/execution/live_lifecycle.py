@@ -146,6 +146,15 @@ class LiveLifecycleController:
             return None
         state.remaining_quantity = remaining
         rows = self.adapter.pending_tpsl(symbol=state.symbol, position_id=position_id)
+        exchange_stops = [
+            float(row.get("slPrice") or 0)
+            for row in rows
+            if float(row.get("slPrice") or 0) > 0
+        ]
+        if len(exchange_stops) == 1:
+            # The exchange is authoritative after restart or manual changes.
+            # Never calculate a new trailing stop from stale local state.
+            state.current_stop = exchange_stops[0]
         active_tp_prices = {round(float(row.get("tpPrice") or 0), 8): row for row in rows if row.get("tpPrice")}
         state.tp_order_ids = {}
         consumed = max(state.initial_quantity - remaining, 0.0)
@@ -212,9 +221,9 @@ class LiveLifecycleController:
                 self.store.save(states)
                 logger.info(
                     "trailing_check symbol=%s side=%s entry=%.6f current=%.6f "
-                    "activation=%.6f active=false",
+                    "percent=%.4f activation=%.6f active=false",
                     state.symbol, state.side, state.entry_price, current,
-                    activation_price,
+                    percent, activation_price,
                 )
                 return None
             state.trailing_active = True
@@ -233,9 +242,9 @@ class LiveLifecycleController:
                 self.store.save(states)
                 logger.info(
                     "trailing_check symbol=%s side=%s entry=%.6f current=%.6f "
-                    "activation=%.6f active=false",
+                    "percent=%.4f activation=%.6f active=false",
                     state.symbol, state.side, state.entry_price, current,
-                    activation_price,
+                    percent, activation_price,
                 )
                 return None
             state.trailing_active = True
@@ -248,10 +257,10 @@ class LiveLifecycleController:
             self.store.save(states)
             logger.info(
                 "trailing_check symbol=%s side=%s entry=%.6f current=%.6f "
-                "activation=%.6f active=true old_stop=%.6f new_stop=%.6f "
+                "percent=%.4f activation=%.6f active=true old_stop=%.6f new_stop=%.6f "
                 "unchanged=true",
                 state.symbol, state.side, state.entry_price, current,
-                activation_price, state.current_stop, candidate,
+                percent, activation_price, state.current_stop, candidate,
             )
             return None
 
@@ -265,9 +274,9 @@ class LiveLifecycleController:
         self.store.save(states)
         logger.info(
             "trailing_check symbol=%s side=%s entry=%.6f current=%.6f "
-            "activation=%.6f active=true old_stop=%.6f new_stop=%.6f",
+            "percent=%.4f activation=%.6f active=true old_stop=%.6f new_stop=%.6f",
             state.symbol, state.side, state.entry_price, current,
-            activation_price, previous_stop, state.current_stop,
+            percent, activation_price, previous_stop, state.current_stop,
         )
         return state.current_stop
 
