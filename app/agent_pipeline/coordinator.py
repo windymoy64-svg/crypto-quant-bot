@@ -155,6 +155,24 @@ class AgentPipelineCoordinator:
             decision = self.decision_agent.decide_entry(reading, decision_insight)
         decision = self._adopt_chart_proposal(reading, decision)
         decision = self._audit_decision(reading, insight, decision, stage="ENTRY")
+        if decision.action in {"ENTRY_BUY", "ENTRY_SELL"}:
+            decision = replace(
+                decision,
+                meta={
+                    **decision.meta,
+                    "entry_context": {
+                        "bias": reading.bias,
+                        "regime": reading.regime,
+                        "trends_aligned": reading.trends_aligned,
+                        "entry_zone": list(reading.entry_zone) if reading.entry_zone else None,
+                        "invalidation_level": reading.invalidation_level,
+                        "momentum_phase": reading.momentum_phase,
+                        "structure_breaks": [
+                            item.to_dict() for item in reading.structure_breaks
+                        ],
+                    },
+                },
+            )
         if policy_validation is not None:
             meta = dict(decision.meta)
             meta["policy_patch"] = policy_validation

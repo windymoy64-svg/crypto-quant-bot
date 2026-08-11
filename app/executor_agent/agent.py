@@ -131,6 +131,9 @@ class ExecutorAgent:
                 meta={
                     "role": "entry", "reference_price": plan.entry_price,
                     "expires_in_seconds": plan.expires_in_seconds,
+                    "expiry_candles": 24,
+                    "expiry_timeframe": "5m",
+                    "entry_context": decision.meta.get("entry_context"),
                     "lifecycle_version": LIFECYCLE_VERSION,
                     "strategy_version": decision.meta.get("strategy_version"),
                 },

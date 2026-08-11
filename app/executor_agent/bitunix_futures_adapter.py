@@ -51,6 +51,8 @@ from app.execution.lifecycle_contract import LIFECYCLE_VERSION, TP_ROLES
 BITUNIX_FUTURES_BASE = "https://fapi.bitunix.com"
 BITUNIX_USER_AGENT = "crypto-quant-bot/1.0 (+executor-agent)"
 BITUNIX_PLACE_ORDER_PATH = "/api/v1/futures/trade/place_order"
+BITUNIX_PENDING_ORDER_PATH = "/api/v1/futures/trade/get_pending_orders"
+BITUNIX_CANCEL_ORDER_PATH = "/api/v1/futures/trade/cancel_order"
 BITUNIX_ACCOUNT_PATH = "/api/v1/futures/account"
 BITUNIX_CHANGE_LEVERAGE_PATH = "/api/v1/futures/account/change_leverage"
 BITUNIX_TPSL_PLACE_PATH = "/api/v1/futures/tpsl/place_order"
@@ -177,6 +179,50 @@ class BitunixFuturesExecutorAdapter:
             return self._reject(order, timestamp, f"http_error: {exc}")
 
         return self._to_execution_result(payload, order, timestamp)
+
+    def pending_orders(self, *, symbol: str | None = None) -> list[dict[str, Any]]:
+        """Return open entry orders from Bitunix trade API."""
+        params = {"symbol": symbol.replace("/", "").replace("-", "").upper()} if symbol else {}
+        payload = self._private_get(BITUNIX_PENDING_ORDER_PATH, params)
+        data = payload.get("data")
+        if isinstance(data, dict):
+            for key in ("orderList", "orders", "list"):
+                rows = data.get(key)
+                if isinstance(rows, list):
+                    return [dict(row) for row in rows if isinstance(row, dict)]
+        if isinstance(data, list):
+            return [dict(row) for row in data if isinstance(row, dict)]
+        return []
+
+    def cancel_order(self, *, symbol: str, order_id: str) -> bool:
+        """Cancel an unfilled entry order and verify it is no longer pending."""
+        gate_block = self._safety_gate.evaluate()
+        if gate_block is not None:
+            raise RuntimeError(gate_block)
+        body = {
+            "symbol": symbol.replace("/", "").replace("-", "").upper(),
+            "orderId": str(order_id),
+        }
+        self._post_success(BITUNIX_CANCEL_ORDER_PATH, body)
+        still_pending = any(
+            str(row.get("orderId") or row.get("order_id") or row.get("id")) == str(order_id)
+            for row in self.pending_orders(symbol=symbol)
+        )
+        if still_pending:
+            raise RuntimeError("entry_cancel_not_confirmed")
+        return True
+
+    def order_metadata(self, order_id: str) -> dict[str, Any]:
+        """Return bot-owned metadata for one exchange order."""
+        if self._order_metadata_path is None:
+            return {}
+        try:
+            payload = json.loads(self._order_metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        rows = payload.get("orders") if isinstance(payload, dict) else None
+        row = rows.get(str(order_id)) if isinstance(rows, dict) else None
+        return dict(row) if isinstance(row, dict) else {}
 
     def available_balance(self, margin_coin: str = "USDT") -> float:
         """Read available futures balance for live sizing preflight."""
@@ -1261,6 +1307,10 @@ class BitunixFuturesExecutorAdapter:
             "lifecycle_version": order.meta.get("lifecycle_version"),
             "strategy_version": order.meta.get("strategy_version"),
             "created_at": timestamp,
+            "expires_in_seconds": order.meta.get("expires_in_seconds"),
+            "expiry_candles": order.meta.get("expiry_candles"),
+            "expiry_timeframe": order.meta.get("expiry_timeframe"),
+            "entry_context": order.meta.get("entry_context"),
         }
         # Keep the registry bounded while preserving insertion order.
         rows = dict(list(rows.items())[-2000:])

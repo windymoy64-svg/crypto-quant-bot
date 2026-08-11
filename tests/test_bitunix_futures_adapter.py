@@ -58,7 +58,34 @@ def test_safety_gate_blocks_dry_run() -> None:
     result = adapter.place_order(order, timestamp="2024-01-01T00:00:00Z")
     assert result.status == "REJECTED"
     assert result.reason == "safety_gate_dry_run"
-    assert transport.calls == []
+
+
+def test_pending_orders_and_cancel_entry_order(tmp_path) -> None:
+    calls: list[dict[str, Any]] = []
+    pending = [{"orderId": "entry-1", "symbol": "BTCUSDT", "status": "NEW"}]
+
+    def transport(*, url: str, headers: dict[str, str], body: dict[str, Any]):
+        calls.append({"url": url, "body": body})
+        if url.endswith("/trade/get_pending_orders"):
+            return {"code": 0, "data": pending}
+        if url.endswith("/trade/cancel_order"):
+            pending.clear()
+            return {"code": 0, "data": {"orderId": "entry-1"}}
+        return {"code": 0, "data": {}}
+
+    def query_transport(*, url: str, headers: dict[str, str], params: dict[str, Any]):
+        if url.endswith("/trade/get_pending_orders?symbol=BTCUSDT"):
+            return {"code": 0, "data": pending}
+        return {"code": 0, "data": pending}
+
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, query_transport=query_transport,
+        order_metadata_path=tmp_path / "metadata.json",
+    )
+    assert adapter.pending_orders(symbol="BTC/USDT")[0]["orderId"] == "entry-1"
+    assert adapter.cancel_order(symbol="BTC/USDT", order_id="entry-1") is True
+    assert calls[-1]["body"] == {"symbol": "BTCUSDT", "orderId": "entry-1"}
 
 
 def test_safety_gate_blocks_disabled() -> None:

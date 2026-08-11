@@ -81,6 +81,184 @@ from app.learning_agent.runtime import (
 
 
 logger = logging.getLogger(__name__)
+
+LIMIT_ENTRY_EXPIRY_CANDLES = 24
+LIMIT_ENTRY_EXPIRY_TIMEFRAME = "5m"
+LIMIT_ENTRY_EXPIRY_SECONDS = 24 * 5 * 60
+
+
+def _parse_runtime_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _limit_entry_invalid_reason(
+    *,
+    order: dict[str, object],
+    metadata: dict[str, object],
+    candles_5m: list[object],
+    reading: object | None,
+    now: datetime | None = None,
+) -> str | None:
+    """Return the first invalidation reason for an unfilled LIMIT entry."""
+    created = _parse_runtime_datetime(
+        metadata.get("created_at") or order.get("created_at")
+    )
+    current = (now or datetime.now(tz=UTC)).astimezone(UTC)
+    if created is None:
+        return None
+    if (current - created).total_seconds() >= LIMIT_ENTRY_EXPIRY_SECONDS:
+        return "limit_order_expired_24_candles_5m"
+
+    candle_times = [
+        _parse_runtime_datetime(getattr(candle, "timestamp", None))
+        for candle in candles_5m
+    ]
+    closed_since_creation = sum(
+        1 for timestamp in candle_times if timestamp is not None and timestamp > created
+    )
+    if closed_since_creation >= LIMIT_ENTRY_EXPIRY_CANDLES:
+        return "limit_order_expired_24_candles_5m"
+
+    context = metadata.get("entry_context")
+    if not isinstance(context, dict) or reading is None:
+        return None
+    bias = str(context.get("bias") or "").upper()
+    current_price = float(getattr(candles_5m[-1], "close", 0.0) or 0.0) if candles_5m else 0.0
+    invalidation = float(context.get("invalidation_level") or 0.0)
+    if current_price > 0 and invalidation > 0:
+        if bias == "BULLISH" and current_price <= invalidation:
+            return "limit_entry_invalidation_broken"
+        if bias == "BEARISH" and current_price >= invalidation:
+            return "limit_entry_invalidation_broken"
+
+    closes = [float(getattr(candle, "close", 0.0) or 0.0) for candle in candles_5m]
+    if len(closes) >= 21:
+        from app.indicators.technical import ema
+
+        fast = ema(closes, 9)
+        slow = ema(closes, 21)
+        if bias == "BULLISH" and fast < slow:
+            return "limit_entry_ema_trend_reversed"
+        if bias == "BEARISH" and fast > slow:
+            return "limit_entry_ema_trend_reversed"
+
+    regime = str(getattr(reading, "regime", "") or "").upper()
+    if regime in {"RANGING", "MIXED"}:
+        return "limit_entry_regime_invalid"
+
+    breaks = list(getattr(reading, "structure_breaks", []) or [])
+    if breaks:
+        choch = [
+            item for item in breaks
+            if str(getattr(item, "break_type", "")).upper() == "CHOCH"
+        ]
+        if choch:
+            latest = max(choch, key=lambda item: int(getattr(item, "index", -1)))
+            direction = str(getattr(latest, "direction", "")).upper()
+            if (
+                bias == "BULLISH" and direction == "BEARISH"
+            ) or (
+                bias == "BEARISH" and direction == "BULLISH"
+            ):
+                return "limit_entry_counter_choch"
+
+    phase = getattr(reading, "momentum_phase", None) or {}
+    phase_name = str(phase.get("phase") if isinstance(phase, dict) else "").lower()
+    if phase_name in {"none", "extended"}:
+        return "limit_entry_momentum_invalid"
+
+    old_zone = context.get("entry_zone")
+    new_zone = getattr(reading, "entry_zone", None)
+    if (
+        isinstance(old_zone, (list, tuple)) and len(old_zone) == 2
+        and isinstance(new_zone, (list, tuple)) and len(new_zone) == 2
+    ):
+        old_mid = (float(old_zone[0]) + float(old_zone[1])) / 2.0
+        new_mid = (float(new_zone[0]) + float(new_zone[1])) / 2.0
+        if old_mid > 0 and abs(new_mid - old_mid) / old_mid >= 0.005:
+            return "limit_entry_zone_changed"
+
+        if candles_5m:
+            last = candles_5m[-1]
+            close = float(getattr(last, "close", 0.0) or 0.0)
+            open_price = float(getattr(last, "open", close) or close)
+            low, high = sorted((float(old_zone[0]), float(old_zone[1])))
+            body = abs(close - open_price)
+            candle_range = max(
+                float(getattr(last, "high", close) or close)
+                - float(getattr(last, "low", close) or close),
+                1e-12,
+            )
+            strong_close = body / candle_range >= 0.55
+            if strong_close and bias == "BULLISH" and close > high:
+                return "limit_entry_zone_left_without_pullback"
+            if strong_close and bias == "BEARISH" and close < low:
+                return "limit_entry_zone_left_without_pullback"
+    return None
+
+
+def cancel_invalid_live_limit_entries(
+    *, adapter: BitunixFuturesExecutorAdapter,
+    pending_orders: list[dict[str, object]],
+    market_data: object,
+    now: datetime | None = None,
+) -> list[dict[str, object]]:
+    """Cancel bot-owned LIMIT entries that expired or lost their setup."""
+    cancelled: list[dict[str, object]] = []
+    from app.chart_agent.agent import ChartReaderAgent
+
+    chart_agent = ChartReaderAgent()
+    for order in pending_orders:
+        if str(order.get("order_type") or order.get("type") or "").upper() != "LIMIT":
+            continue
+        if bool(order.get("reduce_only")):
+            continue
+        order_id = str(order.get("order_id") or order.get("orderId") or "")
+        symbol = str(order.get("symbol") or "")
+        if not order_id or not symbol:
+            continue
+        metadata = adapter.order_metadata(order_id)
+        if str(metadata.get("role") or "") != "entry":
+            continue
+        candles_5m = list(getattr(
+            market_data.fetch_ohlcv(symbol=symbol, timeframe="5m", limit=40),
+            "candles", [],
+        ) or [])
+        reading = None
+        try:
+            htf = market_data.fetch_ohlcv(symbol=symbol, timeframe="4h", limit=100).candles
+            mtf = market_data.fetch_ohlcv(symbol=symbol, timeframe="1h", limit=100).candles
+            ltf = market_data.fetch_ohlcv(symbol=symbol, timeframe="15m", limit=100).candles
+            reading = chart_agent.read(symbol, list(htf), list(mtf), list(ltf))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("LIMIT entry validation skipped symbol=%s: %s", symbol, exc)
+        reason = _limit_entry_invalid_reason(
+            order=order, metadata=metadata, candles_5m=candles_5m,
+            reading=reading, now=now,
+        )
+        if not reason:
+            continue
+        try:
+            adapter.cancel_order(symbol=symbol, order_id=order_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "LIMIT entry cancel failed symbol=%s order_id=%s reason=%s error=%s",
+                symbol, order_id, reason, exc,
+            )
+            continue
+        item = {"symbol": symbol, "order_id": order_id, "reason": reason}
+        cancelled.append(item)
+        logger.info(
+            "LIMIT entry cancelled symbol=%s order_id=%s reason=%s",
+            symbol, order_id, reason,
+        )
+    return cancelled
 TELEGRAM_LIVE_CLOSE_CHECKPOINT = Path("logs/telegram_live_close_checkpoint.json")
 TELEGRAM_LIVE_PARTIAL_CHECKPOINT = Path("logs/telegram_live_partial_checkpoint.json")
 
@@ -1577,6 +1755,7 @@ def run_once(
         open_positions_map: dict[str, dict[str, object]] = {}
         live_partial_close_symbols: set[str] = set()
         pending_entry_symbols: set[str] = set()
+        pending_exchange_orders: list[dict[str, object]] = []
         pending_orders_read_ok = execution_preferences.mode not in {"dry_run", "live"}
         if execution_preferences.mode in {"dry_run", "live"} and exchange.lower() == "bitunix":
             try:
@@ -1626,7 +1805,11 @@ def run_once(
                             current_quantity = abs(float(position.get("quantity") or 0.0))
                             if old_quantity - current_quantity > 1e-12:
                                 live_partial_close_symbols.add(symbol)
-                    for order in details.get("open_orders", []) or []:
+                    pending_exchange_orders = [
+                        dict(order) for order in details.get("open_orders", []) or []
+                        if isinstance(order, dict)
+                    ]
+                    for order in pending_exchange_orders:
                         if not isinstance(order, dict):
                             continue
                         # A pending entry already reserves this symbol. Do not
@@ -1713,6 +1896,15 @@ def run_once(
                 coordinator.executor_agent.live = False
             lifecycle_adapter = getattr(coordinator.executor_agent, "_exchange", None)
             if isinstance(lifecycle_adapter, BitunixFuturesExecutorAdapter):
+                if pending_exchange_orders:
+                    cancelled_limits = cancel_invalid_live_limit_entries(
+                        adapter=lifecycle_adapter,
+                        pending_orders=pending_exchange_orders,
+                        market_data=market_data,
+                    )
+                    for item in cancelled_limits:
+                        symbol = str(item.get("symbol") or "").upper().replace("-", "/")
+                        pending_entry_symbols.discard(symbol)
                 register_existing_live_lifecycle_positions(
                     list(open_positions_map.values()), adapter=lifecycle_adapter,
                 )
