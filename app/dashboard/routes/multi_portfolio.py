@@ -418,10 +418,10 @@ def _attach_live_trailing_status(positions: list[dict[str, Any]]) -> None:
         }
         position.update({
             "trailing_active": active_status,
-            "trailing_status": state.trailing_status,
+            "trailing_status": state.trailing_status if active_status else "inactive",
             "trailing_stop_loss": state.current_stop if active_status else None,
-            "trailing_candidate_stop": state.trailing_candidate_stop,
-            "trailing_percent": state.trailing_percent,
+            "trailing_candidate_stop": state.trailing_candidate_stop if active_status else None,
+            "trailing_percent": state.trailing_percent if active_status else None,
         })
 
 
