@@ -601,6 +601,13 @@ def test_bitunix_details_loads_all_read_only_sources(
             return {"positionList": [{"positionId": "p1", "symbol": "BTCUSDT", "qty": "1"}]}
         if "tpsl" in path:
             return {"orderList": [{"positionId": "p1", "tpPrice": "70000"}]}
+        if "history_orders" in path:
+            return {"orderList": [{
+                "orderId": "tp-1", "symbol": "ADAUSDT", "side": "SELL",
+                "orderType": "LIMIT", "status": "FILLED", "qty": "11.5",
+                "tradeQty": "11.5", "dealAvgPrice": "0.189",
+                "reduceOnly": True, "realizedPNL": "0.0122",
+            }]}
         if "history_positions" in path:
             now_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
             return {"positionList": [{
@@ -609,13 +616,16 @@ def test_bitunix_details_loads_all_read_only_sources(
         return {"orderList": []}
 
     monkeypatch.setattr(multi_route, "_bitunix_private_get", fake_get)
+    monkeypatch.setattr(multi_route, "_load_bitunix_order_metadata", lambda: {
+        "tp-1": {"role": "take_profit_1", "reason": "take_profit_1", "status": "FILLED"},
+    })
 
     details = multi_route._load_bitunix_details("key", "secret")
 
-    assert len(paths) == 4
+    assert len(paths) == 5
     assert details["positions"][0]["take_profit"] == "70000"
-    assert details["order_history"] == []
     assert details["closed_positions"][0]["net_pnl"] == pytest.approx(1.5)
+    assert details["order_history"][0]["realized_pnl"] == pytest.approx(0.0122)
     assert details["warnings"] == []
 
 

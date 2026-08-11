@@ -48,11 +48,11 @@ def test_configured_real_exchange_never_falls_back_to_paper_history() -> None:
     assert "closed_positions:list(p.multiPortfolio.closed_positions)" in js
 
 
-def test_closed_position_summary_is_the_only_live_order_history_source() -> None:
+def test_closed_position_summary_and_partial_fills_are_live_order_history_sources() -> None:
     js = _js()
 
     assert "function orderHistory(orders){ const rows=" in js
-    assert 'list(orders?.order_history).filter(o=>String(o?.status||"").toUpperCase()==="CLOSED")' in js
+    assert 'o?.close_scope==="partial"' in js
 
 
 def test_bitunix_pending_orders_are_in_realtime_price_universe() -> None:

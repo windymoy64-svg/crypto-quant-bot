@@ -378,8 +378,9 @@ def notify_new_bitunix_partial_closes(
     open_positions: dict[str, dict[str, object]],
     *,
     checkpoint_path: Path = TELEGRAM_LIVE_PARTIAL_CHECKPOINT,
+    close_fills: list[dict[str, object]] | None = None,
 ) -> int:
-    """Notify when an open Bitunix position quantity decreases between scans."""
+    """Notify partial closes using exchange fill PnL, never mark-price estimates."""
     snapshot = {
         str(symbol): {
             "quantity": abs(float(position.get("quantity") or position.get("remaining_size") or 0.0)),
@@ -399,6 +400,7 @@ def notify_new_bitunix_partial_closes(
 
     reporter = TradeReporter()
     delivered = 0
+    unresolved = False
     for symbol, current in snapshot.items():
         old = previous.get(symbol)
         if not isinstance(old, dict):
@@ -412,9 +414,52 @@ def notify_new_bitunix_partial_closes(
         position = dict(current.get("position") or {})
         side = str(position.get("side") or old.get("position", {}).get("side") or "LONG").upper()
         entry = float(position.get("entry_price") or position.get("entry") or old.get("position", {}).get("entry_price") or 0.0)
-        exit_price = float(position.get("last_price") or position.get("mark_price") or position.get("current_price") or entry)
-        direction = 1.0 if side in {"LONG", "BUY"} else -1.0
-        partial_pnl = (exit_price - entry) * direction * closed_quantity
+        def _symbol_key(value: object) -> str:
+            return "".join(char for char in str(value or "").upper() if char.isalnum())
+
+        fills = [
+            row for row in (close_fills or [])
+            if _symbol_key(row.get("symbol")) == _symbol_key(symbol)
+            and bool(row.get("reduce_only", row.get("reduceOnly", False)))
+            and str(row.get("status") or "").upper().rstrip("_")
+            in {"FILLED", "PART_FILLED", "PARTIAL"}
+        ]
+        fill_qty = sum(
+            abs(float(row.get("executed_quantity", row.get("tradeQty", row.get("dealVolume", 0.0))) or 0.0))
+            for row in fills
+        )
+        if not fills or fill_qty <= 0:
+            # Keep the old checkpoint so the same reduction is retried after
+            # the exchange history endpoint becomes available.
+            unresolved = True
+            continue
+        fill_pnl_values = [
+            row.get("realized_pnl", row.get("realizedPNL", row.get("realizedPnl")))
+            for row in fills
+        ]
+        has_realized = all(value is not None for value in fill_pnl_values)
+        if has_realized:
+            partial_pnl = sum(float(value or 0.0) for value in fill_pnl_values)
+        else:
+            direction = 1.0 if side in {"LONG", "BUY"} else -1.0
+            weighted_qty = 0.0
+            weighted_price = 0.0
+            for row in fills:
+                qty = abs(float(row.get("executed_quantity", row.get("tradeQty", row.get("dealVolume", 0.0))) or 0.0))
+                price = float(row.get("average_price", row.get("dealAvgPrice", row.get("avgPrice", 0.0))) or 0.0)
+                if qty > 0 and price > 0:
+                    weighted_qty += qty
+                    weighted_price += qty * price
+            if weighted_qty <= 0:
+                unresolved = True
+                continue
+            exit_price = weighted_price / weighted_qty
+            partial_pnl = (exit_price - entry) * direction * weighted_qty
+        exit_price = sum(
+            abs(float(row.get("executed_quantity", row.get("tradeQty", row.get("dealVolume", 0.0))) or 0.0))
+            * float(row.get("average_price", row.get("dealAvgPrice", row.get("avgPrice", 0.0))) or 0.0)
+            for row in fills
+        ) / fill_qty
         reason = "take_profit" if partial_pnl >= 0 else "stop_loss"
         event_position = {
             **position,
@@ -422,17 +467,19 @@ def notify_new_bitunix_partial_closes(
             "side": "BUY" if side in {"LONG", "BUY"} else "SELL",
             "entry": entry,
             "partial_exit_price": exit_price,
-            "partial_size_closed": closed_quantity,
+            "partial_size_closed": fill_qty,
             "remaining_size": current_quantity,
             "partial_realized_pnl": partial_pnl,
             "partial_reason": position.get("partial_reason") or reason,
+            "partial_pnl_source": "bitunix_realizedPNL" if has_realized else "bitunix_fill_price",
         }
         if notifier.send(reporter.format_partial_close(event_position, venue="Bitunix Futures")) is True:
             delivered += 1
 
-    temporary = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
-    temporary.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
-    temporary.replace(checkpoint_path)
+    if not unresolved:
+        temporary = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
+        temporary.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        temporary.replace(checkpoint_path)
     return delivered
 
 
@@ -1831,6 +1878,13 @@ def run_once(
                         notify_new_bitunix_partial_closes(
                             telegram_notifier,
                             open_positions_map,
+                            close_fills=(
+                                BitunixFuturesExecutorAdapter(
+                                    BitunixCredentials(
+                                        creds.api_key, creds.api_secret,
+                                    ),
+                                ).history_orders(limit=100)
+                            ),
                         )
             except Exception as exc:  # noqa: BLE001
                 pending_orders_read_ok = False

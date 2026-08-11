@@ -208,11 +208,17 @@ def test_live_partial_close_is_detected_from_quantity_diff(tmp_path: Path) -> No
     reduced = {"ADA/USDT": {**initial["ADA/USDT"], "quantity": 12.0}}
     assert run_realtime.notify_new_bitunix_partial_closes(
         notifier, reduced, checkpoint_path=checkpoint,
+        close_fills=[{
+            "symbol": "ADAUSDT", "status": "FILLED", "reduceOnly": True,
+            "tradeQty": "11.5", "dealAvgPrice": "0.189",
+            "realizedPNL": "0.0122",
+        }],
     ) == 1
     message = notifier.send.call_args.args[0]
     assert "🟡 PARTIAL CLOSE" in message
     assert "Closed: 11.50000000" in message
     assert "Reason: Take Profit" in message
+    assert "Realized P&L: $0.01" in message
 
     notifier.reset_mock()
     assert run_realtime.notify_new_bitunix_partial_closes(

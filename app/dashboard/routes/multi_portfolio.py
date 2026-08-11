@@ -354,6 +354,7 @@ def _load_bitunix_details(api_key: str, api_secret: str) -> dict[str, Any]:
         "pending_positions": ("/api/v1/futures/position/get_pending_positions", None),
         "pending_tpsl": ("/api/v1/futures/tpsl/get_pending_orders", {"limit": 100}),
         "pending_orders": ("/api/v1/futures/trade/get_pending_orders", None),
+        "history_orders": ("/api/v1/futures/trade/get_history_orders", {"limit": 100}),
         "closed_positions": ("/api/v1/futures/position/get_history_positions", {"limit": 100}),
     }
 
@@ -382,6 +383,15 @@ def _load_bitunix_details(api_key: str, api_secret: str) -> dict[str, Any]:
         results["pending_orders"][0], "orderList", "orders", "list"
     )]
     order_metadata = _load_bitunix_order_metadata()
+    order_history = [
+        _normalize_bitunix_order(row, order_metadata)
+        for row in _extract_rows(
+            results["history_orders"][0], "orderList", "orders", "list"
+        )
+        if str(row.get("status") or "").upper().rstrip("_")
+        in {"FILLED", "PART_FILLED", "PARTIAL"}
+        and bool(row.get("reduceOnly"))
+    ]
     closed_positions = [_normalize_bitunix_closed_position(row) for row in _extract_rows(
         results["closed_positions"][0], "positionList", "positions", "list"
     )]
@@ -391,9 +401,9 @@ def _load_bitunix_details(api_key: str, api_secret: str) -> dict[str, Any]:
         "balances": [],
         "positions": positions,
         "open_orders": open_orders,
-        # Completed-trade history comes from closed_positions. Do not fetch or
-        # expose raw entry/TP/SL order history in the periodic dashboard poll.
-        "order_history": [],
+        # Partial reduce-only fills are shown separately with exchange PnL;
+        # closed_positions remains the one-row full-trade summary.
+        "order_history": _deduplicate_orders(order_history),
         "closed_positions": closed_positions,
         "warnings": warnings,
     }

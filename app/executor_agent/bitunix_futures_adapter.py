@@ -53,6 +53,7 @@ BITUNIX_USER_AGENT = "crypto-quant-bot/1.0 (+executor-agent)"
 BITUNIX_PLACE_ORDER_PATH = "/api/v1/futures/trade/place_order"
 BITUNIX_PENDING_ORDER_PATH = "/api/v1/futures/trade/get_pending_orders"
 BITUNIX_CANCEL_ORDER_PATH = "/api/v1/futures/trade/cancel_order"
+BITUNIX_HISTORY_ORDER_PATH = "/api/v1/futures/trade/get_history_orders"
 BITUNIX_ACCOUNT_PATH = "/api/v1/futures/account"
 BITUNIX_CHANGE_LEVERAGE_PATH = "/api/v1/futures/account/change_leverage"
 BITUNIX_TPSL_PLACE_PATH = "/api/v1/futures/tpsl/place_order"
@@ -184,6 +185,24 @@ class BitunixFuturesExecutorAdapter:
         """Return open entry orders from Bitunix trade API."""
         params = {"symbol": symbol.replace("/", "").replace("-", "").upper()} if symbol else {}
         payload = self._private_get(BITUNIX_PENDING_ORDER_PATH, params)
+        data = payload.get("data")
+        if isinstance(data, dict):
+            for key in ("orderList", "orders", "list"):
+                rows = data.get(key)
+                if isinstance(rows, list):
+                    return [dict(row) for row in rows if isinstance(row, dict)]
+        if isinstance(data, list):
+            return [dict(row) for row in data if isinstance(row, dict)]
+        return []
+
+    def history_orders(
+        self, *, symbol: str | None = None, limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return recent exchange orders, including filled partial exits."""
+        params: dict[str, Any] = {"limit": max(1, int(limit))}
+        if symbol:
+            params["symbol"] = symbol.replace("/", "").replace("-", "").upper()
+        payload = self._private_get(BITUNIX_HISTORY_ORDER_PATH, params)
         data = payload.get("data")
         if isinstance(data, dict):
             for key in ("orderList", "orders", "list"):
