@@ -465,12 +465,20 @@ class DecisionMakerAgent:
         targets = _select_take_profits(reading, entry_price, risk)
         tp1, tp2, tp3 = targets
 
-        # The chart agent's current price is the execution reference. Do not
-        # chase a price outside the planned zone; let the exchange fill it on
-        # a pullback instead.
+        # The chart agent's current price is the execution reference. A zone
+        # may contain the current price simply because a swing-anchor zone
+        # ends at the live candle. Do not turn that boundary case into a
+        # market chase: market orders are reserved for prices at or better
+        # than the planned entry.
         current_price = float((reading.meta or {}).get("current_price") or entry_price)
         in_zone = reading.entry_zone[0] <= current_price <= reading.entry_zone[1]
-        order_type: str = "MARKET" if in_zone else "LIMIT"
+        is_long = reading.bias == "BULLISH"
+        market_price_is_favorable = (
+            current_price <= entry_price if is_long else current_price >= entry_price
+        )
+        order_type: str = (
+            "MARKET" if in_zone and market_price_is_favorable else "LIMIT"
+        )
 
         rr = abs(tp1 - entry_price) / risk if risk > 0 else 0.0
         return EntryPlan(

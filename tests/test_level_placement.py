@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from app.chart_agent.level_placement import (
     harden_invalidation,
     sl_passes_noise_floor,
@@ -116,3 +118,32 @@ def test_decision_plan_uses_rr_from_tp1() -> None:
     assert plan is not None
     assert plan.risk_reward >= 2.0
     assert plan.take_profit_1 > plan.entry_price
+
+
+def test_decision_uses_limit_when_long_price_is_above_pullback_entry() -> None:
+    agent = DecisionMakerAgent()
+    reading = replace(_reading(), meta={"current_price": 100.5})
+    plan = agent._build_entry_plan(reading)
+    assert plan is not None
+    assert plan.entry_price == 100.0
+    assert plan.order_type == "LIMIT"
+
+
+def test_decision_keeps_market_when_price_is_at_long_entry() -> None:
+    agent = DecisionMakerAgent()
+    reading = replace(_reading(), meta={"current_price": 100.0})
+    plan = agent._build_entry_plan(reading)
+    assert plan is not None
+    assert plan.order_type == "MARKET"
+
+
+def test_decision_uses_limit_when_short_price_is_below_pullback_entry() -> None:
+    agent = DecisionMakerAgent()
+    reading = replace(
+        _reading(bias="BEARISH", invalidation=103.0),
+        meta={"current_price": 99.5},
+    )
+    plan = agent._build_entry_plan(reading)
+    assert plan is not None
+    assert plan.entry_price == 100.0
+    assert plan.order_type == "LIMIT"
