@@ -139,7 +139,7 @@ def test_order_history_shows_one_completed_trade_using_entry_values() -> None:
 
     assert 'const dirLabel=`${isShort?"SHORT":"LONG"} CLOSED`' in js
     assert "const price=Number(o.entry??o.entry_price??o.price??0)" in js
-    assert 'const status="CLOSED"' in js
+    assert '<span class="order-badge status-filled">${status}</span>' in js
     # Samakan kolom PnL dengan realizedPNL Bitunix. Net PnL setelah fee/funding
     # tetap tersedia sebagai fallback untuk sumber yang tidak punya realized PnL.
     assert "const pnl=o.pnl??o.realized_pnl??o.net_pnl" in js
@@ -147,14 +147,15 @@ def test_order_history_shows_one_completed_trade_using_entry_values() -> None:
     assert "Exit filled on Bitunix" not in js
     assert 'reason||"Reason bot tidak tersedia"' in js
     assert "const rows=h.slice(0,100).map" in js
-    assert 'reason:o.reason??o.close_label??o.close_reason' in js
+    assert 'reason:isPartial?(o.close_label??o.reason??o.close_reason)' in js
+    assert 'startsWith("partial close")' in js
 
 
 def test_order_history_preserves_close_label_and_reason_fallback() -> None:
     js = _js()
 
     assert 'function orderHistory(orders){ const rows=' in js
-    assert 'reason:o.reason??o.close_label??o.close_reason' in js
+    assert 'reason:isPartial?(o.close_label??o.reason??o.close_reason)' in js
 
 
 def test_active_orders_have_realtime_stop_and_trailing_targets() -> None:

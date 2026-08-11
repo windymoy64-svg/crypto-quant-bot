@@ -748,6 +748,7 @@ def test_filled_tp_order_has_partial_reason_only_when_profitable() -> None:
 
     assert order["reason"] == "take_profit_1"
     assert order["close_scope"] == "partial"
+    assert order["close_label"] == "Partial close — take profit 1"
 
 
 def test_closed_position_reason_has_exchange_fallback() -> None:
