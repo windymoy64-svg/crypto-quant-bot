@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from app.core.models import Candle
 from app.execution.lifecycle_contract import execute_exit_gate
 from app.execution.live_lifecycle import (
@@ -314,3 +316,141 @@ def test_execute_exit_gate_non_exit_decision_always_true(tmp_path) -> None:
     assert execute_exit_gate(
         position=position, decision_action="ENTRY_BUY", urgency="NEXT_CANDLE", pnl_ratio=-0.5
     ) is True
+
+
+def _ada_adapter(tmp_path):
+    import run_realtime  # noqa: F401  (module wiring must stay importable)
+
+    from app.executor_agent.bitunix_futures_adapter import (
+        BitunixCredentials, BitunixFuturesExecutorAdapter, BitunixLiveSafetyGate,
+    )
+
+    fake = StatefulAdapter()
+    fake.rows = [
+        {"id": "tp1", "positionId": "ada", "symbol": "ADAUSDT", "tpPrice": "0.1900", "tpQty": "333"},
+        {"id": "tp2", "positionId": "ada", "symbol": "ADAUSDT", "tpPrice": "0.1850", "tpQty": "333"},
+        {"id": "tp3", "positionId": "ada", "symbol": "ADAUSDT", "tpPrice": "0.1800", "tpQty": "334"},
+        {"id": "sl1", "positionId": "ada", "symbol": "ADAUSDT", "slPrice": "0.1998", "slQty": "1000"},
+    ]
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("test-key", "test-secret"),
+        safety_gate=BitunixLiveSafetyGate(enabled=True, dry_run=True),
+    )
+    adapter.pending_tpsl = fake.pending_tpsl  # type: ignore[method-assign]
+    adapter.tighten_stop = fake.tighten_stop  # type: ignore[method-assign]
+    adapter.place_lifecycle_take_profit = fake.place_lifecycle_take_profit  # type: ignore[method-assign]
+    adapter.record_protection_metadata = lambda **kwargs: None
+    adapter._lifecycle_store_path = tmp_path / "lifecycle.json"
+    return fake, adapter
+
+
+class _AdaMarketData:
+    def fetch_ohlcv(self, symbol, *, timeframe, limit):
+        class R:
+            candles = [
+                Candle(
+                    "ADA/USDT", "2026-01-01T00:00:00Z",
+                    0.1900, 0.1905, 0.1896, 0.1896, 1.0,
+                )
+            ]
+        return R()
+
+
+def _ada_position() -> dict[str, object]:
+    return {
+        "position_id": "ada", "symbol": "ADAUSDT", "side": "SHORT",
+        "entry_price": 0.1962, "stop_loss": 0.1998, "quantity": 1000,
+    }
+
+
+def test_production_wiring_moves_short_stop_with_setting_percent(tmp_path, monkeypatch) -> None:
+    """The exact runtime wiring (percent from settings → controller → exchange).
+
+    SHORT entry 0.1962 at 0.1896 with a 3% trailing must tighten the live SL
+    from 0.1998 to ~0.195288 even with coordinator=None, no decision, no
+    monitor. Guards the production NameError regression.
+    """
+    import run_realtime
+
+    fake, adapter = _ada_adapter(tmp_path)
+    monkeypatch.setattr(
+        run_realtime, "resolve_live_bitunix_lifecycle_adapter",
+        lambda coordinator: adapter,
+    )
+    updates = run_realtime.apply_live_trailing_protection(
+        coordinator=None,
+        trailing_stop_percent=3,
+        open_positions_map={"ADAUSDT": _ada_position()},
+        market_data=_AdaMarketData(),
+        timeframe="5m",
+        limit=100,
+    )
+    assert updates[0]["managed"] is True
+    assert "error" not in updates[0]
+    assert updates[0]["new_stop"] == pytest.approx(0.1896 * 1.03, abs=1e-9)
+    assert fake.tightened == [pytest.approx(0.195288, abs=1e-9)]
+
+
+def test_production_wiring_never_moves_without_percent_setting(tmp_path, monkeypatch) -> None:
+    """Without the trailing percentage, no stop mutation is submitted."""
+    import run_realtime
+
+    fake, adapter = _ada_adapter(tmp_path)
+    monkeypatch.setattr(
+        run_realtime, "resolve_live_bitunix_lifecycle_adapter",
+        lambda coordinator: adapter,
+    )
+    updates = run_realtime.apply_live_trailing_protection(
+        coordinator=None,
+        trailing_stop_percent=None,
+        open_positions_map={"ADAUSDT": _ada_position()},
+        market_data=_AdaMarketData(),
+        timeframe="5m",
+        limit=100,
+    )
+    assert updates[0]["managed"] is True
+    assert updates[0]["new_stop"] is None
+    assert fake.tightened == []
+
+
+def test_production_wiring_fails_closed_without_adapter(monkeypatch) -> None:
+    """No adapter (no credentials) is exposed, never silently skipped."""
+    import run_realtime
+
+    monkeypatch.setattr(
+        run_realtime, "resolve_live_bitunix_lifecycle_adapter",
+        lambda coordinator: None,
+    )
+    updates = run_realtime.apply_live_trailing_protection(
+        coordinator=None,
+        trailing_stop_percent=3,
+        open_positions_map={"ADAUSDT": _ada_position()},
+        market_data=_AdaMarketData(),
+        timeframe="5m",
+        limit=100,
+    )
+    assert updates[0]["managed"] is False
+    assert updates[0]["error"] == "live_trailing_unavailable:no_bitunix_adapter"
+
+
+def test_live_adapter_resolver_prefers_coordinator_then_falls_back(monkeypatch) -> None:
+    """Coordinator adapter wins; otherwise a standalone adapter is built."""
+    import run_realtime
+    from types import SimpleNamespace
+
+    from app.executor_agent.bitunix_futures_adapter import (
+        BitunixCredentials, BitunixFuturesExecutorAdapter, BitunixLiveSafetyGate,
+    )
+
+    monkeypatch.setattr(run_realtime, "build_standalone_bitunix_adapter", lambda: "standalone")
+    assert run_realtime.resolve_live_bitunix_lifecycle_adapter(None) == "standalone"
+    assert run_realtime.resolve_live_bitunix_lifecycle_adapter(
+        SimpleNamespace(executor_agent=SimpleNamespace(_exchange=None))
+    ) == "standalone"
+
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("test-key", "test-secret"),
+        safety_gate=BitunixLiveSafetyGate(enabled=True, dry_run=True),
+    )
+    coordinator = SimpleNamespace(executor_agent=SimpleNamespace(_exchange=adapter))
+    assert run_realtime.resolve_live_bitunix_lifecycle_adapter(coordinator) is adapter

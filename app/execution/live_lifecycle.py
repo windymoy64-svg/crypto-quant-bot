@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from app.core.models import Candle
 from app.execution.lifecycle_contract import LIFECYCLE_VERSION, TP_FRACTIONS, TP_ROLES
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -207,6 +210,12 @@ class LiveLifecycleController:
             if peak < activation_price:
                 states[state.position_id] = state
                 self.store.save(states)
+                logger.info(
+                    "trailing_check symbol=%s side=%s entry=%.6f current=%.6f "
+                    "activation=%.6f active=false",
+                    state.symbol, state.side, state.entry_price, current,
+                    activation_price,
+                )
                 return None
             state.trailing_active = True
             candidate = peak * (1 - percent / 100)
@@ -222,6 +231,12 @@ class LiveLifecycleController:
             if trough > activation_price:
                 states[state.position_id] = state
                 self.store.save(states)
+                logger.info(
+                    "trailing_check symbol=%s side=%s entry=%.6f current=%.6f "
+                    "activation=%.6f active=false",
+                    state.symbol, state.side, state.entry_price, current,
+                    activation_price,
+                )
                 return None
             state.trailing_active = True
             candidate = trough * (1 + percent / 100)
@@ -231,8 +246,16 @@ class LiveLifecycleController:
         if not valid_candidate or not improving:
             states[state.position_id] = state
             self.store.save(states)
+            logger.info(
+                "trailing_check symbol=%s side=%s entry=%.6f current=%.6f "
+                "activation=%.6f active=true old_stop=%.6f new_stop=%.6f "
+                "unchanged=true",
+                state.symbol, state.side, state.entry_price, current,
+                activation_price, state.current_stop, candidate,
+            )
             return None
 
+        previous_stop = state.current_stop
         self.adapter.tighten_stop(
             symbol=state.symbol, position_id=state.position_id, side=state.side,
             new_stop=float(candidate), quantity=state.remaining_quantity,
@@ -240,6 +263,12 @@ class LiveLifecycleController:
         state.current_stop = float(candidate)
         states[state.position_id] = state
         self.store.save(states)
+        logger.info(
+            "trailing_check symbol=%s side=%s entry=%.6f current=%.6f "
+            "activation=%.6f active=true old_stop=%.6f new_stop=%.6f",
+            state.symbol, state.side, state.entry_price, current,
+            activation_price, previous_stop, state.current_stop,
+        )
         return state.current_stop
 
     def rearm_remaining_take_profits(

@@ -724,6 +724,117 @@ def register_existing_live_lifecycle_positions(
         if isinstance(position, dict) and str(position.get("position_id") or "") not in states:
             controller.register_existing_position(position)
 
+
+def build_standalone_bitunix_adapter() -> BitunixFuturesExecutorAdapter | None:
+    """Build a Bitunix adapter without depending on the agent coordinator.
+
+    Trailing protection must keep working even when the pipeline coordinator
+    fails to build (e.g. balance preflight error) or is not yet available.
+    """
+    try:
+        credentials = load_exchange_credentials(exchange="bitunix")
+        if credentials is None or not credentials.is_configured:
+            return None
+        execution = load_execution_preferences()
+        return BitunixFuturesExecutorAdapter(
+            BitunixCredentials(credentials.api_key, credentials.api_secret),
+            safety_gate=BitunixLiveSafetyGate(
+                enabled=True,
+                dry_run=not execution.network_enabled,
+                confirm_live=execution.live_confirmed,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("standalone bitunix adapter unavailable: %s", exc)
+        return None
+
+
+def resolve_live_bitunix_lifecycle_adapter(
+    coordinator: AgentPipelineCoordinator | None,
+) -> BitunixFuturesExecutorAdapter | None:
+    """Resolve the Bitunix adapter used by live lifecycle protection.
+
+    Prefer the coordinator's own exchange adapter (single instance), then fall
+    back to a standalone adapter so trailing never depends on pipeline health.
+    """
+    adapter = (
+        getattr(coordinator.executor_agent, "_exchange", None)
+        if coordinator is not None
+        else None
+    )
+    if isinstance(adapter, BitunixFuturesExecutorAdapter):
+        return adapter
+    return build_standalone_bitunix_adapter()
+
+
+def apply_live_trailing_protection(
+    *,
+    coordinator: AgentPipelineCoordinator | None,
+    trailing_stop_percent: float | None,
+    open_positions_map: dict[str, dict[str, object]],
+    market_data: MarketDataService,
+    timeframe: str,
+    limit: int,
+) -> list[dict[str, object]]:
+    """Run live trailing protection for every open Bitunix position.
+
+    Independent of agent decisions and monitor output; the percent travels as an
+    explicit parameter (no hidden scope). Falls back to a standalone adapter when
+    the coordinator is unavailable. Returns per-position lifecycle updates.
+    """
+    updates: list[dict[str, object]] = []
+    try:
+        adapter = resolve_live_bitunix_lifecycle_adapter(coordinator)
+        if not isinstance(adapter, BitunixFuturesExecutorAdapter):
+            return [{
+                "managed": False,
+                "error": "live_trailing_unavailable:no_bitunix_adapter",
+            }]
+        from app.execution.live_lifecycle import (
+            LiveLifecycleController,
+            LiveLifecycleStore,
+            apply_live_lifecycle_monitor,
+        )
+
+        try:
+            # Registration is idempotent per position. This keeps the trailing
+            # loop effective even when the coordinator path never registered.
+            register_existing_live_lifecycle_positions(
+                list(open_positions_map.values()), adapter=adapter,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("live lifecycle registration failed: %s", exc)
+        controller = LiveLifecycleController(
+            adapter,
+            store=LiveLifecycleStore(
+                getattr(adapter, "_lifecycle_store_path", "logs/bitunix_live_lifecycle.json")
+            ),
+            trailing_stop_percent=trailing_stop_percent,
+        )
+        for symbol, position in open_positions_map.items():
+            if not isinstance(position, dict):
+                continue
+            try:
+                fetched = market_data.fetch_ohlcv(
+                    symbol, timeframe=timeframe, limit=limit,
+                )
+                candles = list(getattr(fetched, "candles", []) or [])
+                updates.append(apply_live_lifecycle_monitor(
+                    controller, position=position, decision={},
+                    ltf_candles=candles,
+                ))
+            except Exception as exc:  # noqa: BLE001
+                updates.append({
+                    "managed": False, "position_id": position.get("position_id"),
+                    "error": f"live_trailing_failed:{exc}",
+                })
+    except Exception as exc:  # noqa: BLE001
+        # Fail closed: lifecycle mutation failure is exposed in the artifact.
+        updates.append({
+            "managed": False, "error": f"live_lifecycle_failed:{exc}",
+        })
+    return updates
+
 def write_scan_outputs(
     results: list[dict[str, object]],
     short_results: list[dict[str, object]],
@@ -1122,6 +1233,17 @@ def run_once(
             market_data_cache[market_data_key] = market_data
 
     execution_preferences = load_execution_preferences()
+    # Trailing protection reads the operator setting directly in this scope.
+    # The coordinator's builder keeps its own copy for entry geometry, but the
+    # live lifecycle wiring must never depend on that local variable.
+    trailing_stop_percent: float | None = None
+    if execution_preferences.mode == "live" and exchange.lower() == "bitunix":
+        try:
+            trailing_stop_percent = load_trading_preferences(
+                exchange=exchange.lower()
+            ).trailing_stop_percent
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("live trailing percent unavailable: %s", exc)
     paper_enabled = bool(runtime_config.get("paper_trading_enabled", True)) and (
         execution_preferences.mode == "paper"
     )
@@ -1556,52 +1678,31 @@ def run_once(
             }
 
         # Trailing protection is an execution concern, not an agent decision.
-        # Process every open Bitunix position on every live cycle.
+        # Process every open Bitunix position on every live cycle, independent
+        # of coordinator/pipeline health.
         if (
             execution_preferences.mode == "live"
             and execution_preferences.network_enabled
             and exchange.lower() == "bitunix"
             and open_positions_map
         ):
-            live_lifecycle_updates: list[dict[str, object]] = []
-            try:
-                from app.execution.live_lifecycle import (
-                    LiveLifecycleController,
-                )
-
-                lifecycle_adapter = getattr(coordinator.executor_agent, "_exchange", None)
-                if isinstance(lifecycle_adapter, BitunixFuturesExecutorAdapter):
-                    controller = LiveLifecycleController(
-                        lifecycle_adapter, trailing_stop_percent=trailing_stop_percent,
-                    )
-                    for symbol, position in open_positions_map.items():
-                        if not isinstance(position, dict):
-                            continue
-                        try:
-                            fetched = market_data.fetch_ohlcv(
-                                symbol, timeframe=agent_pipeline_config.ltf_timeframe,
-                                limit=agent_pipeline_config.ltf_limit,
-                            )
-                            candles = list(getattr(fetched, "candles", []) or [])
-                            from app.execution.live_lifecycle import apply_live_lifecycle_monitor
-                            live_lifecycle_updates.append(apply_live_lifecycle_monitor(
-                                controller, position=position, decision={}, ltf_candles=candles,
-                            ))
-                        except Exception as exc:  # noqa: BLE001
-                            live_lifecycle_updates.append({
-                                "managed": False, "position_id": position.get("position_id"),
-                                "error": f"live_trailing_failed:{exc}",
-                            })
-            except Exception as exc:  # noqa: BLE001
-                # Fail closed: lifecycle mutation failure blocks readiness and
-                # is exposed in the artifact; it never falls back to legacy.
-                live_lifecycle_updates.append({
-                    "managed": False, "error": f"live_lifecycle_failed:{exc}",
-                })
-                if coordinator is not None:
-                    coordinator.executor_agent.paper_parity_verified = False
+            live_lifecycle_updates = apply_live_trailing_protection(
+                coordinator=coordinator,
+                trailing_stop_percent=trailing_stop_percent,
+                open_positions_map=open_positions_map,
+                market_data=market_data,
+                timeframe=agent_pipeline_config.ltf_timeframe,
+                limit=agent_pipeline_config.ltf_limit,
+            )
             if live_lifecycle_updates and isinstance(agent_pipeline_payload, dict):
                 agent_pipeline_payload["live_lifecycle_updates"] = live_lifecycle_updates
+            if coordinator is not None and any(
+                isinstance(item, dict)
+                and str(item.get("error", "")).startswith("live_lifecycle_failed")
+                for item in live_lifecycle_updates
+            ):
+                # Fail closed: lifecycle mutation failure blocks readiness.
+                coordinator.executor_agent.paper_parity_verified = False
 
         # Bitunix may consume or detach the remaining TPSL ladder after a
         # partial close. Restore missing levels from the registered lifecycle.
