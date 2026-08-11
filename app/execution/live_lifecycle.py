@@ -31,6 +31,9 @@ class LiveLifecycleState:
     trailing_active: bool = False
     peak_price: float | None = None
     trough_price: float | None = None
+    trailing_status: str = "inactive"
+    trailing_candidate_stop: float | None = None
+    trailing_percent: float | None = None
     tp_hit: list[bool] = field(default_factory=lambda: [False, False, False])
     tp_order_ids: dict[str, str] = field(default_factory=dict)
 
@@ -351,9 +354,15 @@ def apply_live_lifecycle_monitor(
     hold_mode = bool(meta.get("hold_mode", False))
     state = controller.set_hold(position_id, hold_mode) if hold_mode else controller.reconcile(position)
     new_stop = controller.update_stop_from_candles(position_id, ltf_candles)
+    refreshed = controller.store.load().get(position_id)
     return {
         "managed": True, "position_id": position_id,
         "hold_mode": state.hold_mode, "new_stop": new_stop,
+        "trailing_active": bool(refreshed and refreshed.trailing_active),
+        "trailing_status": refreshed.trailing_status if refreshed else "unknown",
+        "current_stop": refreshed.current_stop if refreshed else state.current_stop,
+        "candidate_stop": refreshed.trailing_candidate_stop if refreshed else None,
+        "trailing_percent": refreshed.trailing_percent if refreshed else None,
         "lifecycle_version": state.lifecycle_version,
     }
 

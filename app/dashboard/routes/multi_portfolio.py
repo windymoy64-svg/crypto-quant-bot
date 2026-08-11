@@ -377,6 +377,7 @@ def _load_bitunix_details(api_key: str, api_secret: str) -> dict[str, Any]:
         positions,
         _extract_rows(results["pending_tpsl"][0], "orderList", "orders", "list"),
     )
+    _attach_live_trailing_status(positions)
     open_orders = [_normalize_bitunix_order(row) for row in _extract_rows(
         results["pending_orders"][0], "orderList", "orders", "list"
     )]
@@ -396,6 +397,26 @@ def _load_bitunix_details(api_key: str, api_secret: str) -> dict[str, Any]:
         "closed_positions": closed_positions,
         "warnings": warnings,
     }
+
+
+def _attach_live_trailing_status(positions: list[dict[str, Any]]) -> None:
+    """Expose the live lifecycle status on open positions for the dashboard."""
+    try:
+        from app.execution.live_lifecycle import LiveLifecycleStore
+        states = LiveLifecycleStore().load()
+    except Exception:  # noqa: BLE001
+        return
+    for position in positions:
+        state = states.get(str(position.get("position_id") or ""))
+        if state is None:
+            continue
+        position.update({
+            "trailing_active": state.trailing_active,
+            "trailing_status": state.trailing_status,
+            "trailing_stop_loss": state.current_stop if state.trailing_active else None,
+            "trailing_candidate_stop": state.trailing_candidate_stop,
+            "trailing_percent": state.trailing_percent,
+        })
 
 
 def _attach_bitunix_position_tpsl(
