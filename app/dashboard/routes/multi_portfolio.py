@@ -410,10 +410,16 @@ def _attach_live_trailing_status(positions: list[dict[str, Any]]) -> None:
         state = states.get(str(position.get("position_id") or ""))
         if state is None:
             continue
+        # ``trailing_active`` existed before the explicit status fields and can
+        # remain true in persisted state after an older cycle. The status is the
+        # current authoritative observation for the dashboard.
+        active_status = state.trailing_status in {
+            "active_not_tightening", "active_updated",
+        }
         position.update({
-            "trailing_active": state.trailing_active,
+            "trailing_active": active_status,
             "trailing_status": state.trailing_status,
-            "trailing_stop_loss": state.current_stop if state.trailing_active else None,
+            "trailing_stop_loss": state.current_stop if active_status else None,
             "trailing_candidate_stop": state.trailing_candidate_stop,
             "trailing_percent": state.trailing_percent,
         })
@@ -803,10 +809,14 @@ def _build_closed_position_history(
         metadata = reasons_by_position.get(position_id, {})
         lifecycle = lifecycle_states.get(position_id)
         if lifecycle is not None:
+            active_status = lifecycle.trailing_status in {
+                "active_not_tightening", "active_updated",
+            }
             position = {
                 **position,
-                "trailing_active": lifecycle.trailing_active,
-                "trailing_stop_loss": lifecycle.current_stop if lifecycle.trailing_active else None,
+                "trailing_active": active_status,
+                "trailing_status": lifecycle.trailing_status,
+                "trailing_stop_loss": lifecycle.current_stop if active_status else None,
                 "static_stop_loss": lifecycle.initial_stop,
             }
         realized_pnl = _as_float(position.get("realized_pnl", position.get("realizedPNL")))

@@ -2,6 +2,7 @@
 
 from app.dashboard import services
 from app.dashboard.services import dashboard_service
+from app.dashboard.routes import multi_portfolio
 
 
 def test_dashboard_service_market_portfolio_analytics_health_are_valid_objects() -> None:
@@ -70,3 +71,31 @@ def test_paper_order_history_only_contains_fully_closed_position(monkeypatch) ->
     assert history[0]["close_label"] == "Full close — trailing stop"
     assert history[0]["price"] == 100.0
     assert history[0]["quantity"] == 1.0
+
+
+def test_dashboard_trailing_active_uses_current_status_not_stale_flag(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    state = SimpleNamespace(
+        trailing_active=True,
+        trailing_status="inactive",
+        current_stop=0.1925,
+        trailing_candidate_stop=None,
+        trailing_percent=None,
+    )
+
+    class FakeStore:
+        def load(self):
+            return {"ada": state}
+
+    monkeypatch.setattr(multi_portfolio, "LiveLifecycleStore", FakeStore, raising=False)
+    # The route imports the store lazily, so patch the execution module used by
+    # that import path instead of relying on a production file.
+    import app.execution.live_lifecycle as lifecycle
+    monkeypatch.setattr(lifecycle, "LiveLifecycleStore", FakeStore)
+
+    positions = [{"position_id": "ada", "symbol": "ADAUSDT"}]
+    multi_portfolio._attach_live_trailing_status(positions)
+
+    assert positions[0]["trailing_active"] is False
+    assert positions[0]["trailing_stop_loss"] is None
