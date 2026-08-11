@@ -666,6 +666,18 @@ def test_closed_position_history_is_current_session_one_row_with_bot_reason() ->
     assert history[0]["reason_source"] == "bot_order_metadata"
 
 
+def test_closed_position_history_prefers_net_pnl_for_dashboard() -> None:
+    history = multi_route._build_closed_position_history(
+        [{
+            "position_id": "net-1", "symbol": "KAITOUSDT", "side": "LONG",
+            "quantity": 10, "entry_price": 1, "realized_pnl": 0.01,
+            "net_pnl": -0.06, "closed_at": "2026-08-01T01:00:00+00:00",
+        }], {}, now=datetime(2026, 8, 1, 4, 0, tzinfo=UTC),
+    )
+
+    assert history[0]["pnl"] == pytest.approx(-0.06)
+
+
 def test_bitunix_closed_position_normalization_uses_net_pnl() -> None:
     position = multi_route._normalize_bitunix_closed_position({
         "positionId": "p1", "symbol": "BNBUSDT", "side": "LONG",

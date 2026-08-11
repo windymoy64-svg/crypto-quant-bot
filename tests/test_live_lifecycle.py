@@ -8,7 +8,7 @@ from app.core.models import Candle
 from app.execution.lifecycle_contract import execute_exit_gate
 from app.execution.live_lifecycle import (
     LiveLifecycleController, LiveLifecycleState, LiveLifecycleStore,
-    apply_live_lifecycle_monitor,
+    apply_live_lifecycle_monitor, trailing_net_profit_floor,
 )
 from app.executor_agent.models import ExecutionResult
 
@@ -162,6 +162,40 @@ def test_percentage_trailing_activates_on_high_even_if_candle_closes_below_thres
     assert new_stop is not None
     assert new_stop > 100
     assert store.load()["p1"].trailing_active is True
+
+
+def test_trailing_net_profit_floor_covers_fees_and_minimum_profit() -> None:
+    assert trailing_net_profit_floor(100, 1, is_short=False) == pytest.approx(100.110055)
+    assert trailing_net_profit_floor(100, 1, is_short=True) == pytest.approx(99.890055)
+    assert trailing_net_profit_floor(100, 0.1, is_short=False) == pytest.approx(100.20001)
+
+
+def test_trailing_does_not_tighten_below_net_profit_floor(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(adapter, store, trailing_stop_percent=3)
+    controller.register(_state())
+
+    # High 103 activates the trail, but its candidate is 99.91, below 100.11.
+    candles = [Candle("BTC/USDT", "2026-01-01T00:00:00Z", 100, 103, 99, 102, 1)]
+
+    assert controller.update_stop_from_candles("p1", candles) is None
+    assert adapter.tightened == []
+    assert store.load()["p1"].trailing_status == "active_not_tightening"
+
+
+def test_short_trailing_does_not_tighten_above_net_profit_floor(tmp_path) -> None:
+    adapter = StatefulAdapter()
+    store = LiveLifecycleStore(tmp_path / "state.json")
+    controller = LiveLifecycleController(adapter, store, trailing_stop_percent=3)
+    controller.register(replace(_state(), side="SHORT", initial_stop=103, current_stop=103))
+
+    # Low 97 activates the trail, but its candidate is 99.91, above 99.89.
+    candles = [Candle("BTC/USDT", "2026-01-01T00:00:00Z", 100, 101, 97, 99, 1)]
+
+    assert controller.update_stop_from_candles("p1", candles) is None
+    assert adapter.tightened == []
+    assert store.load()["p1"].trailing_status == "active_not_tightening"
 
 
 def test_existing_position_can_register_without_tp_ladder(tmp_path) -> None:

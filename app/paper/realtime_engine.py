@@ -818,8 +818,15 @@ class RealtimePaperTradingEngine:
                 float(position["lowest_price"])
                 + trailing_distance
             )
-            # Floor rule SHORT: trailing stop tidak boleh di atas entry (min profit = breakeven)
-            candidate = min(candidate, entry_price)
+            # Keep the remaining position net-profitable after estimated fees.
+            from app.execution.live_lifecycle import trailing_net_profit_floor
+            candidate = min(
+                candidate,
+                trailing_net_profit_floor(
+                    entry_price, float(position.get("remaining_size") or position.get("size") or 0),
+                    is_short=True,
+                ),
+            )
 
             if previous is None or candidate < float(previous):
                 position["trailing_stop_loss"] = round(
@@ -831,8 +838,15 @@ class RealtimePaperTradingEngine:
                 float(position["highest_price"])
                 - trailing_distance
             )
-            # Floor rule LONG: trailing stop tidak boleh di bawah entry (min profit = breakeven)
-            candidate = max(candidate, entry_price)
+            # Keep the remaining position net-profitable after estimated fees.
+            from app.execution.live_lifecycle import trailing_net_profit_floor
+            candidate = max(
+                candidate,
+                trailing_net_profit_floor(
+                    entry_price, float(position.get("remaining_size") or position.get("size") or 0),
+                    is_short=False,
+                ),
+            )
 
             if previous is None or candidate > float(previous):
                 position["trailing_stop_loss"] = round(

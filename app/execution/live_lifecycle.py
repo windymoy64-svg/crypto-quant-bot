@@ -13,6 +13,24 @@ from app.execution.lifecycle_contract import LIFECYCLE_VERSION, TP_FRACTIONS, TP
 
 logger = logging.getLogger(__name__)
 
+# Keep a tightened stop net-profitable after two taker fees, not merely above
+# the entry price. Funding is exchange-dependent and is intentionally excluded.
+TRAILING_ROUND_TRIP_TAKER_FEE = 0.001
+TRAILING_MIN_NET_PROFIT = 0.01
+
+
+def trailing_net_profit_floor(entry_price: float, quantity: float, *, is_short: bool) -> float:
+    """Return the minimum stop price that leaves a small positive net PnL."""
+    quantity = max(float(quantity), 1e-12)
+    entry_price = float(entry_price)
+    fee_rate = TRAILING_ROUND_TRIP_TAKER_FEE / 2
+    profit_price = TRAILING_MIN_NET_PROFIT / quantity
+    return (
+        (entry_price * (1 - fee_rate) - profit_price) / (1 + fee_rate)
+        if is_short
+        else (entry_price * (1 + fee_rate) + profit_price) / (1 - fee_rate)
+    )
+
 
 @dataclass
 class LiveLifecycleState:
@@ -239,7 +257,10 @@ class LiveLifecycleController:
             state.trailing_active = True
             candidate = peak * (1 - percent / 100)
             state.trailing_candidate_stop = float(candidate)
-            valid_candidate = state.entry_price < candidate
+            profit_floor = trailing_net_profit_floor(
+                state.entry_price, state.remaining_quantity, is_short=False,
+            )
+            valid_candidate = candidate >= profit_floor
             improving = candidate > state.current_stop
         else:
             trough = min(
@@ -264,7 +285,10 @@ class LiveLifecycleController:
             state.trailing_active = True
             candidate = trough * (1 + percent / 100)
             state.trailing_candidate_stop = float(candidate)
-            valid_candidate = candidate < state.entry_price
+            profit_floor = trailing_net_profit_floor(
+                state.entry_price, state.remaining_quantity, is_short=True,
+            )
+            valid_candidate = candidate <= profit_floor
             improving = candidate < state.current_stop
 
         if not valid_candidate or not improving:

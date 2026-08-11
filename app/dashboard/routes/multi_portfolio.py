@@ -853,7 +853,7 @@ def _build_closed_position_history(
             "entry": entry_price or None,
             "quantity": quantity,
             "modal": (entry_price * quantity / leverage) if entry_price and quantity else None,
-            "pnl": position.get("realized_pnl"),
+            "pnl": position.get("net_pnl", position.get("realized_pnl")),
             "reason": reason,
             "reason_source": reason_source,
             "close_scope": "full",
