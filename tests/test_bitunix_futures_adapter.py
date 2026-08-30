@@ -138,7 +138,7 @@ def test_market_order_translated_correctly() -> None:
     assert call["body"]["side"] == "BUY"
     assert call["body"]["orderType"] == "MARKET"
     assert call["body"]["tradeSide"] == "OPEN"
-    assert call["body"]["reduceOnly"] is False
+    assert "reduceOnly" not in call["body"]
     assert "price" not in call["body"]
     assert result.order_id == "abc123"
     assert result.filled_quantity == 0.5
@@ -178,7 +178,8 @@ def test_entry_plan_uses_current_bitunix_mark_price_stop_trigger() -> None:
 
     results = adapter.place_orders(orders, timestamp="2026-01-01T00:00:00Z")
 
-    assert transport.calls[0]["body"]["slStopType"] == "MARK_PRICE"
+    assert transport.calls[0]["body"]["slStopType"] == "MARK"
+    assert "reduceOnly" not in transport.calls[0]["body"]
     assert results[0].status == "SUBMITTED"
 
 

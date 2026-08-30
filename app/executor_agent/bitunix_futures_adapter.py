@@ -512,9 +512,9 @@ class BitunixFuturesExecutorAdapter:
             body = self._build_body(entry)
             body.update({
                 "slPrice": _fmt_number(stop.stop_price),
-                # Bitunix uses MARK_PRICE for attached TP/SL triggers.  MARK
-                # is not accepted consistently by the current trade API.
-                "slStopType": "MARK_PRICE",
+                # The trade endpoint expects MARK for attached protection.
+                # MARK_PRICE is used by the separate TP/SL endpoint only.
+                "slStopType": "MARK",
                 "slOrderType": "MARKET",
             })
         except ValueError as exc:
@@ -1169,10 +1169,11 @@ class BitunixFuturesExecutorAdapter:
             "side": "BUY" if order.side == "BUY" else "SELL",
             "orderType": "MARKET" if order.order_type == "MARKET" else "LIMIT",
             "qty": _fmt_number(order.quantity),
-            "reduceOnly": bool(order.reduce_only),
             # OPEN for entries, CLOSE for reduce-only (partial TP / exits).
             "tradeSide": "CLOSE" if order.reduce_only else "OPEN",
         }
+        if order.reduce_only:
+            body["reduceOnly"] = True
         if position_id:
             body["positionId"] = position_id
 
