@@ -177,9 +177,14 @@ class BitunixFuturesExecutorAdapter:
         try:
             payload = self._send(url=url, headers=headers, body=body)
         except Exception as exc:  # noqa: BLE001
-            return self._reject(order, timestamp, f"http_error: {exc}")
+            return self._reject(
+                order, timestamp,
+                f"bitunix_trade_place_order_http_error: {exc}",
+            )
 
-        return self._to_execution_result(payload, order, timestamp)
+        return self._to_execution_result(
+            payload, order, timestamp, endpoint="trade/place_order",
+        )
 
     def pending_orders(self, *, symbol: str | None = None) -> list[dict[str, Any]]:
         """Return open entry orders from Bitunix trade API."""
@@ -507,7 +512,9 @@ class BitunixFuturesExecutorAdapter:
             body = self._build_body(entry)
             body.update({
                 "slPrice": _fmt_number(stop.stop_price),
-                "slStopType": "MARK",
+                # Bitunix uses MARK_PRICE for attached TP/SL triggers.  MARK
+                # is not accepted consistently by the current trade API.
+                "slStopType": "MARK_PRICE",
                 "slOrderType": "MARKET",
             })
         except ValueError as exc:
@@ -521,9 +528,17 @@ class BitunixFuturesExecutorAdapter:
                 body=body,
             )
         except Exception as exc:  # noqa: BLE001
-            return [self._reject(item, timestamp, f"http_error: {exc}") for item in orders]
+            return [
+                self._reject(
+                    item, timestamp,
+                    f"bitunix_trade_place_order_http_error: {exc}",
+                )
+                for item in orders
+            ]
 
-        entry_result = self._to_execution_result(payload, entry, timestamp)
+        entry_result = self._to_execution_result(
+            payload, entry, timestamp, endpoint="trade/place_order",
+        )
         if entry_result.status != "REJECTED":
             self._queue_take_profits(
                 entry, stop, take_profits, entry_result.order_id,
@@ -956,8 +971,13 @@ class BitunixFuturesExecutorAdapter:
                 headers=headers, body=body,
             )
         except Exception as exc:  # noqa: BLE001
-            return self._reject(order, timestamp, f"http_error: {exc}")
-        return self._to_execution_result(payload, order, timestamp)
+            return self._reject(
+                order, timestamp,
+                f"bitunix_tpsl_place_order_http_error: {exc}",
+            )
+        return self._to_execution_result(
+            payload, order, timestamp, endpoint="tpsl/place_order",
+        )
 
     def _queue_take_profits(
         self, entry: OrderRequest, stop: OrderRequest,
@@ -1235,18 +1255,24 @@ class BitunixFuturesExecutorAdapter:
             return json.loads(raw) if raw else {}
 
     def _to_execution_result(
-        self, payload: dict[str, Any], order: OrderRequest, timestamp: str,
+        self,
+        payload: dict[str, Any],
+        order: OrderRequest,
+        timestamp: str,
+        *,
+        endpoint: str = "trade/place_order",
     ) -> ExecutionResult:
         code = payload.get("code")
         if code != 0:
             if code == 710002:
                 _remember_openapi_unsupported(order.symbol)
+            message = str(payload.get("msg") or f"bitunix_error_code={code}")
             return ExecutionResult(
                 status="REJECTED", order_id="", symbol=order.symbol,
                 side=order.side, order_type=order.order_type,
                 requested_quantity=order.quantity, filled_quantity=0.0,
                 average_price=0.0, timestamp=timestamp,
-                reason=str(payload.get("msg") or f"bitunix_error_code={code}"),
+                reason=f"bitunix_{endpoint}_error[{code}]: {message}",
                 meta={**order.meta, "raw": payload},
             )
 

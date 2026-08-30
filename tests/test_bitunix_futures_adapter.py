@@ -145,6 +145,43 @@ def test_market_order_translated_correctly() -> None:
     assert result.average_price == 100.5
 
 
+def test_entry_plan_uses_current_bitunix_mark_price_stop_trigger() -> None:
+    adapter, transport = _adapter(response={
+        "code": 0, "data": {"orderId": "entry-protected"},
+    })
+    orders = [
+        OrderRequest(
+            symbol="BTC/USDT", side="BUY", order_type="LIMIT",
+            quantity=1.0, price=100.0, meta={"role": "entry"},
+        ),
+        OrderRequest(
+            symbol="BTC/USDT", side="SELL", order_type="STOP_MARKET",
+            quantity=1.0, stop_price=97.0, reduce_only=True,
+            meta={"role": "stop_loss"},
+        ),
+        OrderRequest(
+            symbol="BTC/USDT", side="SELL", order_type="LIMIT",
+            quantity=0.3, price=106.0, reduce_only=True,
+            meta={"role": "take_profit_1"},
+        ),
+        OrderRequest(
+            symbol="BTC/USDT", side="SELL", order_type="LIMIT",
+            quantity=0.3, price=109.0, reduce_only=True,
+            meta={"role": "take_profit_2"},
+        ),
+        OrderRequest(
+            symbol="BTC/USDT", side="SELL", order_type="LIMIT",
+            quantity=0.4, price=112.0, reduce_only=True,
+            meta={"role": "take_profit_3"},
+        ),
+    ]
+
+    results = adapter.place_orders(orders, timestamp="2026-01-01T00:00:00Z")
+
+    assert transport.calls[0]["body"]["slStopType"] == "MARK_PRICE"
+    assert results[0].status == "SUBMITTED"
+
+
 def test_limit_order_has_price_and_gtc() -> None:
     adapter, transport = _adapter(response={
         "code": 0, "data": {"orderId": "xyz", "status": "NEW"},
@@ -197,7 +234,7 @@ def test_error_code_from_exchange_becomes_rejected() -> None:
     )
     result = adapter.place_order(order, timestamp="2024-01-01T00:00:00Z")
     assert result.status == "REJECTED"
-    assert "insufficient balance" in result.reason
+    assert result.reason == "bitunix_trade/place_order_error[10001]: insufficient balance"
 
 
 def test_openapi_unsupported_pair_is_persisted(
