@@ -509,14 +509,10 @@ class BitunixFuturesExecutorAdapter:
                 ]
 
         try:
+            # Keep the trade endpoint payload minimal. Bitunix validates SL/TP
+            # protection through the dedicated TPSL endpoint after a position
+            # id exists; sending attached SL fields here causes error 10002.
             body = self._build_body(entry)
-            body.update({
-                "slPrice": _fmt_number(stop.stop_price),
-                # The trade endpoint expects MARK for attached protection.
-                # MARK_PRICE is used by the separate TP/SL endpoint only.
-                "slStopType": "MARK",
-                "slOrderType": "MARKET",
-            })
         except ValueError as exc:
             return [self._reject(item, timestamp, f"invalid_request: {exc}") for item in orders]
 
@@ -543,7 +539,9 @@ class BitunixFuturesExecutorAdapter:
             self._queue_take_profits(
                 entry, stop, take_profits, entry_result.order_id,
             )
-        attached_items = {id(stop)}
+        # Protection is queued with the entry and submitted via the dedicated
+        # TPSL endpoint once Bitunix exposes the resulting position id.
+        attached_items: set[int] = set()
         protective_results: list[ExecutionResult] = []
         for item in orders:
             if item is entry:
@@ -682,6 +680,34 @@ class BitunixFuturesExecutorAdapter:
                 )
                 remaining.append(plan)
                 continue
+
+            active_stops = [
+                row for row in active_tpsl
+                if _float(row.get("slPrice", row.get("stopLossPrice"))) > 0
+            ]
+            if not active_stops and _float(plan.get("initial_stop")) > 0:
+                stop_price = _float(plan.get("initial_stop"))
+                stop_order = OrderRequest(
+                    symbol=symbol,
+                    side="SELL" if expected_side == "LONG" else "BUY",
+                    order_type="STOP_MARKET",
+                    quantity=_float(plan.get("initial_quantity")),
+                    stop_price=stop_price,
+                    reduce_only=True,
+                    meta={
+                        "role": "stop_loss",
+                        "position_id": position_id,
+                        "lifecycle_version": plan.get("lifecycle_version"),
+                    },
+                )
+                stop_result = self._place_stop_loss(
+                    stop_order, position_id, timestamp,
+                )
+                results.append(stop_result)
+                if stop_result.status == "REJECTED":
+                    remaining.append(plan)
+                    continue
+                active_tpsl.append({"slPrice": _fmt_number(stop_price)})
 
             def _price_matches(actual: float, expected: float) -> bool:
                 return abs(actual - expected) <= max(
@@ -963,6 +989,36 @@ class BitunixFuturesExecutorAdapter:
             "tpStopType": "MARK_PRICE",
             "tpOrderType": "MARKET",
             "tpQty": _fmt_number(order.quantity),
+        }
+        headers = self._sign_headers(body_json=json.dumps(body, separators=(",", ":")))
+        try:
+            payload = self._send(
+                url=f"{self._base_url}{BITUNIX_TPSL_PLACE_PATH}",
+                headers=headers, body=body,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._reject(
+                order, timestamp,
+                f"bitunix_tpsl_place_order_http_error: {exc}",
+            )
+        return self._to_execution_result(
+            payload, order, timestamp, endpoint="tpsl/place_order",
+        )
+
+    def _place_stop_loss(
+        self, order: OrderRequest, position_id: str, timestamp: str,
+    ) -> ExecutionResult:
+        gate_block = self._safety_gate.evaluate()
+        if gate_block is not None:
+            return self._reject(order, timestamp, gate_block)
+        stop_price = float(order.stop_price or 0.0)
+        body = {
+            "symbol": order.symbol.replace("/", "").upper(),
+            "positionId": position_id,
+            "slPrice": _fmt_number(stop_price),
+            "slStopType": "MARK_PRICE",
+            "slOrderType": "MARKET",
+            "slQty": _fmt_number(order.quantity),
         }
         headers = self._sign_headers(body_json=json.dumps(body, separators=(",", ":")))
         try:
