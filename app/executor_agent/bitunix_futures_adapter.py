@@ -525,6 +525,12 @@ class BitunixFuturesExecutorAdapter:
                 "slStopType": "MARK_PRICE",
                 "slOrderType": "MARKET",
             })
+            first_take_profit = take_profits[0]
+            body.update({
+                "tpPrice": _fmt_number(first_take_profit.price),
+                "tpStopType": "MARK_PRICE",
+                "tpOrderType": "MARKET",
+            })
         except ValueError as exc:
             return [self._reject(item, timestamp, f"invalid_request: {exc}") for item in orders]
 
@@ -555,10 +561,11 @@ class BitunixFuturesExecutorAdapter:
                 entry, stop, take_profits, entry_result.order_id,
                 initial_quantity=normalized_entry,
                 stop_attached_to_entry=True,
+                attached_take_profit_role=str(first_take_profit.meta.get("role")),
             )
         # SL is attached to the entry request; TP levels remain queued until
         # the exchange exposes the resulting position id.
-        attached_items = {id(stop)}
+        attached_items = {id(stop), id(take_profits[0])}
         protective_results: list[ExecutionResult] = []
         for item in orders:
             if item is entry:
@@ -1065,6 +1072,7 @@ class BitunixFuturesExecutorAdapter:
         take_profits: list[OrderRequest], order_id: str,
         *, initial_quantity: float | None = None,
         stop_attached_to_entry: bool = False,
+        attached_take_profit_role: str | None = None,
     ) -> None:
         plans = self._load_pending_take_profits()
         key = str(order_id or entry.meta.get("client_order_id") or "")
@@ -1091,7 +1099,8 @@ class BitunixFuturesExecutorAdapter:
                 "role": str(item.meta.get("role")), "side": item.side,
                 "quantity": item.quantity, "price": item.price,
                 "target_risk_reward": item.meta.get("target_risk_reward"),
-            } for item in take_profits],
+            } for item in take_profits
+            if str(item.meta.get("role")) != attached_take_profit_role],
         })
         self._save_pending_take_profits(plans)
 

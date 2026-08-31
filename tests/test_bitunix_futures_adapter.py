@@ -381,11 +381,13 @@ def test_live_entry_attaches_stop_and_queues_take_profit(tmp_path) -> None:
     assert "price" not in body
     assert body["slPrice"] == "97"
     assert body["slOrderType"] == "MARKET"
-    assert "tpPrice" not in body
+    assert body["tpPrice"] == "106"
+    assert body["tpStopType"] == "MARK_PRICE"
+    assert body["tpOrderType"] == "MARKET"
     assert report.results[0].order_id == "protected-1"
     assert all(result.status != "REJECTED" for result in report.results)
     assert [result.status for result in report.results[1:]] == [
-        "SUBMITTED", "PENDING", "PENDING", "PENDING",
+        "SUBMITTED", "SUBMITTED", "PENDING", "PENDING",
     ]
 
 
@@ -511,10 +513,10 @@ def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) ->
     assert len(transport.calls) == 1
     body = transport.calls[0]["body"]
     assert body["slPrice"] == "97"
-    assert "tpPrice" not in body
+    assert body["tpPrice"] == "106"
     by_role = {result.meta["role"]: result for result in results}
     assert by_role["stop_loss"].reason == "attached_to_entry"
-    assert by_role["take_profit_1"].status == "PENDING"
+    assert by_role["take_profit_1"].status == "SUBMITTED"
     assert by_role["take_profit_2"].reason == "queued_until_position_id_available"
     assert by_role["take_profit_3"].reason == "queued_until_position_id_available"
 
@@ -523,11 +525,11 @@ def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) ->
         "entry_price": 100.0, "quantity": 1.0, "stop_loss": 97.0,
     }], timestamp="2026-01-01T00:01:00Z")
 
-    assert len(reconciled) == 3
+    assert len(reconciled) == 2
     tp_calls = transport.calls[1:]
     assert all(call["url"].endswith("/tpsl/place_order") for call in tp_calls)
-    assert [call["body"]["tpPrice"] for call in tp_calls] == ["106", "109", "112"]
-    assert [call["body"]["tpQty"] for call in tp_calls] == ["0.3", "0.3", "0.4"]
+    assert [call["body"]["tpPrice"] for call in tp_calls] == ["109", "112"]
+    assert [call["body"]["tpQty"] for call in tp_calls] == ["0.3", "0.4"]
     assert all(call["body"]["positionId"] == "position-1" for call in tp_calls)
     assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
 
@@ -718,15 +720,15 @@ def test_tp1_reconcile_does_not_duplicate_accepted_order(tmp_path) -> None:
 
     # SL was already attached to the entry. Reconciliation stops at the
     # temporary TP2 rejection so TP3 remains queued for the next pass.
-    assert [result.status for result in first] == ["SUBMITTED", "REJECTED"]
+    assert [result.status for result in first] == ["REJECTED"]
     assert [result.status for result in second] == ["SUBMITTED", "SUBMITTED"]
-    # SL has slPrice rather than tpPrice and is excluded from this list.
+    # TP1 is attached to entry; only TP2/TP3 use the TPSL endpoint.
     tp_prices = [
         call["body"]["tpPrice"]
         for call in calls
         if "/tpsl/" in call["url"] and "tpPrice" in call["body"]
     ]
-    assert tp_prices == ["106", "109", "109", "112"]
+    assert tp_prices == ["109", "109", "112"]
 
 
 def test_reconcile_submits_only_newest_matching_tp_plan(tmp_path) -> None:
