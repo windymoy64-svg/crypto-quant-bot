@@ -534,6 +534,36 @@ def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) ->
     assert json.loads(pending_path.read_text(encoding="utf-8"))["plans"] == []
 
 
+def test_reconcile_accepts_bitunix_camel_case_position_id(tmp_path) -> None:
+    transport = _capturing_transport({
+        "code": 0, "data": {"orderId": "tp-camel"},
+    })
+    pending_path = tmp_path / "pending-tp.json"
+    adapter = BitunixFuturesExecutorAdapter(
+        BitunixCredentials("key", "secret"), safety_gate=_open_gate(),
+        transport=transport, pending_tp_path=pending_path,
+    )
+    pending_path.write_text(json.dumps({"plans": [{
+        "entry_order_id": "entry-camel", "symbol": "BTC/USDT",
+        "position_side": "LONG", "strategy": "tp1_partial_trailing_v1",
+        "initial_stop": 97.0, "initial_quantity": 1.0,
+        "take_profits": [{
+            "role": "take_profit_1", "side": "SELL",
+            "quantity": 1.0, "price": 106.0,
+        }],
+    }]}), encoding="utf-8")
+
+    results = adapter.reconcile_take_profits([{
+        "positionId": "position-camel", "symbol": "BTCUSDT", "side": "LONG",
+        "entry_price": 100.0, "quantity": 1.0, "stop_loss": 97.0,
+    }], timestamp="2026-01-01T00:01:00Z")
+
+    assert [result.status for result in results] == ["SUBMITTED", "SUBMITTED"]
+    assert [call["body"].get("positionId") for call in transport.calls] == [
+        "position-camel", "position-camel",
+    ]
+
+
 def test_expired_tp_queue_requires_manual_action_without_closing(tmp_path) -> None:
     calls = []
 

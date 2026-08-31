@@ -653,7 +653,9 @@ class BitunixFuturesExecutorAdapter:
                 # Stale duplicate for the currently active position. Drop it;
                 # only the latest plan below may create an exchange-side TP.
                 continue
-            position_id = str(position.get("position_id") or "")
+            position_id = str(
+                position.get("position_id") or position.get("positionId") or ""
+            )
             if not position_id:
                 logger.warning(
                     "Bitunix TP reconciliation deferred symbol=%s side=%s "

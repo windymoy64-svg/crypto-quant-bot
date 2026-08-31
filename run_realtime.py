@@ -2001,6 +2001,46 @@ def run_once(
                 "error": f"pipeline_bridge_failed: {exc}",
             }
 
+        # An entry created by the pipeline did not exist in the position
+        # snapshot used before scanning. Refresh positions now so the pending
+        # plan can receive its Bitunix positionId and install SL/TP in this
+        # cycle instead of waiting for the next process restart.
+        if (
+            execution_preferences.mode == "live"
+            and execution_preferences.network_enabled
+            and exchange.lower() == "bitunix"
+            and isinstance(coordinator, AgentPipelineCoordinator)
+        ):
+            post_entry_adapter = getattr(coordinator.executor_agent, "_exchange", None)
+            if isinstance(post_entry_adapter, BitunixFuturesExecutorAdapter):
+                try:
+                    refreshed_details = _load_bitunix_details(
+                        credentials.api_key, credentials.api_secret,
+                    )
+                    refreshed_positions = [
+                        row for row in refreshed_details.get("positions", []) or []
+                        if isinstance(row, dict)
+                    ]
+                    protection_results = post_entry_adapter.reconcile_take_profits(
+                        refreshed_positions,
+                        timestamp=datetime.now(tz=UTC).isoformat(),
+                    )
+                    for result in protection_results:
+                        log = logger.info if result.status != "REJECTED" else logger.error
+                        log(
+                            "Bitunix post-entry protection symbol=%s role=%s "
+                            "status=%s order_id=%s reason=%s",
+                            result.symbol,
+                            result.meta.get("role", "protection"),
+                            result.status,
+                            result.order_id,
+                            result.reason,
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "Bitunix post-entry TP/SL reconciliation failed: %s", exc,
+                    )
+
         # Bitunix may consume or detach the remaining TPSL ladder after a
         # partial close. Restore missing levels from the registered lifecycle.
         if (
