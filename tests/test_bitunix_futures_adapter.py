@@ -145,6 +145,46 @@ def test_market_order_translated_correctly() -> None:
     assert result.average_price == 100.5
 
 
+def test_pair_rules_normalize_quantity_and_limit_price() -> None:
+    adapter, transport = _adapter()
+    adapter._trading_pair_rules["BTC/USDT"] = {
+        "symbolStatus": "OPEN", "isApiSupported": True,
+        "minTradeVolume": "0.001", "basePrecision": 3,
+        "quotePrecision": 1, "maxLimitOrderVolume": "10",
+    }
+    result = adapter.place_order(
+        OrderRequest(
+            symbol="BTC/USDT", side="BUY", order_type="LIMIT",
+            quantity=0.12398, price=60000.19,
+        ),
+        timestamp="2024-01-01T00:00:00Z",
+    )
+
+    assert result.status == "SUBMITTED"
+    assert transport.calls[0]["body"]["qty"] == "0.123"
+    assert transport.calls[0]["body"]["price"] == "60000.1"
+
+
+@pytest.mark.parametrize("rules, reason", [
+    ({"symbolStatus": "CANCEL_ONLY"}, "symbol_not_open:CANCEL_ONLY"),
+    ({"isApiSupported": False}, "symbol_api_trading_not_supported"),
+    ({"minTradeVolume": "1", "basePrecision": 3}, "quantity_below_min_trade_volume:1"),
+])
+def test_pair_rules_reject_invalid_entry_before_network(
+    rules: dict[str, Any], reason: str,
+) -> None:
+    adapter, transport = _adapter()
+    adapter._trading_pair_rules["BTC/USDT"] = rules
+    result = adapter.place_order(
+        OrderRequest(symbol="BTC/USDT", side="BUY", order_type="MARKET", quantity=0.1),
+        timestamp="2024-01-01T00:00:00Z",
+    )
+
+    assert result.status == "REJECTED"
+    assert result.reason == f"invalid_request: {reason}"
+    assert transport.calls == []
+
+
 def test_entry_plan_uses_current_bitunix_mark_price_stop_trigger() -> None:
     adapter, transport = _adapter(response={
         "code": 0, "data": {"orderId": "entry-protected"},

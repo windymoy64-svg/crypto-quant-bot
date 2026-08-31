@@ -60,6 +60,7 @@ BITUNIX_TPSL_PLACE_PATH = "/api/v1/futures/tpsl/place_order"
 BITUNIX_TPSL_PENDING_PATH = "/api/v1/futures/tpsl/get_pending_orders"
 BITUNIX_TPSL_MODIFY_PATH = "/api/v1/futures/tpsl/modify_order"
 BITUNIX_TPSL_CANCEL_PATH = "/api/v1/futures/tpsl/cancel_order"
+BITUNIX_TRADING_PAIRS_PATH = "/api/v1/futures/market/trading_pairs"
 BITUNIX_OPENAPI_BLOCKLIST_PATH = Path("logs/bitunix_openapi_unsupported.json")
 BITUNIX_PENDING_TP_PATH = Path("logs/bitunix_pending_take_profits.json")
 TP_PROTECTION_TIMEOUT_SECONDS = 60
@@ -125,12 +126,17 @@ class BitunixFuturesExecutorAdapter:
         min_amount_path: Path | None = None,
         order_metadata_path: Path | None = None,
         lifecycle_store_path: Path | None = None,
+        trading_pair_rules: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._credentials = credentials
         self._safety_gate = safety_gate or BitunixLiveSafetyGate()
         self._base_url = base_url.rstrip("/")
         self._transport = transport  # optional callable(url, headers, body) -> dict
         self._query_transport = query_transport
+        self._trading_pair_rules = {
+            _canonical_symbol(symbol): dict(rules)
+            for symbol, rules in (trading_pair_rules or {}).items()
+        }
         self._leverage = int(leverage) if leverage is not None else None
         self._pending_tp_path = pending_tp_path or BITUNIX_PENDING_TP_PATH
         self._min_amount_path = min_amount_path or (
@@ -536,8 +542,12 @@ class BitunixFuturesExecutorAdapter:
             payload, entry, timestamp, endpoint="trade/place_order",
         )
         if entry_result.status != "REJECTED":
+            normalized_entry = _normalize_quantity(
+                entry.quantity, self._get_trading_pair_rules(entry.symbol),
+            )
             self._queue_take_profits(
                 entry, stop, take_profits, entry_result.order_id,
+                initial_quantity=normalized_entry,
             )
         # Protection is queued with the entry and submitted via the dedicated
         # TPSL endpoint once Bitunix exposes the resulting position id.
@@ -1038,6 +1048,7 @@ class BitunixFuturesExecutorAdapter:
     def _queue_take_profits(
         self, entry: OrderRequest, stop: OrderRequest,
         take_profits: list[OrderRequest], order_id: str,
+        *, initial_quantity: float | None = None,
     ) -> None:
         plans = self._load_pending_take_profits()
         key = str(order_id or entry.meta.get("client_order_id") or "")
@@ -1051,7 +1062,7 @@ class BitunixFuturesExecutorAdapter:
             "lifecycle_version": str(
                 entry.meta.get("lifecycle_version") or LIFECYCLE_VERSION
             ),
-            "initial_quantity": entry.quantity,
+            "initial_quantity": initial_quantity or entry.quantity,
             "initial_stop": stop.stop_price,
             "reference_entry": entry.meta.get("reference_price"),
             "strategy_version": entry.meta.get("strategy_version"),
@@ -1217,6 +1228,30 @@ class BitunixFuturesExecutorAdapter:
             raise ValueError("quantity_must_be_positive")
 
         symbol = order.symbol.replace("/", "").upper()
+        rules = self._get_trading_pair_rules(order.symbol)
+        if rules:
+            status = str(rules.get("symbolStatus") or "OPEN").upper()
+            if status != "OPEN":
+                raise ValueError(f"symbol_not_open:{status}")
+            if rules.get("isApiSupported") is False:
+                raise ValueError("symbol_api_trading_not_supported")
+            if self._leverage is not None:
+                max_leverage = _float(rules.get("maxLeverage"))
+                min_leverage = _float(rules.get("minLeverage"))
+                if max_leverage > 0 and self._leverage > max_leverage:
+                    raise ValueError(f"leverage_above_pair_max:{_fmt_number(max_leverage)}")
+                if min_leverage > 0 and self._leverage < min_leverage:
+                    raise ValueError(f"leverage_below_pair_min:{_fmt_number(min_leverage)}")
+        quantity = _normalize_quantity(order.quantity, rules)
+        minimum = _float(rules.get("minTradeVolume")) if rules else 0.0
+        maximum_key = "maxMarketOrderVolume" if order.order_type == "MARKET" else "maxLimitOrderVolume"
+        maximum = _float(rules.get(maximum_key)) if rules else 0.0
+        if quantity <= 0:
+            raise ValueError("quantity_below_exchange_precision")
+        if minimum > 0 and quantity < minimum:
+            raise ValueError(f"quantity_below_min_trade_volume:{_fmt_number(minimum)}")
+        if maximum > 0 and quantity > maximum:
+            raise ValueError(f"quantity_above_max_order_volume:{_fmt_number(maximum)}")
         position_id = str(order.meta.get("position_id", "")).strip()
         if order.reduce_only and not position_id:
             raise ValueError("position_id_required_for_close")
@@ -1224,7 +1259,7 @@ class BitunixFuturesExecutorAdapter:
             "symbol": symbol,
             "side": "BUY" if order.side == "BUY" else "SELL",
             "orderType": "MARKET" if order.order_type == "MARKET" else "LIMIT",
-            "qty": _fmt_number(order.quantity),
+            "qty": _fmt_number(quantity),
             # OPEN for entries, CLOSE for reduce-only (partial TP / exits).
             "tradeSide": "CLOSE" if order.reduce_only else "OPEN",
         }
@@ -1236,13 +1271,43 @@ class BitunixFuturesExecutorAdapter:
         if order.order_type == "LIMIT":
             if order.price is None or order.price <= 0:
                 raise ValueError("limit_price_required")
-            body["price"] = _fmt_number(order.price)
+            body["price"] = _fmt_number(_normalize_price(order.price, rules))
             body["effect"] = "GTC"
 
         client_id = order.meta.get("client_order_id")
         if client_id:
             body["clientId"] = str(client_id)
         return body
+
+    def _get_trading_pair_rules(self, symbol: str) -> dict[str, Any]:
+        canonical = _canonical_symbol(symbol)
+        cached = self._trading_pair_rules.get(canonical)
+        if cached is not None:
+            return cached
+        if self._transport is not None:
+            return {}
+        params = {"symbols": canonical.replace("/", "")}
+        request = urllib.request.Request(
+            f"{self._base_url}{BITUNIX_TRADING_PAIRS_PATH}?{urllib.parse.urlencode(params)}",
+            headers={"Content-Type": "application/json", "User-Agent": BITUNIX_USER_AGENT},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"trading_pair_rules_unavailable:{exc}") from exc
+        data = payload.get("data") if isinstance(payload, dict) else None
+        row = next(
+            (item for item in (data if isinstance(data, list) else [])
+             if isinstance(item, dict)
+             and _canonical_symbol(item.get("symbol")) == canonical),
+            None,
+        )
+        if row is None:
+            raise ValueError("trading_pair_not_found")
+        self._trading_pair_rules[canonical] = dict(row)
+        return self._trading_pair_rules[canonical]
 
     def _sign_headers(self, *, body_json: str) -> dict[str, str]:
         nonce = secrets.token_hex(16)
@@ -1494,6 +1559,44 @@ def _is_minimum_amount_rejection(result: ExecutionResult) -> bool:
 
 def _fmt_number(value: float) -> str:
     return format(float(value), "f").rstrip("0").rstrip(".") or "0"
+
+
+def _normalize_quantity(value: float, rules: dict[str, Any]) -> float:
+    precision = int(_float(rules.get("basePrecision"))) if rules else 0
+    if precision <= 0:
+        return float(value)
+    from decimal import Decimal, ROUND_DOWN
+    return float(Decimal(str(value)).quantize(
+        Decimal("1").scaleb(-precision), rounding=ROUND_DOWN,
+    ))
+
+
+def _normalize_price(value: float, rules: dict[str, Any]) -> float:
+    precision = int(_float(rules.get("quotePrecision"))) if rules else 0
+    if precision <= 0:
+        return float(value)
+    from decimal import Decimal, ROUND_DOWN
+    return float(Decimal(str(value)).quantize(
+        Decimal("1").scaleb(-precision), rounding=ROUND_DOWN,
+    ))
+
+
+def _normalize_quantity(value: float, rules: dict[str, Any]) -> float:
+    precision = int(_float(rules.get("basePrecision"))) if rules else 0
+    if precision <= 0:
+        return float(value)
+    from decimal import Decimal, ROUND_DOWN
+    quantum = Decimal("1").scaleb(-precision)
+    return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_DOWN))
+
+
+def _normalize_price(value: float, rules: dict[str, Any]) -> float:
+    precision = int(_float(rules.get("quotePrecision"))) if rules else 0
+    if precision <= 0:
+        return float(value)
+    from decimal import Decimal, ROUND_DOWN
+    quantum = Decimal("1").scaleb(-precision)
+    return float(Decimal(str(value)).quantize(quantum, rounding=ROUND_DOWN))
 
 
 def _canonical_symbol(value: object) -> str:
