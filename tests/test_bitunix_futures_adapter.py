@@ -218,8 +218,8 @@ def test_entry_plan_uses_current_bitunix_mark_price_stop_trigger() -> None:
 
     results = adapter.place_orders(orders, timestamp="2026-01-01T00:00:00Z")
 
-    assert "slPrice" not in transport.calls[0]["body"]
-    assert "slStopType" not in transport.calls[0]["body"]
+    assert transport.calls[0]["body"]["slPrice"] == "97"
+    assert transport.calls[0]["body"]["slStopType"] == "MARK_PRICE"
     assert "reduceOnly" not in transport.calls[0]["body"]
     assert results[0].status == "SUBMITTED"
 
@@ -379,13 +379,13 @@ def test_live_entry_attaches_stop_and_queues_take_profit(tmp_path) -> None:
     body = transport.calls[0]["body"]
     assert body["orderType"] == "MARKET"
     assert "price" not in body
-    assert "slPrice" not in body
-    assert "slOrderType" not in body
+    assert body["slPrice"] == "97"
+    assert body["slOrderType"] == "MARKET"
     assert "tpPrice" not in body
     assert report.results[0].order_id == "protected-1"
     assert all(result.status != "REJECTED" for result in report.results)
     assert [result.status for result in report.results[1:]] == [
-        "PENDING", "PENDING", "PENDING", "PENDING",
+        "SUBMITTED", "PENDING", "PENDING", "PENDING",
     ]
 
 
@@ -510,10 +510,10 @@ def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) ->
 
     assert len(transport.calls) == 1
     body = transport.calls[0]["body"]
-    assert "slPrice" not in body
+    assert body["slPrice"] == "97"
     assert "tpPrice" not in body
     by_role = {result.meta["role"]: result for result in results}
-    assert by_role["stop_loss"].reason == "queued_until_position_id_available"
+    assert by_role["stop_loss"].reason == "attached_to_entry"
     assert by_role["take_profit_1"].status == "PENDING"
     assert by_role["take_profit_2"].reason == "queued_until_position_id_available"
     assert by_role["take_profit_3"].reason == "queued_until_position_id_available"
@@ -523,10 +523,8 @@ def test_plan_reconciles_tp1_tp2_tp3_through_official_tpsl_endpoint(tmp_path) ->
         "entry_price": 100.0, "quantity": 1.0, "stop_loss": 97.0,
     }], timestamp="2026-01-01T00:01:00Z")
 
-    assert len(reconciled) == 4
-    assert transport.calls[1]["url"].endswith("/tpsl/place_order")
-    assert transport.calls[1]["body"]["slPrice"] == "97"
-    tp_calls = transport.calls[2:]
+    assert len(reconciled) == 3
+    tp_calls = transport.calls[1:]
     assert all(call["url"].endswith("/tpsl/place_order") for call in tp_calls)
     assert [call["body"]["tpPrice"] for call in tp_calls] == ["106", "109", "112"]
     assert [call["body"]["tpQty"] for call in tp_calls] == ["0.3", "0.3", "0.4"]
@@ -558,9 +556,9 @@ def test_reconcile_accepts_bitunix_camel_case_position_id(tmp_path) -> None:
         "entry_price": 100.0, "quantity": 1.0, "stop_loss": 97.0,
     }], timestamp="2026-01-01T00:01:00Z")
 
-    assert [result.status for result in results] == ["SUBMITTED", "SUBMITTED"]
+    assert [result.status for result in results] == ["SUBMITTED"]
     assert [call["body"].get("positionId") for call in transport.calls] == [
-        "position-camel", "position-camel",
+        "position-camel",
     ]
 
 
@@ -718,14 +716,10 @@ def test_tp1_reconcile_does_not_duplicate_accepted_order(tmp_path) -> None:
     first = adapter.reconcile_take_profits(position, timestamp="2026-01-01T00:01:00Z")
     second = adapter.reconcile_take_profits(position, timestamp="2026-01-01T00:02:00Z")
 
-    # SL is submitted first, then TP1 and TP2. Reconciliation stops at the
+    # SL was already attached to the entry. Reconciliation stops at the
     # temporary TP2 rejection so TP3 remains queued for the next pass.
-    assert [result.status for result in first] == [
-        "SUBMITTED", "SUBMITTED", "REJECTED",
-    ]
-    assert [result.status for result in second] == [
-        "SUBMITTED", "SUBMITTED", "SUBMITTED",
-    ]
+    assert [result.status for result in first] == ["SUBMITTED", "REJECTED"]
+    assert [result.status for result in second] == ["SUBMITTED", "SUBMITTED"]
     # SL has slPrice rather than tpPrice and is excluded from this list.
     tp_prices = [
         call["body"]["tpPrice"]

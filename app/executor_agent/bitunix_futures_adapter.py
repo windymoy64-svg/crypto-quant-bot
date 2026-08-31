@@ -515,10 +515,16 @@ class BitunixFuturesExecutorAdapter:
                 ]
 
         try:
-            # Keep the trade endpoint payload minimal. Bitunix validates SL/TP
-            # protection through the dedicated TPSL endpoint after a position
-            # id exists; sending attached SL fields here causes error 10002.
+            # Bitunix officially supports attached SL on the entry request.
+            # Keep the proven entry protection path while TP levels remain in
+            # the queued reconciliation plan because the entry API accepts one
+            # TP level at a time.
             body = self._build_body(entry)
+            body.update({
+                "slPrice": _fmt_number(stop.stop_price),
+                "slStopType": "MARK_PRICE",
+                "slOrderType": "MARKET",
+            })
         except ValueError as exc:
             return [self._reject(item, timestamp, f"invalid_request: {exc}") for item in orders]
 
@@ -548,10 +554,11 @@ class BitunixFuturesExecutorAdapter:
             self._queue_take_profits(
                 entry, stop, take_profits, entry_result.order_id,
                 initial_quantity=normalized_entry,
+                stop_attached_to_entry=True,
             )
-        # Protection is queued with the entry and submitted via the dedicated
-        # TPSL endpoint once Bitunix exposes the resulting position id.
-        attached_items: set[int] = set()
+        # SL is attached to the entry request; TP levels remain queued until
+        # the exchange exposes the resulting position id.
+        attached_items = {id(stop)}
         protective_results: list[ExecutionResult] = []
         for item in orders:
             if item is entry:
@@ -697,7 +704,13 @@ class BitunixFuturesExecutorAdapter:
                 row for row in active_tpsl
                 if _float(row.get("slPrice", row.get("stopLossPrice"))) > 0
             ]
-            if not active_stops and _float(plan.get("initial_stop")) > 0:
+            position_stop = _float(
+                position.get("stop_loss") or position.get("stopLoss")
+            )
+            stop_is_attached = bool(plan.get("stop_attached_to_entry"))
+            if not active_stops and position_stop > 0:
+                active_stops.append({"slPrice": _fmt_number(position_stop)})
+            if not active_stops and not stop_is_attached and _float(plan.get("initial_stop")) > 0:
                 stop_price = _float(plan.get("initial_stop"))
                 stop_order = OrderRequest(
                     symbol=symbol,
@@ -1051,6 +1064,7 @@ class BitunixFuturesExecutorAdapter:
         self, entry: OrderRequest, stop: OrderRequest,
         take_profits: list[OrderRequest], order_id: str,
         *, initial_quantity: float | None = None,
+        stop_attached_to_entry: bool = False,
     ) -> None:
         plans = self._load_pending_take_profits()
         key = str(order_id or entry.meta.get("client_order_id") or "")
@@ -1067,6 +1081,7 @@ class BitunixFuturesExecutorAdapter:
             "initial_quantity": initial_quantity or entry.quantity,
             "initial_stop": stop.stop_price,
             "reference_entry": entry.meta.get("reference_price"),
+            "stop_attached_to_entry": stop_attached_to_entry,
             "strategy_version": entry.meta.get("strategy_version"),
             "created_at": datetime.now(tz=UTC).isoformat(),
             "protection_status": "tp_pending",
